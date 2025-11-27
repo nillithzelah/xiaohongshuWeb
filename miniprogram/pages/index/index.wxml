@@ -1,0 +1,34 @@
+<!--index.wxml-->
+<view class="container">
+  <view class="userinfo">
+    <block wx:if="{{!hasUserInfo}}">
+      <button wx:if="{{canIUse}}" open-type="getUserInfo" bindgetuserinfo="getUserInfo"> 获取头像昵称 </button>
+      <view wx:else> 请使用微信版本 >= 6.6.0 </view>
+    </block>
+    <block wx:else>
+      <image bindtap="bindViewTap" class="userinfo-avatar" src="{{userInfo.avatar}}" mode="cover"></image>
+      <text class="userinfo-nickname">{{userInfo.nickName}}</text>
+    </block>
+  </view>
+
+  <view class="motto">
+    <text>{{motto}}</text>
+  </view>
+
+  <view class="reviews-section">
+    <text class="section-title">我的审核记录</text>
+    <view class="reviews-list">
+      <view wx:for="{{reviews}}" wx:key="id" class="review-item">
+        <image class="review-image" src="{{item.imageUrl}}" mode="aspectFit"></image>
+        <view class="review-info">
+          <text class="review-status">状态: {{item.status === 0 ? '待审核' : item.status === 1 ? '待老板确认' : item.status === 2 ? '待财务打款' : item.status === 3 ? '已完成' : '已驳回'}}</text>
+          <text class="review-type">类型: {{item.task_type === 'login_qr' ? '登录二维码' : item.task_type === 'note' ? '笔记' : '评论'}}</text>
+          <text class="review-date">{{item.created_at}}</text>
+        </view>
+      </view>
+      <view wx:if="{{reviews.length === 0}}" class="no-reviews">
+        <text>暂无审核记录</text>
+      </view>
+    </view>
+  </view>
+</view>

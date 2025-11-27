@@ -1,0 +1,28 @@
+<!--pages/profile/profile.wxml-->
+<view class="container">
+  <view class="profile-header">
+    <image class="avatar" src="{{userInfo.avatar || '/images/default-avatar.png'}}" mode="cover"></image>
+    <view class="user-info">
+      <text class="nickname">{{userInfo.nickname || '未设置昵称'}}</text>
+      <text class="username">{{userInfo.username}}</text>
+    </view>
+  </view>
+
+  <view class="stats-section">
+    <view class="stat-item">
+      <text class="stat-value">¥{{balance}}</text>
+      <text class="stat-label">账户余额</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-value">¥{{totalEarnings}}</text>
+      <text class="stat-label">累计收益</text>
+    </view>
+  </view>
+
+  <view class="menu-section">
+    <view class="menu-item" bindtap="logout">
+      <text class="menu-text">退出登录</text>
+      <image class="menu-arrow" src="/images/arrow-right.png" mode="aspectFit"></image>
+    </view>
+  </view>
+</view>

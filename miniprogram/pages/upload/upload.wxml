@@ -1,0 +1,45 @@
+<!--pages/upload/upload.wxml-->
+<view class="container">
+  <view class="upload-section">
+    <view class="type-selector">
+      <text class="type-label">选择图片类型：</text>
+      <view class="type-options">
+        <view
+          wx:for="{{typeOptions}}"
+          wx:key="value"
+          class="type-option {{selectedType === item.value ? 'active' : ''}}"
+          bindtap="selectType"
+          data-type="{{item.value}}"
+        >
+          {{item.label}}
+        </view>
+      </view>
+    </view>
+
+    <button class="choose-btn" bindtap="chooseImage" disabled="{{uploading}}">
+      选择图片
+    </button>
+
+    <view class="image-preview">
+      <view wx:for="{{imageList}}" wx:key="*this" class="image-item">
+        <image class="preview-image" src="{{item}}" mode="aspectFit"></image>
+        <view class="delete-btn" bindtap="deleteImage" data-index="{{index}}">
+          <text>×</text>
+        </view>
+      </view>
+    </view>
+
+    <button
+      class="upload-btn"
+      bindtap="uploadImages"
+      disabled="{{imageList.length === 0 || uploading}}"
+      loading="{{uploading}}"
+    >
+      {{uploading ? '上传中...' : '上传图片'}}
+    </button>
+  </view>
+
+  <view class="tips">
+    <text>提示：请上传清晰的小红书相关图片，审核通过后将获得相应奖励</text>
+  </view>
+</view>

@@ -1,0 +1,89 @@
+/* index.wxss */
+.userinfo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.userinfo-avatar {
+  width: 128rpx;
+  height: 128rpx;
+  margin: 20rpx;
+  border-radius: 50%;
+}
+
+.userinfo-nickname {
+  color: #aaa;
+}
+
+.motto {
+  margin-top: 200rpx;
+  margin-left: 20rpx;
+  margin-right: 20rpx;
+  text-align: center;
+}
+
+.reviews-section {
+  margin-top: 40rpx;
+  padding: 0 20rpx;
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  margin-bottom: 20rpx;
+  display: block;
+}
+
+.reviews-list {
+  background: #fff;
+  border-radius: 8rpx;
+  padding: 20rpx;
+}
+
+.review-item {
+  display: flex;
+  align-items: center;
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid #eee;
+}
+
+.review-item:last-child {
+  border-bottom: none;
+}
+
+.review-image {
+  width: 120rpx;
+  height: 120rpx;
+  margin-right: 20rpx;
+  border-radius: 8rpx;
+}
+
+.review-info {
+  flex: 1;
+}
+
+.review-status {
+  font-size: 28rpx;
+  color: #333;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.review-type {
+  font-size: 26rpx;
+  color: #666;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.review-date {
+  font-size: 24rpx;
+  color: #999;
+}
+
+.no-reviews {
+  text-align: center;
+  padding: 40rpx;
+  color: #999;
+}
