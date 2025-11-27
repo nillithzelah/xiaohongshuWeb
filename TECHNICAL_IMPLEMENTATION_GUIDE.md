@@ -96,8 +96,10 @@ router.post('/protected', authenticateToken, (req, res) => {
 
 **文件**: `server/routes/auth.js`
 
-**实现流程**:
+**🛡️ 真实性修正：微信API调用 (生产环境必须)**:
 ```javascript
+const axios = require('axios');
+
 router.post('/wechat-login', async (req, res) => {
   const { code } = req.body;
 
@@ -109,39 +111,86 @@ router.post('/wechat-login', async (req, res) => {
     });
   }
 
-  // 2. 生成模拟openid (生产环境需要调用微信API)
-  const openid = `wx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  try {
+    // 2. 调用微信API换取openid (生产环境必须)
+    const APP_ID = process.env.WX_APP_ID;
+    const APP_SECRET = process.env.WX_APP_SECRET;
 
-  // 3. 查找或创建用户
-  let user = await User.findOne({ openid });
-
-  if (!user) {
-    user = new User({
-      openid,
-      username: `user_${openid.substr(-8)}`,
-      role: 'user'
-    });
-    await user.save();
-  }
-
-  // 4. 生成JWT token
-  const token = jwt.sign(
-    { userId: user._id },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-
-  res.json({
-    success: true,
-    token,
-    user: {
-      id: user._id,
-      username: user.username,
-      role: user.role
+    if (!APP_ID || !APP_SECRET) {
+      return res.status(500).json({
+        success: false,
+        message: '服务器配置错误'
+      });
     }
-  });
+
+    const wxRes = await axios.get(`https://api.weixin.qq.com/sns/jscode2session`, {
+      params: {
+        appid: APP_ID,
+        secret: APP_SECRET,
+        js_code: code,
+        grant_type: 'authorization_code'
+      },
+      timeout: 10000 // 10秒超时
+    });
+
+    const { openid, session_key, errcode, errmsg } = wxRes.data;
+
+    // 3. 检查微信API返回结果
+    if (errcode) {
+      console.error('微信API错误:', errmsg);
+      return res.status(400).json({
+        success: false,
+        message: '微信授权失败'
+      });
+    }
+
+    if (!openid) {
+      return res.status(400).json({
+        success: false,
+        message: '获取用户信息失败'
+      });
+    }
+
+    // 4. 查找或创建用户
+    let user = await User.findOne({ openid });
+
+    if (!user) {
+      user = new User({
+        openid,
+        username: `user_${openid.substr(-8)}`,
+        role: 'user'
+      });
+      await user.save();
+    }
+
+    // 5. 生成JWT token
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        role: user.role
+      }
+    });
+
+  } catch (error) {
+    console.error('微信登录错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '登录服务暂时不可用'
+    });
+  }
 });
 ```
+
+**⚠️ 安全提醒**: 生产环境绝对不能使用模拟数据！必须调用真实的微信API进行用户身份验证。
 
 ---
 
@@ -151,26 +200,73 @@ router.post('/wechat-login', async (req, res) => {
 
 **文件**: `server/routes/client.js`
 
-**核心算法**:
+**⚡ 性能优化：MD5计算优化 (生产环境必须)**:
 ```javascript
 const crypto = require('crypto');
+const fs = require('fs');
 
-// 计算MD5哈希值
-const calculateMD5 = (buffer) => {
-  return crypto.createHash('md5').update(buffer).digest('hex');
+// 方法1：流式处理大文件 (推荐)
+const calculateMD5Stream = (filePath) => {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const stream = fs.createReadStream(filePath);
+
+    stream.on('data', (chunk) => {
+      hash.update(chunk);
+    });
+
+    stream.on('end', () => {
+      resolve(hash.digest('hex'));
+    });
+
+    stream.on('error', reject);
+  });
 };
 
-// 去重检查逻辑
-const checkDuplicateImage = async (imageMd5) => {
-  // 查询是否存在相同MD5且状态不为-1(驳回)的记录
+// 方法2：使用OSS ETag (最佳实践)
+const getOSSMD5 = async (ossResult) => {
+  // 阿里云OSS返回的ETag就是文件的MD5
+  return ossResult.etag.replace(/"/g, ''); // 去掉引号
+};
+
+// 方法3：采样哈希 (快速但安全性稍低)
+const calculateSampleMD5 = (buffer) => {
+  const hash = crypto.createHash('md5');
+
+  // 只计算前10KB + 中间10KB + 后10KB
+  const size = buffer.length;
+  hash.update(buffer.slice(0, Math.min(10240, size)));
+
+  if (size > 20480) {
+    const middleStart = Math.floor(size / 2) - 5120;
+    const middleEnd = Math.floor(size / 2) + 5120;
+    hash.update(buffer.slice(middleStart, middleEnd));
+  }
+
+  if (size > 10240) {
+    hash.update(buffer.slice(-10240));
+  }
+
+  // 加上文件大小作为盐值
+  hash.update(size.toString());
+
+  return hash.digest('hex');
+};
+
+// 去重检查逻辑 (优化版本)
+const checkDuplicateImage = async (imageMd5, fileSize) => {
+  // 组合MD5和文件大小进行更精确的去重
   const existingSubmission = await Submission.findOne({
     image_md5: imageMd5,
-    status: { $ne: -1 } // 排除已驳回的记录
+    file_size: fileSize, // 增加文件大小验证
+    status: { $ne: -1 }
   });
 
   return existingSubmission;
 };
 ```
+
+**⚠️ 性能警告**: 生产环境绝对不要直接对大文件buffer调用crypto.createHash()，会导致内存爆炸！
 
 **使用示例**:
 ```javascript
@@ -270,30 +366,45 @@ const calculateCommission = async (submission) => {
 };
 ```
 
-**批量处理优化**:
+**🚨 关键修正：数据库事务安全 (生产环境必须)**:
 ```javascript
-// 老板批量确认时使用
+// 修正后的批量确认逻辑 (原子性保证)
 router.post('/audit/boss', authenticateToken, async (req, res) => {
   const { ids } = req.body;
+  const session = await mongoose.startSession(); // 1. 开启会话
+  session.startTransaction(); // 2. 开启事务
 
-  for (const id of ids) {
-    const submission = await Submission.findById(id);
-    if (submission && submission.status === 1) {
-      // 更新任务状态
-      submission.status = 2;
+  try {
+    for (const id of ids) {
+      const submission = await Submission.findById(id).session(session); // 绑定会话
+      if (submission && submission.status === 1) {
+        submission.status = 2;
+        submission.audit_history.push({
+          operator_id: req.user._id,
+          action: 'boss_confirm',
+          comment: '老板确认'
+        });
+        await submission.save({ session }); // 绑定会话
 
-      // 生成资金记录
-      const transactions = await calculateCommission(submission);
-
-      // 批量保存
-      await Promise.all([
-        submission.save(),
-        ...transactions.map(t => t.save())
-      ]);
+        // 计算并保存流水
+        const transactions = await calculateCommission(submission);
+        for (const t of transactions) {
+          await t.save({ session }); // 绑定会话
+        }
+      }
     }
+    await session.commitTransaction(); // 3. 提交事务 (所有操作同时生效)
+    res.json({ success: true });
+  } catch (error) {
+    await session.abortTransaction(); // 4. 回滚 (如果出错，就像什么都没发生过)
+    throw error;
+  } finally {
+    session.endSession();
   }
 });
 ```
+
+**⚠️ 重要提醒**: 生产环境必须使用mongoose session事务！避免"任务状态变了但钱没记录"的灾难性问题。
 
 ### 3.2 资金流水追踪
 
@@ -999,3 +1110,39 @@ const serviceRoutes = {
 - 数据库优化策略
 
 这个实现为类似系统的开发提供了完整的参考方案！
+
+---
+
+## 🚨 生产环境关键修正 (必须遵守)
+
+基于企业级Code Review，本文档在以下三个核心问题上进行了重要修正：
+
+### 1. 🛡️ 数据库事务安全
+**问题**: 多表操作可能导致数据不一致
+**解决方案**: 必须使用 `mongoose.startSession()` 事务
+**影响**: 避免资金记录丢失的灾难性问题
+
+### 2. ⚡ MD5性能优化
+**问题**: 大文件MD5计算导致内存爆炸
+**解决方案**: 使用流式处理或OSS ETag
+**影响**: 支持高并发大文件上传
+
+### 3. 🔐 微信登录真实性
+**问题**: 模拟数据无法通过安全审核
+**解决方案**: 调用真实的微信API
+**影响**: 确保用户身份验证的安全性
+
+### 📋 给其他AI开发者的建议
+
+在编写类似系统时，请在Prompt中明确注明：
+- **"必须使用mongoose session事务处理多表操作"**
+- **"MD5计算要使用流式处理，避免内存溢出"**
+- **"第三方登录必须调用真实API"**
+
+这些是生产环境安全的底线要求，绝对不能妥协！
+
+---
+
+**🎯 技术实现详解文档 - 最终版**
+
+这份文档现在包含了完整的技术实现细节和生产环境的关键修正，为企业级系统开发提供了权威的技术参考。其他AI开发者可以基于此文档快速构建高质量的商业系统。
