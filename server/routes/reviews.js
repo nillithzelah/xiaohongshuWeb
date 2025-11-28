@@ -34,7 +34,7 @@ router.get('/my-reviews', authenticateToken, async (req, res) => {
 });
 
 // 获取待审核列表（客服）
-router.get('/pending', authenticateToken, requireRole(['customer_service']), async (req, res) => {
+router.get('/pending', authenticateToken, requireRole(['cs']), async (req, res) => {
   try {
     const { page = 1, limit = 10, status = 'pending' } = req.query;
 
@@ -63,7 +63,7 @@ router.get('/pending', authenticateToken, requireRole(['customer_service']), asy
 });
 
 // 客服审核
-router.put('/:id/cs-review', authenticateToken, requireRole(['customer_service']), async (req, res) => {
+router.put('/:id/cs-review', authenticateToken, requireRole(['cs']), async (req, res) => {
   try {
     const { id } = req.params;
     const { approved, comment } = req.body;
@@ -168,6 +168,8 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance']), 
       return res.status(400).json({ success: false, message: '该记录状态不正确' });
     }
 
+    const oldStatus = review.status;
+
     // 更新审核记录
     review.financeProcess = {
       amount,
@@ -182,8 +184,8 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance']), 
     user.totalEarnings += amount;
 
     // 计算上级佣金（如果有上级）
-    if (user.parentUser && commission > 0) {
-      const parentUser = await User.findById(user.parentUser);
+    if (user.parent_id && commission > 0) {
+      const parentUser = await User.findById(user.parent_id);
       if (parentUser) {
         parentUser.balance += commission;
         parentUser.totalEarnings += commission;
@@ -209,7 +211,7 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance']), 
 });
 
 // 获取所有审核记录（管理员）
-router.get('/', authenticateToken, requireRole(['customer_service', 'boss', 'finance']), async (req, res) => {
+router.get('/', authenticateToken, requireRole(['cs', 'boss', 'finance']), async (req, res) => {
   try {
     const { page = 1, limit = 10, status, userId, imageType } = req.query;
 

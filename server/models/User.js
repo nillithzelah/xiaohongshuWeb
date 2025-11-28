@@ -41,29 +41,34 @@ const userSchema = new mongoose.Schema({
 
   // 兼容旧字段（后续可移除）
   password: String,
-  balance: Number,
-  totalEarnings: Number,
+  balance: {
+    type: Number,
+    default: 0
+  },
+  totalEarnings: {
+    type: Number,
+    default: 0
+  },
   nickname: String,
   phone: String,
 
   created_at: {
     type: Date,
     default: Date.now
+  },
+
+  // 软删除相关字段
+  is_deleted: {
+    type: Boolean,
+    default: false
+  },
+  deleted_at: {
+    type: Date,
+    default: null
   }
 });
 
-// 密码加密中间件
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
+// 密码加密中间件 (上帝模式下暂时移除)
 
 // 验证密码方法
 userSchema.methods.comparePassword = async function(candidatePassword) {

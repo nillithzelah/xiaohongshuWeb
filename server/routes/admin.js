@@ -1,4 +1,6 @@
 const express = require('express');
+const mongoose = require('mongoose');
+const ExcelJS = require('exceljs');
 const Submission = require('../models/Submission');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
@@ -83,8 +85,11 @@ router.post('/audit/cs', authenticateToken, requireRole(['cs']), async (req, res
   }
 });
 
-// 老板批量确认
+// 老板批量确认 (使用数据库事务确保数据一致性)
 router.post('/audit/boss', authenticateToken, requireRole(['boss']), async (req, res) => {
+  const session = await Submission.startSession();
+  session.startTransaction();
+
   try {
     const { ids } = req.body;
 
@@ -95,7 +100,7 @@ router.post('/audit/boss', authenticateToken, requireRole(['boss']), async (req,
     const results = [];
 
     for (const id of ids) {
-      const submission = await Submission.findById(id);
+      const submission = await Submission.findById(id).session(session);
       if (!submission || submission.status !== 1) {
         continue; // 跳过不存在或状态不正确的任务
       }
@@ -117,7 +122,7 @@ router.post('/audit/boss', authenticateToken, requireRole(['boss']), async (req,
       });
 
       // 检查是否有上级，生成佣金记录
-      const user = await User.findById(submission.user_id);
+      const user = await User.findById(submission.user_id).session(session);
       let parentTransaction = null;
 
       if (user && user.parent_id && submission.snapshot_commission > 0) {
@@ -129,11 +134,11 @@ router.post('/audit/boss', authenticateToken, requireRole(['boss']), async (req,
         });
       }
 
-      // 保存所有更改
-      await submission.save();
-      await userTransaction.save();
+      // 保存所有更改 (使用事务会话)
+      await submission.save({ session });
+      await userTransaction.save({ session });
       if (parentTransaction) {
-        await parentTransaction.save();
+        await parentTransaction.save({ session });
       }
 
       results.push({
@@ -146,6 +151,9 @@ router.post('/audit/boss', authenticateToken, requireRole(['boss']), async (req,
       });
     }
 
+    // 提交事务 - 所有操作同时生效
+    await session.commitTransaction();
+
     res.json({
       success: true,
       message: `成功处理 ${results.length} 个任务`,
@@ -153,8 +161,12 @@ router.post('/audit/boss', authenticateToken, requireRole(['boss']), async (req,
     });
 
   } catch (error) {
+    // 回滚事务 - 就像什么都没发生过
+    await session.abortTransaction();
     console.error('老板确认错误:', error);
     res.status(500).json({ success: false, message: '确认失败' });
+  } finally {
+    session.endSession();
   }
 });
 
@@ -258,6 +270,98 @@ router.put('/task-configs/:id', authenticateToken, requireRole(['boss']), async 
     res.json({ success: true, config });
   } catch (error) {
     res.status(500).json({ success: false, message: '更新配置失败' });
+  }
+});
+
+// Excel导出待打款列表
+router.get('/finance/export-excel', authenticateToken, requireRole(['finance']), async (req, res) => {
+  try {
+    // 获取所有待打款的交易记录
+    const transactions = await Transaction.find({ status: 'pending' })
+      .populate('user_id', 'username wallet')
+      .populate('submission_id', 'task_type image_type')
+      .sort({ created_at: 1 });
+
+    // 创建Excel工作簿
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('待打款列表');
+
+    // 设置列标题
+    worksheet.columns = [
+      { header: '序号', key: 'index', width: 8 },
+      { header: '收款人姓名', key: 'realName', width: 15 },
+      { header: '支付宝账号', key: 'alipayAccount', width: 25 },
+      { header: '打款金额', key: 'amount', width: 12 },
+      { header: '奖励类型', key: 'rewardType', width: 12 },
+      { header: '任务类型', key: 'taskType', width: 12 },
+      { header: '提交时间', key: 'createdAt', width: 20 },
+      { header: '备注', key: 'remark', width: 20 }
+    ];
+
+    // 设置标题样式
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE6F3FF' }
+    };
+
+    // 添加数据行
+    transactions.forEach((transaction, index) => {
+      const user = transaction.user_id;
+      const submission = transaction.submission_id;
+
+      // 获取任务类型显示文本
+      const getTaskTypeText = (type) => {
+        const types = {
+          login_qr: '登录二维码',
+          note: '笔记',
+          comment: '评论'
+        };
+        return types[type] || type;
+      };
+
+      // 获取奖励类型显示文本
+      const getRewardTypeText = (type) => {
+        return type === 'task_reward' ? '任务奖励' : '邀请奖励';
+      };
+
+      worksheet.addRow({
+        index: index + 1,
+        realName: user?.wallet?.real_name || '未设置',
+        alipayAccount: user?.wallet?.alipay_account || '未设置',
+        amount: transaction.amount,
+        rewardType: getRewardTypeText(transaction.type),
+        taskType: getTaskTypeText(submission?.task_type),
+        createdAt: new Date(transaction.created_at).toLocaleString('zh-CN'),
+        remark: `${user?.username || '未知用户'} - ${getTaskTypeText(submission?.task_type)}`
+      });
+    });
+
+    // 设置边框
+    worksheet.eachRow((row, rowNumber) => {
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+      });
+    });
+
+    // 设置响应头
+    const fileName = `待打款列表_${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+
+    // 生成并发送Excel文件
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (error) {
+    console.error('导出Excel错误:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
   }
 });
 

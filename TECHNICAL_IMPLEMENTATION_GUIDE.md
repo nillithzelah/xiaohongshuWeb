@@ -1146,3 +1146,66 @@ const serviceRoutes = {
 **🎯 技术实现详解文档 - 最终版**
 
 这份文档现在包含了完整的技术实现细节和生产环境的关键修正，为企业级系统开发提供了权威的技术参考。其他AI开发者可以基于此文档快速构建高质量的商业系统。
+
+---
+
+## 📋 附录：环境变量配置清单
+
+为了让AI能够快速启动项目，以下是完整的环境变量配置清单：
+
+### `.env` 文件配置
+
+```bash
+# ===========================================
+# 小红书审核与分账系统 - 环境变量配置
+# ===========================================
+
+# 服务器配置
+PORT=5000
+NODE_ENV=development
+
+# MongoDB 数据库连接
+MONGODB_URI=mongodb://localhost:27017/xiaohongshu_audit
+
+# JWT 安全配置
+JWT_SECRET=your_super_secret_jwt_key_here_change_this_in_production
+JWT_EXPIRES_IN=7d
+
+# 微信小程序配置 (必须填写真实信息)
+WX_APP_ID=wx1234567890abcdef
+WX_APP_SECRET=your_wechat_app_secret_here
+
+# 阿里云OSS配置 (用于图片存储)
+ALIYUN_ACCESS_KEY_ID=your_access_key_id
+ALIYUN_ACCESS_KEY_SECRET=your_access_key_secret
+ALIYUN_OSS_BUCKET=your_bucket_name
+ALIYUN_OSS_REGION=oss-cn-hangzhou
+
+# 可选配置
+REDIS_URL=redis://localhost:6379  # 用于缓存优化
+LOG_LEVEL=info                   # 日志级别
+```
+
+### 配置说明
+
+#### 必须配置项
+- `MONGODB_URI`: MongoDB连接字符串
+- `JWT_SECRET`: JWT签名密钥（生产环境请使用强密码）
+- `WX_APP_ID`: 微信小程序AppID
+- `WX_APP_SECRET`: 微信小程序AppSecret
+
+#### 可选配置项
+- `REDIS_URL`: Redis连接地址（用于性能优化）
+- `LOG_LEVEL`: 日志输出级别 (error/warn/info/debug)
+
+### 使用方法
+
+1. 复制 `.env.example` 为 `.env`
+2. 填入真实的配置信息
+3. 确保 `.env` 文件已添加到 `.gitignore`
+
+---
+
+**🎉 技术规格书 (TECHNICAL_SPEC.md) - 完成！**
+
+现在你可以将这份文档保存为 `TECHNICAL_SPEC.md`，在AI开发时引用它来确保代码质量和安全性。

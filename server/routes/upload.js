@@ -43,14 +43,47 @@ const uploadToOSS = async (fileBuffer, fileName) => {
 // 上传图片
 router.post('/image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: '没有上传文件' });
-    }
-
     const { imageType } = req.body;
 
     if (!imageType || !['login_qr', 'note', 'comment'].includes(imageType)) {
       return res.status(400).json({ success: false, message: '无效的图片类型' });
+    }
+
+    // =========== 🕵️‍♂️ 本地测试模式 (新增代码) ===========
+    // 如果没有配置阿里云 Key，或者想省流，直接返回假数据
+    if (!process.env.ALIYUN_ACCESS_KEY_ID || process.env.NODE_ENV === 'development') {
+      console.log('⚠️ 检测到开发环境，使用模拟上传');
+
+      // 返回一个必应壁纸作为测试图，或者本地随便一个地址
+      const imageUrl = 'https://cn.bing.com/th?id=OHR.RedPanda_ZH-CN.jpg';
+      // 随机生成一个 MD5，防止重复提交报错（方便你反复测）
+      const mockMd5 = `mock_md5_${Date.now()}_${Math.random()}`;
+
+      // 创建审核记录
+      const imageReview = new ImageReview({
+        userId: req.user._id,
+        imageUrl,
+        imageType
+      });
+
+      await imageReview.save();
+
+      return res.json({
+        success: true,
+        message: '图片上传成功，等待审核',
+        imageReview: {
+          id: imageReview._id,
+          imageUrl,
+          imageType,
+          status: imageReview.status,
+          createdAt: imageReview.createdAt
+        }
+      });
+    }
+    // =========== 本地测试模式结束 ===========
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: '没有上传文件' });
     }
 
     // 生成唯一文件名

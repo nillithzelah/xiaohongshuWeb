@@ -17,7 +17,7 @@ const imageReviewSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'cs_review', 'boss_approved', 'finance_done', 'rejected'],
+    enum: ['pending', 'cs_review', 'boss_approved', 'finance_done', 'completed', 'rejected'],
     default: 'pending'
   },
   csReview: {
