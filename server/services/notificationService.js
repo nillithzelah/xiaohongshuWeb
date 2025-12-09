@@ -23,9 +23,52 @@ class NotificationService {
     this.notifications.push(notification);
 
     // 实际项目中这里应该发送邮件、短信等
-    console.log('发送通知:', notification.message);
+    console.log('发送用户通知:', notification.message);
 
     return notification;
+  }
+
+  // 发送带教老师通知（老板驳回等情况）
+  async sendMentorNotification(review, action, operator, reason = '') {
+    // 这里简化处理，实际项目中应该从数据库查询role为'mentor'的用户
+    // 目前假设带教老师用户名为 'mentor' 或 'mentor_user'
+    const mentorUsernames = ['mentor', 'mentor_user'];
+
+    const typeMap = {
+      login_qr: '登录二维码',
+      note: '笔记',
+      comment: '评论'
+    };
+
+    const imageTypeText = typeMap[review.imageType] || review.imageType;
+    const userDisplayName = review.userId?.username || '用户';
+
+    let message = '';
+    if (action === 'boss_reject') {
+      message = `老板${operator}驳回了${userDisplayName}的${imageTypeText}审核，原因：${reason}。请重新审核该任务。`;
+    }
+
+    for (const mentorUsername of mentorUsernames) {
+      const notification = {
+        id: Date.now().toString() + '_' + mentorUsername + '_' + review._id,
+        type: 'mentor_action_required',
+        userId: mentorUsername, // 使用带教老师用户名作为userId
+        username: mentorUsername,
+        reviewId: review._id,
+        imageType: review.imageType,
+        action,
+        operator,
+        reason,
+        message,
+        createdAt: new Date(),
+        read: false
+      };
+
+      this.notifications.push(notification);
+      console.log(`发送带教老师通知给 ${mentorUsername}:`, notification.message);
+    }
+
+    return true;
   }
 
   // 获取状态变更消息
@@ -38,7 +81,7 @@ class NotificationService {
 
     const statusMap = {
       pending: '待审核',
-      cs_review: '客服审核中',
+      mentor_review: '带教老师审核中',
       boss_approved: '老板确认中',
       finance_done: '财务处理中',
       completed: '已完成',

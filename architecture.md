@@ -17,7 +17,7 @@ A系统通过加密接口（API Key + 签名）与B系统通信，实现账号�
 
 1. **普通用户 (User)**: 小程序端用户，接单做任务，上传截图，查看进度，绑定收款账号，发展下级
 2. **上级/代理 (Agent)**: 小程序端用户，除了做任务，还能查看下级团队数据和返佣
-3. **客服 (CS)**: A系统后台，一审人员，负责查看图片是否合格，进行通过或驳回
+3. **带教老师 (Mentor)**: A系统后台，一审人员，负责查看图片是否合格，进行通过或驳回
 4. **老板 (Boss/Admin)**: A系统后台，二审人员+超级管理员，负责确认客服通过的单子，管理任务单价，管理员工
 5. **财务 (Finance)**: B系统后台，结算人员，只负责根据指令打款，无法查看任务图片
 
@@ -81,11 +81,11 @@ graph TD
   _id: ObjectId,
   openid: String,           -- 微信OpenID
   username: String,         -- 用户名
-  role: String,             -- 'user', 'agent', 'cs', 'boss', 'finance'
+  role: String,             -- 'part_time', 'mentor', 'hr', 'manager', 'boss', 'finance'
   parent_id: ObjectId,      -- 上级用户ID
   remote_uid: String,       -- B系统用户ID
   invite_code: String,      -- 邀请码
-  created_at: Date
+  createdAt: Date
 }
 ```
 
@@ -109,15 +109,15 @@ graph TD
   image_url: String,        -- 图片地址
   image_md5: String,        -- 图片MD5 (防重复)
   snapshot_price: Number,   -- 提交时的快照单价
-  status: Number,           -- 0=待客服, 1=待老板, 2=待财务, 3=已完成, -1=驳回
-  cs_id: ObjectId,          -- 客服审核人ID
-  cs_comment: String,       -- 客服审核意见
-  cs_reviewed_at: Date,
-  boss_id: ObjectId,        -- 老板确认人ID
-  boss_comment: String,     -- 老板确认意见
-  boss_approved_at: Date,
+  status: String,           -- 'pending'=待审核, 'mentor_approved'=带教老师通过, 'manager_rejected'=经理驳回, 'manager_approved'=经理通过, 'finance_processing'=财务处理, 'completed'=已完成, 'rejected'=已驳回
+  mentor_id: ObjectId,      -- 带教老师审核人ID
+  mentor_comment: String,   -- 带教老师审核意见
+  mentor_reviewed_at: Date,
+  manager_id: ObjectId,     -- 经理确认人ID
+  manager_comment: String,  -- 经理确认意见
+  manager_approved_at: Date,
   rejected_reason: String,  -- 驳回原因
-  created_at: Date
+  createdAt: Date
 }
 ```
 
@@ -127,11 +127,11 @@ graph TD
   _id: ObjectId,
   submission_id: ObjectId,
   operator_id: ObjectId,
-  action: String,           -- 'cs_review', 'boss_approve', 'reject'
+  action: String,           -- 'mentor_pass', 'mentor_reject', 'manager_confirm', 'finance_process', 'reject'
   old_status: Number,
   new_status: Number,
   comment: String,
-  created_at: Date
+  createdAt: Date
 }
 ```
 
@@ -146,7 +146,7 @@ graph TD
   bank_name: String,        -- 银行名称
   bank_account: String,     -- 银行卡号
   balance: Number,          -- 账户余额
-  created_at: Date
+  createdAt: Date
 }
 ```
 
@@ -160,7 +160,7 @@ graph TD
   status: Number,           -- 0=待打款, 1=已打款
   operator_id: ObjectId,    -- 操作财务ID
   paid_at: Date,
-  created_at: Date
+  createdAt: Date
 }
 ```
 
@@ -173,7 +173,7 @@ graph TD
   amount: Number,
   type: String,             -- 'payout', 'commission'
   operator_id: ObjectId,
-  created_at: Date
+  createdAt: Date
 }
 ```
 
@@ -187,8 +187,8 @@ graph TD
 ### 图片审核
 - POST /api/images/upload - 上传图片
 - GET /api/reviews - 获取审核列表（根据角色）
-- PUT /api/reviews/:id/cs-review - 客服审核
-- PUT /api/reviews/:id/boss-approve - 老板确认
+- PUT /api/reviews/:id/mentor-review - 带教老师审核
+- PUT /api/reviews/:id/manager-approve - 经理确认
 - PUT /api/reviews/:id/finance-process - 财务处理
 
 ## 安全与风控

@@ -2,8 +2,17 @@
   "pages": [
     "pages/index/index",
     "pages/upload/upload",
-    "pages/profile/profile"
+    "pages/profile/profile",
+    "pages/device-list/device-list"
   ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#fff",
+    "navigationBarTitleText": "小红书审核",
+    "navigationBarTextStyle": "black",
+    "enablePullDownRefresh": true,
+    "backgroundColor": "#f7f8fa"
+  },
   "window": {
     "backgroundTextStyle": "light",
     "navigationBarBackgroundColor": "#fff",

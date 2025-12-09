@@ -1,0 +1,175 @@
+/* pages/profile/profile.wxss */
+.container {
+  padding: 20rpx;
+  background: #f5f5f5;
+  min-height: 100vh;
+}
+
+/* 头部区域 */
+.profile-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 16rpx;
+  padding: 40rpx 30rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.15);
+}
+
+.avatar-section {
+  display: flex;
+  align-items: center;
+}
+
+.avatar {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 60rpx;
+  border: 4rpx solid rgba(255, 255, 255, 0.3);
+  margin-right: 24rpx;
+}
+
+.user-info {
+  flex: 1;
+}
+
+.nickname {
+  font-size: 36rpx;
+  font-weight: bold;
+  color: white;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.username {
+  font-size: 28rpx;
+  color: rgba(255, 255, 255, 0.8);
+  display: block;
+}
+
+/* 资产卡片 */
+.assets-card {
+  background: white;
+  border-radius: 16rpx;
+  padding: 30rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+}
+
+.asset-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.asset-icon {
+  font-size: 48rpx;
+  margin-right: 16rpx;
+}
+
+.asset-info {
+  text-align: center;
+}
+
+.asset-value {
+  font-size: 40rpx;
+  font-weight: bold;
+  color: #333;
+  display: block;
+  margin-bottom: 4rpx;
+}
+
+.asset-label {
+  font-size: 24rpx;
+  color: #666;
+  display: block;
+}
+
+.asset-divider {
+  width: 2rpx;
+  height: 60rpx;
+  background: #f0f0f0;
+  margin: 0 30rpx;
+}
+
+/* 菜单列表 */
+.menu-section {
+  background: white;
+  border-radius: 16rpx;
+  overflow: hidden;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 32rpx 30rpx;
+  border-bottom: 1rpx solid #f0f0f0;
+  transition: all 0.3s;
+}
+
+.menu-item:last-child {
+  border-bottom: none;
+}
+
+.menu-item:active {
+  background: #f8f8f8;
+}
+
+.menu-icon {
+  font-size: 40rpx;
+  margin-right: 20rpx;
+  width: 50rpx;
+  text-align: center;
+}
+
+.menu-text {
+  flex: 1;
+  font-size: 32rpx;
+  color: #333;
+}
+
+.menu-arrow {
+  font-size: 32rpx;
+  color: #ccc;
+  font-weight: bold;
+}
+
+/* 底部提示 */
+.footer-tips {
+  margin-top: 40rpx;
+  padding: 24rpx;
+  background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+  border-radius: 12rpx;
+  border-left: 8rpx solid #ffc107;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+}
+
+.footer-tips text {
+  font-size: 26rpx;
+  color: #856404;
+  display: block;
+  text-align: center;
+}
+
+/* 响应式设计 */
+@media (max-width: 750rpx) {
+  .assets-card {
+    flex-direction: column;
+  }
+
+  .asset-divider {
+    width: 200rpx;
+    height: 2rpx;
+    margin: 20rpx 0;
+  }
+
+  .asset-item {
+    margin-bottom: 20rpx;
+  }
+
+  .asset-item:last-child {
+    margin-bottom: 0;
+  }
+}

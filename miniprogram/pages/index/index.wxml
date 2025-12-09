@@ -1,34 +1,87 @@
-<!--index.wxml-->
+<!-- pages/index/index.wxml -->
 <view class="container">
-  <view class="userinfo">
-    <block wx:if="{{!hasUserInfo}}">
-      <button wx:if="{{canIUse}}" open-type="getUserInfo" bindgetuserinfo="getUserInfo"> 获取头像昵称 </button>
-      <view wx:else> 请使用微信版本 >= 6.6.0 </view>
-    </block>
-    <block wx:else>
-      <image bindtap="bindViewTap" class="userinfo-avatar" src="{{userInfo.avatar}}" mode="cover"></image>
-      <text class="userinfo-nickname">{{userInfo.nickName}}</text>
-    </block>
+
+  <!-- 👤 简化的用户信息头图 (静态展示，不需按钮) -->
+  <view class="header-card">
+    <view class="user-info">
+      <view class="avatar-container">
+        <image class="avatar" src="{{userInfo.avatarUrl || 'https://mmbiz.qpic.cn/mmbiz/icTdbqWNOwNRna42FI242Lcia07jQodd2FJGIYQfG0LAJGFxM4FbnQP6yfMxBgJ0F3YRqJCJ1aPAK2dQagdusBZg/0'}}" mode="cover"></image>
+      </view>
+      <view class="user-text">
+        <view class="greeting">你好，{{userInfo.nickName || '奋斗者'}}</view>
+        <view class="subtitle">今天也是努力搞钱的一天！💪</view>
+      </view>
+    </view>
   </view>
 
-  <view class="motto">
-    <text>{{motto}}</text>
+  <!-- ️ 画廊轮播图 -->
+  <view class="banner-container">
+    <swiper
+      class="card-swiper"
+      indicator-dots="{{true}}"
+      indicator-color="rgba(255, 255, 255, .3)"
+      indicator-active-color="#ffffff"
+      autoplay="{{true}}"
+      interval="4000"
+      duration="500"
+      circular="{{true}}"
+      previous-margin="60rpx"
+      next-margin="60rpx"
+      bindchange="cardSwiper"
+    >
+      <block wx:for="{{bannerList}}" wx:key="id">
+        <swiper-item class="card-swiper-item">
+          <view class="swiper-box {{cardCur==index?'cur':''}}">
+            <image src="{{item.url}}" class="swiper-image" mode="aspectFill"></image>
+            <!-- 可以在图上加文字 -->
+            <view class="swiper-text" wx:if="{{item.title}}">{{item.title}}</view>
+          </view>
+        </swiper-item>
+      </block>
+    </swiper>
   </view>
 
-  <view class="reviews-section">
-    <text class="section-title">我的审核记录</text>
-    <view class="reviews-list">
-      <view wx:for="{{reviews}}" wx:key="id" class="review-item">
-        <image class="review-image" src="{{item.imageUrl}}" mode="aspectFit"></image>
-        <view class="review-info">
-          <text class="review-status">状态: {{item.status === 0 ? '待审核' : item.status === 1 ? '待老板确认' : item.status === 2 ? '待财务打款' : item.status === 3 ? '已完成' : '已驳回'}}</text>
-          <text class="review-type">类型: {{item.task_type === 'login_qr' ? '登录二维码' : item.task_type === 'note' ? '笔记' : '评论'}}</text>
-          <text class="review-date">{{item.created_at}}</text>
+  <!-- 📋 审核记录列表 -->
+  <view class="list-container">
+    <view class="list-header">近期审核记录</view>
+
+    <!-- 空状态 -->
+    <view class="empty-state" wx:if="{{!loading && reviews.length === 0}}">
+      <image class="empty-icon" src="https://img.icons8.com/ios/100/cccccc/empty-box.png" mode="widthFix"></image>
+      <text>暂无记录，快去上传第一单吧~</text>
+      <button class="go-upload-btn" bindtap="goToUpload">去上传</button>
+    </view>
+
+    <!-- 列表内容 -->
+    <block wx:for="{{reviews}}" wx:key="_id">
+      <view class="review-card">
+        <image class="card-thumb" src="{{item.imageUrl}}" mode="aspectFill"></image>
+        <view class="card-content">
+          <view class="card-row">
+            <text class="task-type">{{item.imageType === 'customer_resource' ? '客资' : (item.imageType === 'note' ? '笔记' : '评论')}}</text>
+            <view class="status-tag {{item.status}}">
+              {{
+                item.status === 'completed' || item.status === 'finance_done' ? '已到账' :
+                (item.status === 'rejected' ? '已驳回' : '审核中')
+              }}
+            </view>
+          </view>
+          <view class="card-row time-row">
+            <text class="submit-time">{{item.formattedTime}}</text>
+            <text class="amount" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">+ ¥{{item.snapshotPrice}}</text>
+          </view>
+
+          <!-- 驳回原因 -->
+          <view class="reject-reason" wx:if="{{item.status === 'rejected'}}">
+            驳回原因：{{item.rejectionReason || '不符合要求'}}
+          </view>
         </view>
       </view>
-      <view wx:if="{{reviews.length === 0}}" class="no-reviews">
-        <text>暂无审核记录</text>
-      </view>
+    </block>
+
+    <!-- 加载更多/到底提示 -->
+    <view class="loading-more" wx:if="{{reviews.length > 0}}">
+      {{hasMore ? '加载中...' : '--- 到底啦 ---'}}
     </view>
   </view>
 </view>

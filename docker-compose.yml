@@ -1,0 +1,23 @@
+services:
+  # MongoDB 服务
+  mongo:
+    image: mongo:latest
+    container_name: mongo-audit
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      # ⚠️ 这里直接映射你现在的 D 盘目录，保证以前的数据都在！
+      - D:\mongodb_data:/data/db
+    environment:
+      # 设置时区为上海时间，方便查看日志
+      - TZ=Asia/Shanghai
+
+  # (可选) 如果你以后想用 mongo-express 网页版查看数据库，可以把下面注释打开
+  # mongo-express:
+  #   image: mongo-express
+  #   restart: always
+  #   ports:
+  #     - "8081:8081"
+  #   environment:
+  #     ME_CONFIG_MONGODB_SERVER: mongo

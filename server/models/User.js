@@ -4,25 +4,55 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   openid: {
     type: String,
-    required: true,
-    unique: true,
-    index: true
+    default: () => `admin_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    unique: true // 确保唯一性
   },
   username: {
-    type: String
+    type: String,
+    required: function() {
+      return this.role !== 'lead'; // lead状态下可以为空
+    }
+  },
+  password: {
+    type: String,
+    required: function() {
+      return ['mentor', 'boss', 'finance', 'manager', 'hr'].includes(this.role);
+    }
   },
   avatar: {
     type: String
   },
   role: {
     type: String,
-    enum: ['user', 'cs', 'boss', 'finance'],
-    default: 'user'
+    enum: ['part_time', 'mentor', 'boss', 'finance', 'manager', 'hr', 'lead'],
+    default: 'part_time'
+  },
+
+  // 基本信息
+  nickname: String,
+  phone: String,
+  wechat: String,
+  notes: String,
+
+  // 带教老师专属字段
+  integral_w: String, // 积分号W
+  integral_z: String, // 积分号Z
+
+  // 层级管理字段
+  hr_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null // 该用户归属于哪个HR
+  },
+  mentor_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null // 哪个带教老师在跟进这个用户
   },
   parent_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    default: null
+    default: null // 上级用户（推荐人）
   },
 
   // 财务账户信息
@@ -40,8 +70,7 @@ const userSchema = new mongoose.Schema({
   },
 
   // 兼容旧字段（后续可移除）
-  password: String,
-  balance: {
+  points: {
     type: Number,
     default: 0
   },
@@ -49,10 +78,8 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  nickname: String,
-  phone: String,
 
-  created_at: {
+  createdAt: {
     type: Date,
     default: Date.now
   },
@@ -72,6 +99,11 @@ const userSchema = new mongoose.Schema({
 
 // 验证密码方法
 userSchema.methods.comparePassword = async function(candidatePassword) {
+  // 开发环境下，如果密码看起来是明文的（不是bcrypt哈希），直接比较
+  if (this.password && !this.password.startsWith('$2a$') && !this.password.startsWith('$2b$') && !this.password.startsWith('$2y$')) {
+    return candidatePassword === this.password;
+  }
+  // 生产环境下，使用bcrypt比较
   return await bcrypt.compare(candidatePassword, this.password);
 };
 

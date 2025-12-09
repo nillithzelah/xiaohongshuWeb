@@ -1,172 +1,228 @@
 // pages/upload/upload.js
+const app = getApp();
+
 Page({
-
-  /**
-   * 页面的初始数据
-   */
   data: {
-    imageList: [],
-    uploading: false,
-    selectedType: 'note', // 默认选择笔记
-    typeOptions: [],
-    taskConfigs: []
+    // 任务类型配置 (对应后端的 TaskConfig)
+    // 注意：这里的 value 必须和数据库 TaskConfig 的 type_key 一致
+    taskTypes: [
+      { id: 1, value: 'customer_resource', name: '客资', price: '5.00', desc: '上传客户添加好友截图', icon: '👥' },
+      { id: 2, value: 'note', name: '笔记', price: '10.00', desc: '发布小红书笔记截图', icon: '📝' },
+      { id: 3, value: 'comment', name: '评论', price: '3.00', desc: '笔记下方评论截图', icon: '💬' }
+    ],
+    devices: [], // 用户的设备列表
+    selectedDevice: null, // 选中的设备
+    selectedType: null, // 当前选中的类型对象
+    imageUrl: '', // 上传后的图片地址
+    uploading: false
   },
 
-  /**
-   * 生命周期函数--监听页面加载
-   */
-  onLoad: function (options) {
-    this.loadTaskConfigs();
+  onLoad() {
+    this.loadUserDevices();
   },
 
-  /**
-   * 加载任务配置
-   */
-  loadTaskConfigs: function() {
+  // 加载用户设备列表
+  loadUserDevices() {
+    const token = wx.getStorageSync('token');
+
     wx.request({
-      url: 'http://localhost:5000/api/client/task-configs',
+      url: 'http://localhost:5000/api/client/device/my-list',
       method: 'GET',
+      header: token ? { 'Authorization': `Bearer ${token}` } : {},
       success: (res) => {
-        if (res.data.success) {
-          const configs = res.data.configs;
-          const typeOptions = configs.map(config => ({
-            value: config.type_key,
-            label: `${config.name} (¥${config.price})`
-          }));
-
-          this.setData({
-            taskConfigs: configs,
-            typeOptions: typeOptions
-          });
+        if (res.data && res.data.success) {
+          this.setData({ devices: res.data.devices || [] });
+        } else {
+          // 使用模拟设备数据
+          this.loadMockDevices()
         }
       },
-      fail: (err) => {
-        wx.showToast({
-          title: '加载配置失败',
-          icon: 'none'
-        });
+      fail: () => {
+        // 网络失败时使用模拟数据
+        this.loadMockDevices()
       }
     });
   },
 
-  /**
-   * 选择图片
-   */
-  chooseImage: function() {
-    const that = this
-    wx.chooseImage({
-      count: 9, // 最多可以选择的图片张数，默认9
-      sizeType: ['original', 'compressed'], // original 原图，compressed 压缩图，默认二者都有
-      sourceType: ['album', 'camera'], // album 从相册选图，camera 使用相机，默认二者都有
-      success: function(res) {
-        // 返回选定照片的本地文件路径列表，tempFilePath可以作为img标签的src属性显示图片
-        that.setData({
-          imageList: res.tempFilePaths
-        })
+  // 加载模拟设备数据
+  loadMockDevices() {
+    const mockDevices = [
+      {
+        _id: 'device_001',
+        accountName: 'xiaohongshu_user_001',
+        status: 'online',
+        influence: 'new',
+        onlineDuration: 24,
+        points: 150
+      },
+      {
+        _id: 'device_002',
+        accountName: 'xiaohongshu_user_002',
+        status: 'offline',
+        influence: 'old',
+        onlineDuration: 48,
+        points: 200
+      },
+      {
+        _id: 'device_003',
+        accountName: 'xiaohongshu_user_003',
+        status: 'protected',
+        influence: 'real_name',
+        onlineDuration: 72,
+        points: 300
       }
+    ]
+
+    this.setData({
+      devices: mockDevices
     })
   },
 
-  /**
-   * 上传图片
-   */
-  uploadImages: function() {
-    const that = this
-    if (this.data.imageList.length === 0) {
-      wx.showToast({
-        title: '请先选择图片',
-        icon: 'none'
-      })
-      return
-    }
-
+  // 选择设备
+  selectDevice(e) {
+    const device = e.currentTarget.dataset.device;
     this.setData({
-      uploading: true
-    })
+      selectedDevice: device
+    });
+  },
 
-    const token = wx.getStorageSync('token')
-    if (!token) {
+  // 选择任务类型
+  selectType(e) {
+    const type = e.currentTarget.dataset.type;
+    this.setData({
+      selectedType: type
+    });
+  },
+
+  // 选择并上传图片
+  chooseImage() {
+    if (!this.data.selectedDevice) {
       wx.showToast({
-        title: '请先登录',
+        title: '请先选择操作设备',
         icon: 'none'
-      })
-      this.setData({
-        uploading: false
-      })
-      return
+      });
+      return;
     }
 
-    let uploadCount = 0
-    const totalCount = this.data.imageList.length
+    if (!this.data.selectedType) {
+      wx.showToast({
+        title: '请先选择任务类型',
+        icon: 'none'
+      });
+      return;
+    }
 
-    // 简化版：直接提交任务（实际应该先上传图片到OSS）
+    wx.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['album', 'camera'],
+      success: (res) => {
+        const tempFilePath = res.tempFiles[0].tempFilePath;
+        this.uploadImage(tempFilePath);
+      }
+    });
+  },
+
+  // 上传图片到服务器
+  uploadImage(filePath) {
+    this.setData({ uploading: true });
+
+    // 获取 Token
+    const token = wx.getStorageSync('token');
+
+    wx.uploadFile({
+      url: 'http://localhost:5000/api/upload/image', // 你的本地后端地址
+      filePath: filePath,
+      name: 'file',
+      header: {
+        'Authorization': `Bearer ${token}`
+      },
+      success: (res) => {
+        try {
+          const data = JSON.parse(res.data);
+          if (data.success) {
+            this.setData({
+              imageUrl: data.data.url
+            });
+            wx.showToast({ title: '上传成功', icon: 'success' });
+          } else {
+            throw new Error(data.message);
+          }
+        } catch (error) {
+          wx.showToast({ title: '上传失败', icon: 'none' });
+        }
+      },
+      fail: () => {
+        wx.showToast({ title: '网络错误', icon: 'none' });
+      },
+      complete: () => {
+        this.setData({ uploading: false });
+      }
+    });
+  },
+
+  // 删除图片
+  deleteImage() {
+    this.setData({ imageUrl: '' });
+  },
+
+  // 提交任务
+  submitTask() {
+    const { selectedDevice, selectedType, imageUrl } = this.data;
+
+    if (!selectedDevice) {
+      wx.showToast({ title: '请选择操作设备', icon: 'none' });
+      return;
+    }
+
+    if (!selectedType) {
+      wx.showToast({ title: '请选择任务类型', icon: 'none' });
+      return;
+    }
+
+    if (!imageUrl) {
+      wx.showToast({ title: '请上传凭证图片', icon: 'none' });
+      return;
+    }
+
+    const token = wx.getStorageSync('token');
+
     wx.request({
       url: 'http://localhost:5000/api/client/task/submit',
       method: 'POST',
-      data: {
-        taskType: this.data.selectedType,
-        imageUrl: 'https://example.com/placeholder.jpg', // 模拟图片URL
-        imageMd5: 'mock_md5_' + Date.now() // 模拟MD5
-      },
       header: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+        'Authorization': `Bearer ${token}`
       },
-      success: function(res) {
+      data: {
+        deviceId: selectedDevice._id, // 设备ID
+        task_type: selectedType.value, // 发送给后端的类型 key
+        image_url: imageUrl,
+        // 这里后端会自动计算 snapshot_price，不需要前端传
+      },
+      success: (res) => {
         if (res.data.success) {
-          that.setData({
-            uploading: false,
-            imageList: []
-          })
           wx.showToast({
             title: '提交成功',
-            icon: 'success'
-          })
-          // 跳转回首页
-          wx.switchTab({
-            url: '/pages/index/index'
-          })
+            icon: 'success',
+            duration: 2000
+          });
+
+          // 延迟跳转回首页
+          setTimeout(() => {
+            // 清空状态
+            this.setData({ selectedDevice: null, selectedType: null, imageUrl: '' });
+            wx.switchTab({ url: '/pages/index/index' });
+          }, 1500);
         } else {
           wx.showToast({
             title: res.data.message || '提交失败',
             icon: 'none'
-          })
-          that.setData({
-            uploading: false
-          })
+          });
         }
       },
-      fail: function() {
-        wx.showToast({
-          title: '提交失败',
-          icon: 'none'
-        })
-        that.setData({
-          uploading: false
-        })
+      fail: () => {
+        wx.showToast({ title: '网络连接失败', icon: 'none' });
       }
-    })
-  },
-
-  /**
-   * 选择图片类型
-   */
-  selectType: function(e) {
-    const type = e.currentTarget.dataset.type
-    this.setData({
-      selectedType: type
-    })
-  },
-
-  /**
-   * 删除图片
-   */
-  deleteImage: function(e) {
-    const index = e.currentTarget.dataset.index
-    const imageList = this.data.imageList
-    imageList.splice(index, 1)
-    this.setData({
-      imageList: imageList
-    })
+    });
   }
-})
+});

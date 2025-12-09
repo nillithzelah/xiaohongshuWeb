@@ -440,18 +440,20 @@ transactionSchema.methods.markAsPaid = function() {
 **状态定义**:
 ```javascript
 const STATUS = {
-  PENDING: 0,        // 待审核
-  CS_REVIEWED: 1,    // 待老板确认
-  BOSS_APPROVED: 2,  // 待财务打款
-  COMPLETED: 3,      // 已完成
-  REJECTED: -1       // 已驳回
+  PENDING: 'pending',              // 待审核
+  MENTOR_APPROVED: 'mentor_approved',    // 带教老师审核通过
+  MANAGER_REJECTED: 'manager_rejected',  // 经理驳回
+  MANAGER_APPROVED: 'manager_approved',  // 经理确认通过
+  FINANCE_PROCESSING: 'finance_processing', // 财务处理中
+  COMPLETED: 'completed',           // 已完成
+  REJECTED: 'rejected'              // 已驳回
 };
 ```
 
 **状态流转逻辑**:
 ```javascript
-// 客服审核
-const csReview = async (submissionId, action, operatorId) => {
+// 带教老师审核
+const mentorReview = async (submissionId, action, operatorId) => {
   const submission = await Submission.findById(submissionId);
 
   if (submission.status !== STATUS.PENDING) {
@@ -459,29 +461,29 @@ const csReview = async (submissionId, action, operatorId) => {
   }
 
   // 更新状态和审核历史
-  submission.status = action === 'pass' ? STATUS.CS_REVIEWED : STATUS.REJECTED;
+  submission.status = action === 'pass' ? STATUS.MENTOR_APPROVED : STATUS.REJECTED;
   submission.audit_history.push({
     operator_id: operatorId,
-    action: action === 'pass' ? 'cs_pass' : 'cs_reject',
-    comment: '客服审核'
+    action: action === 'pass' ? 'mentor_pass' : 'mentor_reject',
+    comment: '带教老师审核'
   });
 
   return submission.save();
 };
 
-// 老板确认
-const bossApprove = async (submissionIds, operatorId) => {
+// 经理确认
+const managerApprove = async (submissionIds, operatorId) => {
   const results = [];
 
   for (const id of submissionIds) {
     const submission = await Submission.findById(id);
 
-    if (submission.status === STATUS.CS_REVIEWED) {
-      submission.status = STATUS.BOSS_APPROVED;
+    if (submission.status === STATUS.MENTOR_APPROVED) {
+      submission.status = STATUS.MANAGER_APPROVED;
       submission.audit_history.push({
         operator_id: operatorId,
-        action: 'boss_confirm',
-        comment: '老板确认'
+        action: 'manager_confirm',
+        comment: '经理确认'
       });
 
       await submission.save();
@@ -508,6 +510,18 @@ const updateStatusAtomically = async (submissionId, newStatus, operatorId) => {
 
     if (submission.status !== expectedStatus) {
       throw new Error('状态已被其他操作修改');
+    }
+
+    // 状态验证逻辑
+    const validTransitions = {
+      'pending': ['mentor_approved', 'rejected'],
+      'mentor_approved': ['manager_approved', 'manager_rejected'],
+      'manager_approved': ['finance_processing'],
+      'finance_processing': ['completed']
+    };
+
+    if (!validTransitions[submission.status]?.includes(newStatus)) {
+      throw new Error(`无效的状态转换: ${submission.status} -> ${newStatus}`);
     }
 
     submission.status = newStatus;
@@ -541,7 +555,7 @@ const updateStatusAtomically = async (submissionId, newStatus, operatorId) => {
 const submissionSchema = new mongoose.Schema({
   // 复合索引：用户+时间查询
   user_id: { type: mongoose.Schema.Types.ObjectId, index: true },
-  created_at: { type: Date, index: true },
+  createdAt: { type: Date, index: true },
 
   // 状态索引：审核队列查询
   status: { type: Number, index: true },
@@ -554,8 +568,8 @@ const submissionSchema = new mongoose.Schema({
 });
 
 // 复合索引优化
-submissionSchema.index({ user_id: 1, created_at: -1 });
-submissionSchema.index({ status: 1, created_at: -1 });
+submissionSchema.index({ user_id: 1, createdAt: -1 });
+submissionSchema.index({ status: 1, createdAt: -1 });
 submissionSchema.index({ task_type: 1, status: 1 });
 ```
 
@@ -570,7 +584,7 @@ const getSubmissionsWithPagination = async (filter, page, limit) => {
   const [submissions, total] = await Promise.all([
     Submission.find(filter)
       .populate('user_id', 'username')
-      .sort({ created_at: -1 })
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean(), // 使用lean()提高性能
@@ -916,14 +930,14 @@ const users = await User.find().lean();
 
 // 选择性字段查询
 const submissions = await Submission.find()
-  .select('user_id task_type status created_at')
+  .select('user_id task_type status createdAt')
   .lean();
 ```
 
 **索引策略**:
 ```javascript
 // 复合索引
-submissionSchema.index({ status: 1, created_at: -1 });
+submissionSchema.index({ status: 1, createdAt: -1 });
 transactionSchema.index({ user_id: 1, status: 1 });
 ```
 

@@ -21,7 +21,7 @@ const transactionSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['task_reward', 'referral_bonus'],
+    enum: ['task_reward', 'referral_bonus', 'referral_bonus_1', 'referral_bonus_2'],
     index: true
   },
   status: {
@@ -34,7 +34,7 @@ const transactionSchema = new mongoose.Schema({
   paid_at: {
     type: Date
   },
-  created_at: {
+  createdAt: {
     type: Date,
     default: Date.now,
     index: true
@@ -43,6 +43,6 @@ const transactionSchema = new mongoose.Schema({
 
 // 复合索引优化查询
 transactionSchema.index({ user_id: 1, status: 1 });
-transactionSchema.index({ status: 1, created_at: -1 });
+transactionSchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Transaction', transactionSchema);

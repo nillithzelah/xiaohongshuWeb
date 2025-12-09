@@ -11,14 +11,29 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId);
+    console.log('🔐 验证token，使用的密钥: default_secret');
+    console.log('🔑 收到的token:', token);
+    const decoded = jwt.verify(token, 'default_secret');
+    console.log('✅ Token验证成功:', decoded);
 
+    // 从数据库获取真实用户信息
+    const user = await User.findById(decoded.userId).select('-password');
     if (!user) {
       return res.status(401).json({ success: false, message: '用户不存在' });
     }
 
-    req.user = user;
+    // 检查用户是否被软删除
+    if (user.is_deleted) {
+      return res.status(401).json({ success: false, message: '用户已被禁用' });
+    }
+
+    req.user = {
+      _id: user._id,
+      id: user._id.toString(),
+      username: user.username,
+      role: user.role,
+      nickname: user.nickname
+    };
     next();
   } catch (error) {
     console.error('Token验证错误:', error);

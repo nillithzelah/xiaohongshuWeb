@@ -7,6 +7,12 @@ const submissionSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  deviceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Device',
+    required: true,
+    index: true
+  },
   task_type: {
     type: String,
     required: true,
@@ -22,15 +28,22 @@ const submissionSchema = new mongoose.Schema({
     index: true
   },
 
-  // 核心风控字段：快照价格
+  // 核心风控字段：快照价格和佣金
   snapshot_price: {
     type: Number,
     required: true,
     min: 0
   },
-  snapshot_commission: {
+  snapshot_commission_1: {
     type: Number,
     required: true,
+    default: 0,
+    min: 0
+  },
+  snapshot_commission_2: {
+    type: Number,
+    required: true,
+    default: 0,
     min: 0
   },
 
@@ -38,7 +51,7 @@ const submissionSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     index: true,
-    enum: [-1, 0, 1, 2, 3] // -1:驳回, 0:待审核, 1:待老板确认, 2:待财务打款, 3:已完成
+    enum: [-1, 0, 1, 2, 3] // -1:驳回, 0:待审核, 1:待主管确认, 2:待财务打款, 3:已完成
   },
 
   // 审核痕迹
@@ -49,7 +62,7 @@ const submissionSchema = new mongoose.Schema({
     },
     action: {
       type: String,
-      enum: ['submit', 'cs_pass', 'cs_reject', 'boss_confirm', 'boss_reject', 'finance_pay']
+      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_confirm', 'manager_reject', 'finance_pay']
     },
     comment: {
       type: String
@@ -60,7 +73,7 @@ const submissionSchema = new mongoose.Schema({
     }
   }],
 
-  created_at: {
+  createdAt: {
     type: Date,
     default: Date.now,
     index: true
@@ -68,8 +81,8 @@ const submissionSchema = new mongoose.Schema({
 });
 
 // 复合索引优化查询
-submissionSchema.index({ user_id: 1, created_at: -1 });
-submissionSchema.index({ status: 1, created_at: -1 });
+submissionSchema.index({ user_id: 1, createdAt: -1 });
+submissionSchema.index({ status: 1, createdAt: -1 });
 submissionSchema.index({ task_type: 1, status: 1 });
 
 module.exports = mongoose.model('Submission', submissionSchema);

@@ -16,7 +16,13 @@ const taskConfigSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
-  commission: {
+  commission_1: {
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0
+  },
+  commission_2: {
     type: Number,
     required: true,
     default: 0,
@@ -26,7 +32,7 @@ const taskConfigSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  created_at: {
+  createdAt: {
     type: Date,
     default: Date.now
   },
@@ -36,15 +42,6 @@ const taskConfigSchema = new mongoose.Schema({
   }
 });
 
-// 更新时自动更新updated_at
-taskConfigSchema.pre('save', function(next) {
-  this.updated_at = new Date();
-  next();
-});
-
-taskConfigSchema.pre('findOneAndUpdate', function(next) {
-  this.set({ updated_at: new Date() });
-  next();
-});
+// 移除有问题的中间件
 
 module.exports = mongoose.model('TaskConfig', taskConfigSchema);

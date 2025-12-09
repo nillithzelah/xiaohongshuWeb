@@ -1,45 +1,100 @@
-<!--pages/upload/upload.wxml-->
+<!-- pages/upload/upload.wxml -->
 <view class="container">
-  <view class="upload-section">
-    <view class="type-selector">
-      <text class="type-label">选择图片类型：</text>
-      <view class="type-options">
+
+  <!-- 步骤 0: 选择设备 -->
+  <view class="section">
+    <view class="section-title">
+      <text class="step-num">0</text>
+      <text class="step-text">选择操作设备</text>
+    </view>
+
+    <view class="device-list" wx:if="{{devices.length > 0}}">
+      <view
+        wx:for="{{devices}}"
+        wx:key="_id"
+        class="device-card {{selectedDevice._id === item._id ? 'selected' : ''}}"
+        bindtap="selectDevice"
+        data-device="{{item}}"
+      >
+        <view class="device-info">
+          <text class="device-name">{{item.accountName}}</text>
+          <text class="device-status" wx:if="{{item.status === 'online'}}" style="color: #52c41a;">● 在线</text>
+          <text class="device-status" wx:elif="{{item.status === 'offline'}}" style="color: #faad14;">● 离线</text>
+          <text class="device-status" wx:elif="{{item.status === 'protected'}}" style="color: #1890ff;">● 保护</text>
+          <text class="device-status" wx:elif="{{item.status === 'frozen'}}" style="color: #ff4d4f;">● 冻结</text>
+        </view>
+        <view class="device-meta">
+          <text class="device-points">积分: {{item.points}}</text>
+        </view>
+        <view class="check-mark" wx:if="{{selectedDevice._id === item._id}}">✔</view>
+      </view>
+    </view>
+
+    <view wx:else class="no-devices">
+      <text>暂无可用设备，请联系管理员分配设备</text>
+    </view>
+  </view>
+
+  <!-- 步骤 1: 选择类型 -->
+  <view class="section">
+    <view class="section-title">
+      <text class="step-num">1</text>
+      <text class="step-text">选择任务类型</text>
+    </view>
+
+    <view class="type-grid">
+      <block wx:for="{{taskTypes}}" wx:key="id">
         <view
-          wx:for="{{typeOptions}}"
-          wx:key="value"
-          class="type-option {{selectedType === item.value ? 'active' : ''}}"
+          class="type-card {{selectedType.value === item.value ? 'selected' : ''}}"
           bindtap="selectType"
-          data-type="{{item.value}}"
+          data-type="{{item}}"
         >
-          {{item.label}}
+          <view class="type-header">
+            <text class="type-icon">{{item.icon}}</text>
+            <text class="type-price">¥{{item.price}}</text>
+          </view>
+          <view class="type-name">{{item.name}}</view>
+          <view class="type-desc">{{item.desc}}</view>
+
+          <!-- 选中时的对勾标记 -->
+          <view class="check-mark" wx:if="{{selectedType.value === item.value}}">✔</view>
         </view>
-      </view>
+      </block>
+    </view>
+  </view>
+
+  <!-- 步骤 2: 上传图片 -->
+  <view class="section">
+    <view class="section-title">
+      <text class="step-num">2</text>
+      <text class="step-text">上传凭证图片</text>
     </view>
 
-    <button class="choose-btn" bindtap="chooseImage" disabled="{{uploading}}">
-      选择图片
-    </button>
+    <view class="upload-area">
+      <!-- 未上传状态 -->
+      <view class="upload-placeholder" bindtap="chooseImage" wx:if="{{!imageUrl}}">
+        <view class="camera-icon">📷</view>
+        <text class="upload-tip">点击拍摄/选择图片</text>
+        <text class="upload-subtip">请确保图片清晰可见</text>
+      </view>
 
-    <view class="image-preview">
-      <view wx:for="{{imageList}}" wx:key="*this" class="image-item">
-        <image class="preview-image" src="{{item}}" mode="aspectFit"></image>
-        <view class="delete-btn" bindtap="deleteImage" data-index="{{index}}">
-          <text>×</text>
-        </view>
+      <!-- 已上传状态 -->
+      <view class="image-preview" wx:else>
+        <image src="{{imageUrl}}" mode="aspectFit" class="preview-img"></image>
+        <view class="delete-btn" bindtap="deleteImage">×</view>
       </view>
     </view>
+  </view>
 
+  <!-- 步骤 3: 提交按钮 -->
+  <view class="footer-action">
     <button
-      class="upload-btn"
-      bindtap="uploadImages"
-      disabled="{{imageList.length === 0 || uploading}}"
+      class="submit-btn {{selectedDevice && selectedType && imageUrl ? 'active' : ''}}"
+      bindtap="submitTask"
       loading="{{uploading}}"
     >
-      {{uploading ? '上传中...' : '上传图片'}}
+      立即提交任务
     </button>
   </view>
 
-  <view class="tips">
-    <text>提示：请上传清晰的小红书相关图片，审核通过后将获得相应奖励</text>
-  </view>
 </view>

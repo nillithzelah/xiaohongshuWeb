@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const Submission = require('../models/Submission');
 const TaskConfig = require('../models/TaskConfig');
+const Device = require('../models/Device');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -54,10 +55,21 @@ router.post('/upload', authenticateToken, async (req, res) => {
 // 提交任务
 router.post('/task/submit', authenticateToken, async (req, res) => {
   try {
-    const { taskType, imageUrl, imageMd5 } = req.body;
+    const { taskType, imageUrl, imageMd5, deviceId } = req.body;
 
-    if (!taskType || !imageUrl || !imageMd5) {
+    if (!taskType || !imageUrl || !imageMd5 || !deviceId) {
       return res.status(400).json({ success: false, message: '参数不完整' });
+    }
+
+    // 验证设备是否属于当前用户
+    const device = await Device.findOne({
+      _id: deviceId,
+      assignedUser: req.user._id,
+      is_deleted: { $ne: true }
+    });
+
+    if (!device) {
+      return res.status(400).json({ success: false, message: '无效的设备选择' });
     }
 
     // 检查任务类型是否存在且激活
@@ -79,14 +91,16 @@ router.post('/task/submit', authenticateToken, async (req, res) => {
       });
     }
 
-    // 创建提交记录，使用快照价格
+    // 创建提交记录，使用快照价格和两级佣金
     const submission = new Submission({
       user_id: req.user._id,
+      deviceId: deviceId,
       task_type: taskType,
       image_url: imageUrl,
       image_md5: imageMd5,
       snapshot_price: taskConfig.price,
-      snapshot_commission: taskConfig.commission,
+      snapshot_commission_1: taskConfig.commission_1,
+      snapshot_commission_2: taskConfig.commission_2,
       audit_history: [{
         operator_id: req.user._id,
         action: 'submit',
@@ -103,7 +117,7 @@ router.post('/task/submit', authenticateToken, async (req, res) => {
         id: submission._id,
         task_type: submission.task_type,
         status: submission.status,
-        created_at: submission.created_at
+        createdAt: submission.createdAt
       }
     });
 
@@ -119,7 +133,7 @@ router.get('/user/tasks', authenticateToken, async (req, res) => {
     const { page = 1, limit = 10 } = req.query;
 
     const submissions = await Submission.find({ user_id: req.user._id })
-      .sort({ created_at: -1 })
+      .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
@@ -161,12 +175,54 @@ router.get('/user/me', authenticateToken, async (req, res) => {
         avatar: user.avatar,
         wallet: user.wallet,
         parent: user.parent_id,
-        created_at: user.created_at
+        createdAt: user.createdAt
       }
     });
   } catch (error) {
     console.error('获取用户信息错误:', error);
     res.status(500).json({ success: false, message: '获取用户信息失败' });
+  }
+});
+
+// 获取用户被分配的设备列表
+router.get('/device/my-list', authenticateToken, async (req, res) => {
+  try {
+    const devices = await Device.find({
+      assignedUser: req.user._id,
+      is_deleted: { $ne: true }
+    })
+    .select('accountName status influence onlineDuration points')
+    .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      devices
+    });
+  } catch (error) {
+    console.error('获取用户设备列表错误:', error);
+    res.status(500).json({ success: false, message: '获取设备列表失败' });
+  }
+});
+
+// 获取系统公告
+router.get('/announcements', async (req, res) => {
+  try {
+    // 模拟公告数据，实际应该从数据库获取
+    const announcements = [
+      "📢 今日笔记任务单价上调至 12 元！",
+      "🎉 恭喜用户小明提现 100 元！",
+      "💡 上传高质量截图可加快审核速度",
+      "🔥 新用户注册赠送 5 元体验金",
+      "⚡ 审核通过率提升至 95%，快来提交任务吧！"
+    ];
+
+    res.json({
+      success: true,
+      announcements
+    });
+  } catch (error) {
+    console.error('获取公告错误:', error);
+    res.status(500).json({ success: false, message: '获取公告失败' });
   }
 });
 

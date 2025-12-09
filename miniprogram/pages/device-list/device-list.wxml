@@ -1,0 +1,102 @@
+<!-- pages/device-list/device-list.wxml -->
+<view class="container">
+
+  <!-- 页面标题 -->
+  <view class="page-header">
+    <view class="header-content">
+      <text class="page-title">我的设备管理</text>
+      <text class="page-subtitle">查看您被分配的设备状态</text>
+    </view>
+  </view>
+
+  <!-- 骨架屏加载状态 -->
+  <view class="skeleton-container" wx:if="{{loading}}">
+    <view wx:for="{{[1,2,3]}}" wx:key="*this" class="skeleton-card">
+      <view class="skeleton-header">
+        <view class="skeleton-avatar skeleton-shimmer"></view>
+        <view class="skeleton-info">
+          <view class="skeleton-text skeleton-shimmer"></view>
+          <view class="skeleton-text skeleton-shimmer" style="width: 60%;"></view>
+        </view>
+        <view class="skeleton-status skeleton-shimmer"></view>
+      </view>
+      <view class="skeleton-stats">
+        <view class="skeleton-stat-item">
+          <view class="skeleton-text skeleton-shimmer" style="width: 80%;"></view>
+          <view class="skeleton-text skeleton-shimmer" style="width: 60%;"></view>
+        </view>
+        <view class="skeleton-stat-item">
+          <view class="skeleton-text skeleton-shimmer" style="width: 70%;"></view>
+          <view class="skeleton-text skeleton-shimmer" style="width: 50%;"></view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 真实设备列表 -->
+  <view wx:else>
+    <view class="device-list" wx:if="{{devices.length > 0}}">
+      <view
+        wx:for="{{devices}}"
+        wx:key="_id"
+        class="device-card"
+      >
+        <view class="device-header">
+          <view class="device-info">
+            <text class="device-name">{{item.accountName}}</text>
+            <text class="device-influence">影响力: {{item.influence}}</text>
+          </view>
+          <view class="device-status">
+            <text
+              class="status-badge"
+              wx:if="{{item.status === 'online'}}"
+              style="background: #f6ffed; color: #52c41a; border-color: #b7eb8f;"
+            >
+              ● 在线
+            </text>
+            <text
+              class="status-badge"
+              wx:elif="{{item.status === 'offline'}}"
+              style="background: #fff7e6; color: #fa8c16; border-color: #ffd591;"
+            >
+              ● 离线
+            </text>
+            <text
+              class="status-badge"
+              wx:elif="{{item.status === 'protected'}}"
+              style="background: #e6f7ff; color: #1890ff; border-color: #91d5ff;"
+            >
+              ● 保护
+            </text>
+            <text
+              class="status-badge"
+              wx:elif="{{item.status === 'frozen'}}"
+              style="background: #fff2f0; color: #ff4d4f; border-color: #ffccc7;"
+            >
+              ● 冻结
+            </text>
+          </view>
+        </view>
+
+        <view class="device-stats">
+          <view class="stat-item">
+            <text class="stat-label">在线时长</text>
+            <text class="stat-value">{{item.onlineDuration}} 小时</text>
+          </view>
+          <view class="stat-item">
+            <text class="stat-label">积分</text>
+            <text class="stat-value" style="color: #ff4d4f; font-weight: bold;">{{item.points}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 空状态 -->
+    <view wx:else class="empty-state">
+      <view class="empty-icon">📱</view>
+      <text class="empty-title">暂无设备</text>
+      <text class="empty-subtitle">请联系管理员为您分配设备</text>
+    </view>
+  </view>
+
+</view>
