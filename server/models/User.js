@@ -49,6 +49,10 @@ const userSchema = new mongoose.Schema({
     ref: 'User',
     default: null // 哪个带教老师在跟进这个用户
   },
+  assigned_to_mentor_at: {
+    type: Date,
+    default: null // 分配给带教老师的时间
+  },
   parent_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -82,6 +86,24 @@ const userSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+
+  // 培训状态（仅兼职用户）
+  training_status: {
+    type: String,
+    enum: [
+      '已筛选',
+      '培训中',
+      '业务实操',
+      '评论能力培养',
+      '发帖能力培养',
+      '素人已申请发帖内容',
+      '持续跟进',
+      '已结业',
+      '未通过',
+      '中止'
+    ],
+    default: null // 默认为null，表示未设置
   },
 
   // 软删除相关字段

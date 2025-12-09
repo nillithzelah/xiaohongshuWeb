@@ -14,7 +14,8 @@ router.get('/test-auth', (req, res) => {
 
 // 生成JWT token
 const generateToken = (userId) => {
-  return jwt.sign({ userId }, 'default_secret', { expiresIn: '7d' });
+  const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
 };
 
 // 微信小程序登录/注册
@@ -179,7 +180,8 @@ router.post('/admin-login', async (req, res) => {
 
     // 生成token
     console.log('🎫 生成JWT token...');
-    const token = jwt.sign({ userId: user._id }, 'default_secret', { expiresIn: '7d' });
+    const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
     console.log('✅ token生成成功');
 
     console.log('📤 发送登录成功响应');
@@ -253,7 +255,14 @@ router.post('/register', authenticateToken, async (req, res) => {
       wechat,
       notes,
       // 如果当前用户是HR，自动设置hr_id
-      hr_id: req.user.role === 'hr' ? req.user._id : null
+      hr_id: req.user.role === 'hr' ? req.user._id : null,
+      // 如果提供了mentor_id，设置分配时间为注册时间之前
+      mentor_id: req.body.mentor_id || null,
+      assigned_to_mentor_at: req.body.mentor_id ? (() => {
+        const registrationTime = new Date();
+        const daysBefore = Math.floor(Math.random() * 7) + 1; // 1-7天
+        return new Date(registrationTime.getTime() - daysBefore * 24 * 60 * 60 * 1000);
+      })() : null
     });
 
     await newUser.save();

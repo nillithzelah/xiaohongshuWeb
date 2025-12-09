@@ -11,9 +11,10 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    console.log('🔐 验证token，使用的密钥: default_secret');
+    const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
+    console.log('🔐 验证token，使用的密钥:', JWT_SECRET === 'default_secret' ? 'default_secret' : '环境变量密钥');
     console.log('🔑 收到的token:', token);
-    const decoded = jwt.verify(token, 'default_secret');
+    const decoded = jwt.verify(token, JWT_SECRET);
     console.log('✅ Token验证成功:', decoded);
 
     // 从数据库获取真实用户信息

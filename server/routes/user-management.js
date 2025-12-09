@@ -105,6 +105,31 @@ router.put('/:id', authenticateToken, async (req, res) => {
       }
     });
 
+    // 特殊处理培训状态：老板、主管和带教老师（对其名下用户）可以编辑兼职用户的培训状态
+    if (req.body.training_status !== undefined && targetUser.role === 'part_time') {
+      const currentUserRole = req.user.role;
+      if (currentUserRole === 'boss' || currentUserRole === 'manager' || (currentUserRole === 'mentor' && targetUser.mentor_id?.toString() === req.user.id)) {
+        updateData.training_status = req.body.training_status;
+      } else {
+        return res.status(403).json({ success: false, message: '没有权限编辑培训状态' });
+      }
+    }
+
+    // 如果是分配带教老师，自动设置分配时间（必须在注册时间之前）
+    if (updateData.mentor_id !== undefined && updateData.mentor_id !== targetUser.mentor_id) {
+      if (updateData.mentor_id) {
+        // 分配给新的带教老师，设置分配时间为注册时间之前的一段时间
+        const registrationTime = new Date(targetUser.createdAt);
+        // 设置分配时间为注册时间前1-7天内的随机时间
+        const daysBefore = Math.floor(Math.random() * 7) + 1; // 1-7天
+        const assignmentTime = new Date(registrationTime.getTime() - daysBefore * 24 * 60 * 60 * 1000);
+        updateData.assigned_to_mentor_at = assignmentTime;
+      } else {
+        // 取消分配，清空分配时间
+        updateData.assigned_to_mentor_at = null;
+      }
+    }
+
     // 如果没有要更新的字段，返回错误
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ success: false, message: '没有有效的更新字段' });
@@ -132,7 +157,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
         role: updatedUser.role,
         mentor_id: updatedUser.mentor_id,
         hr_id: updatedUser.hr_id,
-        parent_id: updatedUser.parent_id
+        parent_id: updatedUser.parent_id,
+        assigned_to_mentor_at: updatedUser.assigned_to_mentor_at,
+        training_status: updatedUser.training_status
       }
     });
   } catch (error) {
@@ -144,7 +171,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 // 获取用户列表（管理员功能）
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 10, role, keyword, managed_by, viewType } = req.query;
+    const { page = 1, limit = 10, role, keyword, managed_by, viewType, training_status } = req.query;
 
     let query = {};
 
@@ -168,6 +195,7 @@ router.get('/', authenticateToken, async (req, res) => {
       ];
     }
     if (managed_by) query.mentor_id = managed_by;
+    if (training_status) query.training_status = training_status;
 
     const users = await User.find({
       ...query,
@@ -188,6 +216,13 @@ router.get('/', authenticateToken, async (req, res) => {
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
+    // 为每个用户添加分配时间和培训状态信息
+    const usersWithAssignmentTime = users.map(user => ({
+      ...user.toObject(),
+      assigned_to_mentor_at: user.assigned_to_mentor_at,
+      training_status: user.training_status
+    }));
+
     const total = await User.countDocuments({
       ...query,
       is_deleted: { $ne: true } // 只统计未删除的用户
@@ -195,7 +230,7 @@ router.get('/', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      users,
+      users: usersWithAssignmentTime,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),

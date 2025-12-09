@@ -347,13 +347,121 @@ router.get('/', async (req, res) => {
     console.log('   查询条件:', query);
     console.log('   分页参数:', { page, limit });
 
-    // 从数据库查询真实数据
-    const reviews = await ImageReview.find(query)
-      .populate('userId', 'username nickname')
-      .populate('mentorReview.reviewer', 'username nickname')
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+    // 获取当前用户ID（如果已认证）
+    const currentUserId = req.user ? req.user._id : null;
+
+    // 从数据库查询真实数据 - 优先显示属于自己的待审核记录
+    let reviews;
+
+    if (currentUserId && req.user.role === 'mentor') {
+      // 带教老师：优先显示自己名下用户的待审核记录
+      const assignedUsers = await User.find({ mentor_id: currentUserId }).select('_id');
+      const assignedUserIds = assignedUsers.map(u => u._id);
+
+      // 自己名下用户的待审核记录
+      const ownPendingQuery = { ...query, status: 'pending', userId: { $in: assignedUserIds } };
+      const ownPending = await ImageReview.find(ownPendingQuery)
+        .populate('userId', 'username nickname')
+        .populate('mentorReview.reviewer', 'username nickname')
+        .sort({ createdAt: -1 });
+
+      // 其他待审核记录
+      const otherPendingQuery = { ...query, status: 'pending', userId: { $nin: assignedUserIds } };
+      const otherPending = await ImageReview.find(otherPendingQuery)
+        .populate('userId', 'username nickname')
+        .populate('mentorReview.reviewer', 'username nickname')
+        .sort({ createdAt: -1 });
+
+      // 非待审核记录（按最新操作时间倒序）
+      const nonPendingQuery = { ...query };
+      nonPendingQuery.$and = nonPendingQuery.$and || [];
+      nonPendingQuery.$and.push({ status: { $ne: 'pending' } });
+
+      const nonPending = await ImageReview.find(nonPendingQuery)
+        .populate('userId', 'username nickname')
+        .populate('mentorReview.reviewer', 'username nickname');
+
+      // 对非待审核记录按最新审核时间排序
+      nonPending.sort((a, b) => {
+        const getLatestAuditTime = (review) => {
+          const times = [];
+          if (review.mentorReview?.reviewedAt) times.push(new Date(review.mentorReview.reviewedAt));
+          if (review.managerApproval?.approvedAt) times.push(new Date(review.managerApproval.approvedAt));
+          if (review.financeProcess?.processedAt) times.push(new Date(review.financeProcess.processedAt));
+          if (review.auditHistory && review.auditHistory.length > 0) {
+            review.auditHistory.forEach(history => {
+              if (history.timestamp) times.push(new Date(history.timestamp));
+            });
+          }
+          return times.length > 0 ? Math.max(...times.map(t => t.getTime())) : new Date(review.createdAt).getTime();
+        };
+        return getLatestAuditTime(b) - getLatestAuditTime(a);
+      });
+
+      // 合并结果：待审核优先，然后是非待审核
+      reviews = [...pending, ...nonPending];
+
+      // 应用分页
+      const startIndex = (page - 1) * limit;
+      const endIndex = startIndex + limit;
+      reviews = reviews.slice(startIndex, endIndex);
+    } else if (currentUserId) {
+      // 其他角色用户：按原有逻辑
+      const selfReviewedQuery = { ...query };
+      const otherReviewedQuery = { ...query };
+
+      selfReviewedQuery.$or = [
+        { 'mentorReview.reviewer': currentUserId },
+        { 'auditHistory.operator': currentUserId }
+      ];
+
+      otherReviewedQuery.$and = otherReviewedQuery.$and || [];
+      otherReviewedQuery.$and.push({
+        $nor: [
+          { 'mentorReview.reviewer': currentUserId },
+          { 'auditHistory.operator': currentUserId }
+        ]
+      });
+
+      const selfReviewed = await ImageReview.find(selfReviewedQuery)
+        .populate('userId', 'username nickname')
+        .populate('mentorReview.reviewer', 'username nickname');
+
+      selfReviewed.sort((a, b) => {
+        const getLatestAuditTime = (review) => {
+          const times = [];
+          if (review.mentorReview?.reviewedAt) times.push(new Date(review.mentorReview.reviewedAt));
+          if (review.managerApproval?.approvedAt) times.push(new Date(review.managerApproval.approvedAt));
+          if (review.financeProcess?.processedAt) times.push(new Date(review.financeProcess.processedAt));
+          if (review.auditHistory && review.auditHistory.length > 0) {
+            review.auditHistory.forEach(history => {
+              if (history.timestamp) times.push(new Date(history.timestamp));
+            });
+          }
+          return times.length > 0 ? Math.max(...times.map(t => t.getTime())) : new Date(review.createdAt).getTime();
+        };
+        return getLatestAuditTime(b) - getLatestAuditTime(a);
+      });
+
+      const otherReviewed = await ImageReview.find(otherReviewedQuery)
+        .populate('userId', 'username nickname')
+        .populate('mentorReview.reviewer', 'username nickname')
+        .sort({ createdAt: -1 });
+
+      reviews = [...selfReviewed, ...otherReviewed];
+
+      const startIndex = (page - 1) * limit;
+      const endIndex = startIndex + limit;
+      reviews = reviews.slice(startIndex, endIndex);
+    } else {
+      // 未登录用户按原有逻辑
+      reviews = await ImageReview.find(query)
+        .populate('userId', 'username nickname')
+        .populate('mentorReview.reviewer', 'username nickname')
+        .sort({ createdAt: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit);
+    }
 
     // 为每个审核记录添加设备信息
     for (const review of reviews) {
@@ -500,6 +608,100 @@ router.put('/reject-all-pending', authenticateToken, requireRole(['manager', 'bo
   }
 });
 
+// 主管批量确认 (只有manager和boss可以调用)
+router.put('/batch-manager-approve', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { ids, approved, comment } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: '请选择要操作的任务' });
+    }
+
+    if (typeof approved !== 'boolean') {
+      return res.status(400).json({ success: false, message: '必须指定批准或驳回' });
+    }
+
+    if (!approved && (!comment || comment.trim() === '')) {
+      return res.status(400).json({ success: false, message: '驳回理由不能为空' });
+    }
+
+    // 只更新状态为mentor_approved的任务
+    const filter = {
+      _id: { $in: ids },
+      status: 'mentor_approved'
+    };
+
+    const updateData = {
+      $set: {
+        managerApproval: {
+          approved,
+          comment: approved ? '主管批量确认通过' : comment.trim(),
+          approvedAt: new Date()
+        }
+      },
+      $push: {
+        auditHistory: {
+          operator: req.user._id,
+          operatorName: req.user.username,
+          action: approved ? 'batch_manager_approve' : 'batch_manager_reject',
+          comment: approved ? '主管批量确认通过' : comment.trim(),
+          timestamp: new Date()
+        }
+      }
+    };
+
+    if (approved) {
+      updateData.$set.status = 'manager_approved';
+    } else {
+      updateData.$set.status = 'manager_rejected';
+      updateData.$set.rejectionReason = comment.trim();
+    }
+
+    const result = await ImageReview.updateMany(filter, updateData, { session });
+
+    if (result.modifiedCount === 0) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: '没有找到可操作的任务' });
+    }
+
+    // 提交事务
+    await session.commitTransaction();
+
+    // 发送通知 (事务外执行，避免死锁)
+    const updatedReviews = await ImageReview.find({
+      _id: { $in: ids },
+      status: approved ? 'manager_approved' : 'manager_rejected'
+    }).populate('userId');
+
+    for (const review of updatedReviews) {
+      const oldStatus = 'mentor_approved';
+      const newStatus = approved ? 'manager_approved' : 'manager_rejected';
+      await notificationService.sendReviewStatusNotification(review, oldStatus, newStatus);
+
+      // 如果是主管驳回，额外通知带教老师
+      if (!approved) {
+        await notificationService.sendMentorNotification(review, 'manager_reject', req.user.username, comment);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `成功${approved ? '确认' : '驳回'} ${result.modifiedCount} 个任务`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('主管批量确认错误:', error);
+    res.status(500).json({ success: false, message: '批量确认失败' });
+  } finally {
+    session.endSession();
+  }
+});
+
 // 批量选中操作 (只有manager和boss可以调用)
 router.put('/batch-cs-review', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
   try {
@@ -569,4 +771,6 @@ router.put('/batch-cs-review', authenticateToken, requireRole(['manager', 'boss'
   }
 });
 
-module.exports = router;
+module.exports = router;       
+
+
