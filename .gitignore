@@ -73,3 +73,8 @@ temp/
 
 #微信小程序
 project.private.config.json
+
+# Archive files
+*.rar
+*.zip
+*.tar.gz
