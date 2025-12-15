@@ -1,11 +1,12 @@
-// 直接加载环境变量而不使用dotenv
+// 加载环境变量
+require('dotenv').config();
 const OSS = require('ali-oss');
 
-// 直接使用环境变量
-const OSS_ACCESS_KEY_ID = 'REMOVED_ACCESS_KEY';
-const OSS_ACCESS_KEY_SECRET = 'REMOVED_SECRET';
-const OSS_BUCKET = 'zerobug-img';
-const OSS_REGION = 'oss-cn-shenzhen';
+// 使用环境变量
+const OSS_ACCESS_KEY_ID = process.env.OSS_ACCESS_KEY_ID;
+const OSS_ACCESS_KEY_SECRET = process.env.OSS_ACCESS_KEY_SECRET;
+const OSS_BUCKET = process.env.OSS_BUCKET || 'zerobug-img';
+const OSS_REGION = process.env.OSS_REGION || 'oss-cn-shenzhen';
 
 console.log('🔑 使用硬编码 OSS 配置:');
 console.log('OSS_ACCESS_KEY_ID:', OSS_ACCESS_KEY_ID);

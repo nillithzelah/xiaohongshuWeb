@@ -1,14 +1,15 @@
 // 实际测试批量上传功能
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const OSS = require('ali-oss');
 
-// OSS配置（与.env文件一致）
+// OSS配置（从环境变量读取）
 const OSS_CONFIG = {
-  accessKeyId: 'REMOVED_ACCESS_KEY',
-  accessKeySecret: 'REMOVED_SECRET',
-  bucket: 'zerobug-img',
-  region: 'oss-cn-shenzhen'
+  accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+  accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+  bucket: process.env.OSS_BUCKET || 'zerobug-img',
+  region: process.env.OSS_REGION || 'oss-cn-shenzhen'
 };
 
 const client = new OSS({
