@@ -4,7 +4,60 @@ const ImageReview = require('../models/ImageReview');
 const TaskConfig = require('../models/TaskConfig');
 const Device = require('../models/Device');
 const { authenticateToken } = require('../middleware/auth');
+const xiaohongshuService = require('../services/xiaohongshuService');
 const router = express.Router();
+
+// 字符串相似度比对函数
+function compareStrings(str1, str2) {
+  if (!str1 || !str2) return 0;
+
+  const s1 = str1.toLowerCase().trim();
+  const s2 = str2.toLowerCase().trim();
+
+  // 完全匹配
+  if (s1 === s2) return 100;
+
+  // 包含关系
+  if (s1.includes(s2) || s2.includes(s1)) return 90;
+
+  // 计算编辑距离相似度
+  const longer = s1.length > s2.length ? s1 : s2;
+  const shorter = s1.length > s2.length ? s2 : s1;
+
+  if (longer.length === 0) return 100;
+
+  const editDistance = levenshteinDistance(longer, shorter);
+  return Math.round((longer.length - editDistance) / longer.length * 100);
+}
+
+// 计算编辑距离
+function levenshteinDistance(str1, str2) {
+  const matrix = [];
+
+  for (let i = 0; i <= str2.length; i++) {
+    matrix[i] = [i];
+  }
+
+  for (let j = 0; j <= str1.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= str2.length; i++) {
+    for (let j = 1; j <= str1.length; j++) {
+      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // 替换
+          matrix[i][j - 1] + 1,     // 插入
+          matrix[i - 1][j] + 1      // 删除
+        );
+      }
+    }
+  }
+
+  return matrix[str2.length][str1.length];
+}
 
 // 获取任务配置（显示给用户）
 router.get('/task-configs', async (req, res) => {
@@ -326,7 +379,7 @@ router.get('/announcements', async (req, res) => {
 // 批量提交多图任务
 router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
   try {
-    const { deviceId, imageType, imageUrls, imageMd5s, noteUrl } = req.body;
+    const { deviceId, imageType, imageUrls, imageMd5s, noteUrl, noteAuthor, noteTitle } = req.body;
 
     // 验证参数
     if (!deviceId || !imageType || !imageUrls || !imageMd5s) {
@@ -419,14 +472,110 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       });
     }
 
+    // AI审核逻辑（仅对笔记和评论类型）
+    let aiReviewResult = null;
+    if ((imageType === 'note' || imageType === 'comment') && noteUrl) {
+      console.log('🤖 开始AI审核笔记链接和内容...');
+
+      // 首先验证链接有效性
+      aiReviewResult = await xiaohongshuService.validateNoteUrl(noteUrl);
+
+      if (!aiReviewResult.valid) {
+        return res.status(400).json({
+          success: false,
+          message: `AI审核失败：${aiReviewResult.reason}`,
+          aiReview: aiReviewResult
+        });
+      }
+
+      // 如果是笔记类型，进行内容比对
+      if (imageType === 'note' && noteAuthor && noteTitle) {
+        console.log('🔍 开始解析笔记内容并比对...');
+
+        const contentResult = await xiaohongshuService.parseNoteContent(noteUrl);
+
+        if (contentResult.success && (contentResult.author || contentResult.title)) {
+          console.log('📄 解析到的笔记内容:', {
+            title: contentResult.title,
+            author: contentResult.author
+          });
+
+          // 进行内容比对
+          const authorMatch = contentResult.author ? compareStrings(noteAuthor, contentResult.author) : 0;
+          const titleMatch = contentResult.title ? compareStrings(noteTitle, contentResult.title) : 0;
+
+          console.log('🔍 比对结果:', {
+            authorMatch: `${authorMatch}%`,
+            titleMatch: `${titleMatch}%`,
+            userAuthor: noteAuthor,
+            pageAuthor: contentResult.author,
+            userTitle: noteTitle,
+            pageTitle: contentResult.title
+          });
+
+          // 更新AI审核结果
+          aiReviewResult.contentMatch = {
+            authorMatch,
+            titleMatch,
+            pageAuthor: contentResult.author,
+            pageTitle: contentResult.title
+          };
+
+          // 严格的审核逻辑：如果无法解析内容或匹配度过低，则不通过
+          if (!contentResult.author && !contentResult.title) {
+            // 完全无法解析内容
+            aiReviewResult.aiReview.passed = false;
+            aiReviewResult.aiReview.confidence = 0.1;
+            aiReviewResult.aiReview.reasons.push('无法解析笔记内容，疑似无效链接');
+            aiReviewResult.aiReview.riskLevel = 'high';
+          } else if ((contentResult.author && authorMatch < 30) || (contentResult.title && titleMatch < 30)) {
+            // 内容匹配度过低
+            aiReviewResult.aiReview.passed = false;
+            aiReviewResult.aiReview.confidence = 0.2;
+            aiReviewResult.aiReview.reasons.push('内容匹配度过低，可能为虚假信息');
+            aiReviewResult.aiReview.riskLevel = 'high';
+          } else if (authorMatch >= 80 && titleMatch >= 80) {
+            // 内容匹配度很高
+            aiReviewResult.aiReview.confidence += 0.3;
+            aiReviewResult.aiReview.reasons.push('内容匹配度很高，信息一致');
+          } else if (authorMatch >= 60 || titleMatch >= 60) {
+            // 内容匹配度中等
+            aiReviewResult.aiReview.confidence += 0.1;
+            aiReviewResult.aiReview.reasons.push('内容匹配度中等，需要人工复核');
+            aiReviewResult.aiReview.riskLevel = 'medium';
+          } else {
+            // 内容匹配度较低
+            aiReviewResult.aiReview.passed = false;
+            aiReviewResult.aiReview.confidence *= 0.3;
+            aiReviewResult.aiReview.reasons.push('内容匹配度较低，疑似刷单行为');
+            aiReviewResult.aiReview.riskLevel = 'high';
+          }
+        } else {
+          console.log('⚠️ 内容解析失败或无内容:', contentResult.reason);
+          // 无法解析内容，严格审核
+          aiReviewResult.aiReview.passed = false;
+          aiReviewResult.aiReview.confidence = 0.1;
+          aiReviewResult.aiReview.reasons.push('无法验证笔记内容，疑似无效链接');
+          aiReviewResult.aiReview.riskLevel = 'high';
+        }
+      }
+
+      console.log('🤖 最终AI审核结果:', aiReviewResult);
+    }
+
     // 批量创建审核记录（使用新的多图格式）
-    const reviews = await Promise.all(imageUrls.map((url, index) => {
+    const reviews = await Promise.all(imageUrls.map(async (url, index) => {
       const reviewData = {
         userId: req.user._id,
         imageUrls: [url], // 多图格式：单图也存储为数组
         imageType: imageType,
         imageMd5s: [imageMd5s[index]], // 多图MD5格式：单MD5也存储为数组
-        noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null, // 直接在数据中包含noteUrl
+        noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
+        // 用户提供的笔记信息
+        userNoteInfo: (imageType === 'note' && noteAuthor && noteTitle) ? {
+          author: noteAuthor.trim(),
+          title: noteTitle.trim()
+        } : null,
         snapshotPrice: taskConfig.price,
         snapshotCommission1: taskConfig.commission_1,
         snapshotCommission2: taskConfig.commission_2,
@@ -443,7 +592,53 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
         }]
       };
 
-      return new ImageReview(reviewData).save();
+      // 如果有AI审核结果，保存相关信息
+      if (aiReviewResult && aiReviewResult.aiReview) {
+        reviewData.aiReviewResult = aiReviewResult.aiReview;
+        if (aiReviewResult.contentMatch) {
+          reviewData.aiParsedNoteInfo = {
+            author: aiReviewResult.contentMatch.pageAuthor,
+            title: aiReviewResult.contentMatch.pageTitle
+          };
+        }
+      }
+
+      // 如果AI审核通过且信心度足够高，直接设置为完成状态
+      if (aiReviewResult && aiReviewResult.aiReview && aiReviewResult.aiReview.passed && aiReviewResult.aiReview.confidence >= 0.9) {
+        console.log('🎉 AI审核通过，自动完成审核');
+
+        // 更新审核记录为完成状态
+        reviewData.status = 'completed';
+        reviewData.financeProcess = {
+          amount: taskConfig.price,
+          commission: 0,
+          processedAt: new Date()
+        };
+
+        // 添加AI审核历史
+        reviewData.auditHistory.push({
+          operator: null, // AI审核
+          operatorName: 'AI审核系统',
+          action: 'ai_auto_approved',
+          comment: `AI自动审核通过 (信心度: ${(aiReviewResult.aiReview.confidence * 100).toFixed(1)}%)`,
+          timestamp: new Date()
+        });
+      }
+
+      const review = await new ImageReview(reviewData).save();
+
+      // 如果是AI自动审核通过的，需要更新用户积分
+      if (reviewData.status === 'completed') {
+        const user = await require('../models/User').findById(req.user._id);
+        if (user) {
+          user.points += taskConfig.price;
+          user.totalEarnings += taskConfig.price;
+          await user.save();
+          console.log(`💰 用户 ${user.username} 获得 ${taskConfig.price} 积分`);
+        }
+      }
+
+      return review;
     }));
 
     res.json({

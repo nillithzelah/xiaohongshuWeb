@@ -94,25 +94,52 @@
     </view>
   </view>
 
-  <!-- 步骤 3: 填写链接 -->
+  <!-- 步骤 3: 填写链接和信息 -->
   <view class="section" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment'}}">
     <view class="section-title">
       <text class="step-num">3</text>
-      <text class="step-text">填写小红书笔记链接</text>
+      <text class="step-text">填写小红书笔记信息</text>
       <text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text>
     </view>
 
+    <!-- 笔记链接 -->
     <view class="form-group">
+      <view class="input-label">笔记链接<text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text></view>
       <input
         class="url-input"
-        placeholder="{{selectedType.value === 'note' ? '请输入小红书笔记链接（必填）' : '请输入小红书笔记链接（选填）'}}"
+        placeholder="请输入小红书笔记链接"
         value="{{noteUrl}}"
         bindinput="onNoteUrlInput"
         confirm-type="done"
+        maxlength="500"
       />
       <view class="input-hint">
         <text>示例：https://www.xiaohongshu.com/explore/...</text>
       </view>
+    </view>
+
+    <!-- 作者昵称 -->
+    <view class="form-group">
+      <view class="input-label">作者昵称<text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text></view>
+      <input
+        class="text-input"
+        placeholder="请输入笔记作者昵称"
+        value="{{noteAuthor}}"
+        bindinput="onNoteAuthorInput"
+        maxlength="50"
+      />
+    </view>
+
+    <!-- 笔记标题 -->
+    <view class="form-group">
+      <view class="input-label">笔记标题<text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text></view>
+      <input
+        class="text-input"
+        placeholder="请输入笔记标题"
+        value="{{noteTitle}}"
+        bindinput="onNoteTitleInput"
+        maxlength="200"
+      />
     </view>
   </view>
 

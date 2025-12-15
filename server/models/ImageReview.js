@@ -59,6 +59,33 @@ const imageReviewSchema = new mongoose.Schema({
       return v === undefined ? null : v;
     }
   },
+  // 用户提供的笔记信息（用于AI审核比对）
+  userNoteInfo: {
+    author: String, // 用户填写的作者昵称
+    title: String   // 用户填写的笔记标题
+  },
+  // AI审核解析的笔记信息
+  aiParsedNoteInfo: {
+    author: String,      // 从页面解析的作者昵称
+    title: String,       // 从页面解析的标题
+    publishTime: Date,   // 发布时间
+    likes: Number,       // 点赞数
+    collects: Number,    // 收藏数
+    comments: Number     // 评论数
+  },
+  // AI审核结果
+  aiReviewResult: {
+    passed: Boolean,        // 是否通过
+    confidence: Number,     // 信心度 (0-1)
+    riskLevel: String,      // 风险等级: low, medium, high
+    reasons: [String],      // 审核理由
+    contentMatch: {         // 内容匹配结果
+      authorMatch: Number,  // 作者匹配度 (0-100)
+      titleMatch: Number,   // 标题匹配度 (0-100)
+      pageAuthor: String,   // 页面解析的作者
+      pageTitle: String     // 页面解析的标题
+    }
+  },
   status: {
     type: String,
     enum: ['pending', 'mentor_approved', 'manager_rejected', 'manager_approved', 'finance_processing', 'completed', 'rejected'],
@@ -104,7 +131,7 @@ const imageReviewSchema = new mongoose.Schema({
     operatorName: String, // 操作人姓名
     action: {
       type: String,
-      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process']
+      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'ai_auto_approved']
     },
     comment: String, // 操作意见
     timestamp: {

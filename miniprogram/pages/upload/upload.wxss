@@ -300,7 +300,14 @@ page {
   margin-top: 20rpx;
 }
 
-.url-input {
+.input-label {
+  font-size: 28rpx;
+  color: #333;
+  margin-bottom: 12rpx;
+  display: block;
+}
+
+.url-input, .text-input {
   width: 100%;
   height: 80rpx;
   border: 2rpx solid #e8e8e8;
@@ -311,7 +318,7 @@ page {
   box-sizing: border-box;
 }
 
-.url-input:focus {
+.url-input:focus, .text-input:focus {
   border-color: #1890ff;
 }
 

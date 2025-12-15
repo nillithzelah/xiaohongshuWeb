@@ -38,6 +38,8 @@ Page({
     imageMd5s: [], // 多张图片的MD5数组
     displayList: [], // 显示列表（图片 + 添加按钮）
     noteUrl: '', // 小红书笔记链接
+    noteAuthor: '', // 笔记作者昵称
+    noteTitle: '', // 笔记标题
     uploading: false
   },
 
@@ -117,7 +119,9 @@ Page({
     const type = e.currentTarget.dataset.type;
     this.setData({
       selectedType: type,
-      noteUrl: '' // 切换类型时清空链接
+      noteUrl: '', // 切换类型时清空链接
+      noteAuthor: '', // 清空昵称
+      noteTitle: '' // 清空标题
     });
   },
 
@@ -125,6 +129,20 @@ Page({
   onNoteUrlInput(e) {
     this.setData({
       noteUrl: e.detail.value
+    });
+  },
+
+  // 输入笔记作者昵称
+  onNoteAuthorInput(e) {
+    this.setData({
+      noteAuthor: e.detail.value
+    });
+  },
+
+  // 输入笔记标题
+  onNoteTitleInput(e) {
+    this.setData({
+      noteTitle: e.detail.value
     });
   },
 
@@ -435,7 +453,7 @@ Page({
 
   // 提交任务（使用批量提交接口）
   submitTask() {
-    const { selectedDevice, selectedType, imageUrls, noteUrl } = this.data;
+    const { selectedDevice, selectedType, imageUrls, noteUrl, noteAuthor, noteTitle } = this.data;
 
     if (!selectedDevice) {
       wx.showToast({ title: '请选择操作设备', icon: 'none' });
@@ -452,10 +470,20 @@ Page({
       return;
     }
 
-    // 验证笔记链接（笔记必填，评论选填）
-    if (selectedType.value === 'note' && (!noteUrl || noteUrl.trim() === '')) {
-      wx.showToast({ title: '笔记类型必须填写小红书笔记链接', icon: 'none' });
-      return;
+    // 验证笔记信息（笔记必填，评论选填）
+    if (selectedType.value === 'note') {
+      if (!noteUrl || noteUrl.trim() === '') {
+        wx.showToast({ title: '笔记类型必须填写小红书笔记链接', icon: 'none' });
+        return;
+      }
+      if (!noteAuthor || noteAuthor.trim() === '') {
+        wx.showToast({ title: '笔记类型必须填写作者昵称', icon: 'none' });
+        return;
+      }
+      if (!noteTitle || noteTitle.trim() === '') {
+        wx.showToast({ title: '笔记类型必须填写笔记标题', icon: 'none' });
+        return;
+      }
     }
 
     // 如果填写了链接，验证格式
@@ -483,7 +511,9 @@ Page({
         imageType: selectedType.value,
         imageUrls: urls,
         imageMd5s: md5s,
-        noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null
+        noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
+        noteAuthor: noteAuthor && noteAuthor.trim() ? noteAuthor.trim() : null,
+        noteTitle: noteTitle && noteTitle.trim() ? noteTitle.trim() : null
       };
 
       // 添加调试日志
@@ -515,6 +545,8 @@ Page({
                 imageUrls: [],
                 imageMd5s: [],
                 noteUrl: '', // 清空笔记链接
+                noteAuthor: '', // 清空昵称
+                noteTitle: '', // 清空标题
                 displayList: [{ type: 'add' }] // 重置显示列表，只保留添加按钮
               });
               wx.switchTab({ url: '/pages/index/index' });
