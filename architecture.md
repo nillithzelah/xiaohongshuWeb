@@ -93,30 +93,53 @@ graph TD
 ```sql
 {
   _id: ObjectId,
-  task_type: String,        -- 'qrcode', 'comment', 'note'
-  price: Number,            -- 当前单价
+  imageType: String,        -- 'qrcode', 'comment', 'note'
+  snapshotPrice: Number,    -- 当前单价
   is_active: Boolean,       -- 是否启用
   updated_at: Date
 }
 ```
 
-#### 任务提交表 (submissions)
+#### 图片审核表 (image_reviews)
 ```sql
 {
   _id: ObjectId,
-  user_id: ObjectId,
-  task_type: String,        -- 任务类型
-  image_url: String,        -- 图片地址
+  userId: ObjectId,         -- 用户ID
+  imageUrl: String,         -- 图片地址
+  imageType: String,        -- 任务类型: 'customer_resource', 'note', 'comment'
   image_md5: String,        -- 图片MD5 (防重复)
-  snapshot_price: Number,   -- 提交时的快照单价
+  snapshotPrice: Number,    -- 提交时的快照单价
+  snapshotCommission1: Number, -- 一级佣金
+  snapshotCommission2: Number, -- 二级佣金
   status: String,           -- 'pending'=待审核, 'mentor_approved'=带教老师通过, 'manager_rejected'=经理驳回, 'manager_approved'=经理通过, 'finance_processing'=财务处理, 'completed'=已完成, 'rejected'=已驳回
-  mentor_id: ObjectId,      -- 带教老师审核人ID
-  mentor_comment: String,   -- 带教老师审核意见
-  mentor_reviewed_at: Date,
-  manager_id: ObjectId,     -- 经理确认人ID
-  manager_comment: String,  -- 经理确认意见
-  manager_approved_at: Date,
-  rejected_reason: String,  -- 驳回原因
+  mentorReview: {           -- 带教老师审核信息
+    reviewer: ObjectId,     -- 审核人ID
+    approved: Boolean,      -- 是否通过
+    comment: String,        -- 审核意见
+    reviewedAt: Date
+  },
+  managerApproval: {        -- 经理确认信息
+    approved: Boolean,      -- 是否通过
+    comment: String,        -- 确认意见
+    approvedAt: Date
+  },
+  financeProcess: {         -- 财务处理信息
+    amount: Number,         -- 打款金额
+    commission: Number,     -- 佣金
+    processedAt: Date
+  },
+  deviceInfo: {             -- 设备信息
+    accountName: String,    -- 账号名称
+    status: String,         -- 设备状态
+    influence: [String]     -- 影响力标签
+  },
+  auditHistory: [{          -- 审核历史记录
+    operator: ObjectId,     -- 操作人ID
+    operatorName: String,   -- 操作人姓名
+    action: String,         -- 操作类型
+    comment: String,        -- 操作意见
+    timestamp: Date
+  }],
   createdAt: Date
 }
 ```
@@ -125,11 +148,11 @@ graph TD
 ```sql
 {
   _id: ObjectId,
-  submission_id: ObjectId,
+  review_id: ObjectId,       -- 关联image_reviews表
   operator_id: ObjectId,
-  action: String,           -- 'mentor_pass', 'mentor_reject', 'manager_confirm', 'finance_process', 'reject'
-  old_status: Number,
-  new_status: Number,
+  action: String,           -- 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'reject'
+  old_status: String,        -- 字符串状态
+  new_status: String,        -- 字符串状态
   comment: String,
   createdAt: Date
 }

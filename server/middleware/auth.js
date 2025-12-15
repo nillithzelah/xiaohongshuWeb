@@ -11,8 +11,8 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
-    console.log('🔐 验证token，使用的密钥:', JWT_SECRET === 'default_secret' ? 'default_secret' : '环境变量密钥');
+    const JWT_SECRET = process.env.JWT_SECRET || 'xiaohongshu_prod_jwt_secret_2025_v2_a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+    console.log('🔐 验证token，使用的密钥:', JWT_SECRET.substring(0, 20) + '...');
     console.log('🔑 收到的token:', token);
     const decoded = jwt.verify(token, JWT_SECRET);
     console.log('✅ Token验证成功:', decoded);

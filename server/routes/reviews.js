@@ -251,7 +251,7 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
         // 记录一级佣金发放事务
         const Transaction = require('../models/Transaction');
         await new Transaction({
-          submission_id: review._id,
+          imageReview_id: review._id,
           user_id: parentUser._id,
           amount: review.snapshotCommission1,
           type: 'referral_bonus_1',
@@ -273,7 +273,7 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
           // 记录二级佣金发放事务
           const Transaction = require('../models/Transaction');
           await new Transaction({
-            submission_id: review._id,
+            imageReview_id: review._id,
             user_id: grandParentUser._id,
             amount: review.snapshotCommission2,
             type: 'referral_bonus_2',
@@ -301,7 +301,7 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
 });
 
 // 获取所有审核记录（管理员）
-router.get('/', async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
     console.log('🔍 Reviews API 被调用了!');
     const { page = 1, limit = 10, status, userId, imageType, keyword, reviewer, deviceName } = req.query;
@@ -399,7 +399,7 @@ router.get('/', async (req, res) => {
       });
 
       // 合并结果：待审核优先，然后是非待审核
-      reviews = [...pending, ...nonPending];
+      reviews = [...ownPending, ...otherPending, ...nonPending];
 
       // 应用分页
       const startIndex = (page - 1) * limit;
@@ -407,6 +407,8 @@ router.get('/', async (req, res) => {
       reviews = reviews.slice(startIndex, endIndex);
     } else if (currentUserId) {
       // 其他角色用户：按原有逻辑
+      console.log('👤 当前用户角色分支:', req.user?.role, '用户ID:', currentUserId);
+
       const selfReviewedQuery = { ...query };
       const otherReviewedQuery = { ...query };
 
@@ -423,9 +425,14 @@ router.get('/', async (req, res) => {
         ]
       });
 
+      console.log('🔍 selfReviewedQuery:', JSON.stringify(selfReviewedQuery, null, 2));
+      console.log('🔍 otherReviewedQuery:', JSON.stringify(otherReviewedQuery, null, 2));
+
       const selfReviewed = await ImageReview.find(selfReviewedQuery)
         .populate('userId', 'username nickname')
         .populate('mentorReview.reviewer', 'username nickname');
+
+      console.log('📊 selfReviewed 数量:', selfReviewed.length);
 
       selfReviewed.sort((a, b) => {
         const getLatestAuditTime = (review) => {
@@ -448,11 +455,15 @@ router.get('/', async (req, res) => {
         .populate('mentorReview.reviewer', 'username nickname')
         .sort({ createdAt: -1 });
 
+      console.log('📊 otherReviewed 数量:', otherReviewed.length);
+
       reviews = [...selfReviewed, ...otherReviewed];
+      console.log('📊 合并后总数量:', reviews.length);
 
       const startIndex = (page - 1) * limit;
       const endIndex = startIndex + limit;
       reviews = reviews.slice(startIndex, endIndex);
+      console.log('📊 分页后数量:', reviews.length);
     } else {
       // 未登录用户按原有逻辑
       reviews = await ImageReview.find(query)
@@ -464,17 +475,29 @@ router.get('/', async (req, res) => {
     }
 
     // 为每个审核记录添加设备信息
+    console.log('🔗 开始为审核记录添加设备信息...');
     for (const review of reviews) {
+      console.log(`🔍 处理记录 ${review._id}, 用户: ${review.userId?.username || '未知'}`);
       if (review.userId) {
-        const Device = require('../models/Device');
-        const device = await Device.findOne({ assignedUser: review.userId._id });
-        review._doc.deviceInfo = device ? {
-          accountName: device.accountName,
-          status: device.status,
-          influence: device.influence
-        } : null;
+        try {
+          const Device = require('../models/Device');
+          const device = await Device.findOne({ assignedUser: review.userId._id });
+          console.log(`📱 找到设备: ${device ? device.accountName : '无设备'}`);
+          review._doc.deviceInfo = device ? {
+            accountName: device.accountName,
+            status: device.status,
+            influence: device.influence
+          } : null;
+        } catch (error) {
+          console.error('❌ 设备查询失败:', error);
+          review._doc.deviceInfo = null;
+        }
+      } else {
+        console.log('⚠️ 记录没有userId');
+        review._doc.deviceInfo = null;
       }
     }
+    console.log('✅ 设备信息关联完成');
 
     const total = await ImageReview.countDocuments(query);
 

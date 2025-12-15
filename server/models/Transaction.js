@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
-  submission_id: {
+  imageReview_id: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Submission',
+    ref: 'ImageReview',
     required: true,
     index: true
   },

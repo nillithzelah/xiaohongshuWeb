@@ -67,7 +67,7 @@
             </view>
           </view>
           <view class="card-row time-row">
-            <text class="submit-time">{{item.formattedTime}}</text>
+            <text class="submit-time">{{item.deviceName}} · {{item.formattedTime}}</text>
             <text class="amount" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">+ ¥{{item.snapshotPrice}}</text>
           </view>
 

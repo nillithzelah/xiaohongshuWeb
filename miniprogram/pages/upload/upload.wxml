@@ -70,30 +70,60 @@
       <text class="step-text">上传凭证图片</text>
     </view>
 
-    <view class="upload-area">
-      <!-- 未上传状态 -->
-      <view class="upload-placeholder" bindtap="chooseImage" wx:if="{{!imageUrl}}">
-        <view class="camera-icon">📷</view>
-        <text class="upload-tip">点击拍摄/选择图片</text>
-        <text class="upload-subtip">请确保图片清晰可见</text>
-      </view>
+    <!-- 图片列表 - 使用 displayList -->
+    <view class="image-list">
+      <block wx:for="{{displayList}}" wx:key="{{index}}">
+        <!-- 图片项 -->
+        <view class="image-item" wx:if="{{item.type !== 'add'}}">
+          <image src="{{item}}" mode="aspectFill" class="preview-img"></image>
+          <view class="delete-btn" bindtap="deleteImage" data-index="{{index}}">×</view>
+          <view class="image-index">{{index + 1}}</view>
+        </view>
 
-      <!-- 已上传状态 -->
-      <view class="image-preview" wx:else>
-        <image src="{{imageUrl}}" mode="aspectFit" class="preview-img"></image>
-        <view class="delete-btn" bindtap="deleteImage">×</view>
+        <!-- 添加按钮项 -->
+        <view class="image-item add-btn" bindtap="chooseImage" wx:if="{{item.type === 'add'}}">
+          <view class="add-icon">+</view>
+          <text class="add-text">添加</text>
+        </view>
+      </block>
+    </view>
+
+    <!-- 图片统计 -->
+    <view class="image-stats" wx:if="{{imageUrls.length > 0}}">
+      <text>已选择 {{imageUrls.length}} 张图片</text>
+    </view>
+  </view>
+
+  <!-- 步骤 3: 填写链接 -->
+  <view class="section" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment'}}">
+    <view class="section-title">
+      <text class="step-num">3</text>
+      <text class="step-text">填写小红书笔记链接</text>
+      <text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text>
+    </view>
+
+    <view class="form-group">
+      <input
+        class="url-input"
+        placeholder="{{selectedType.value === 'note' ? '请输入小红书笔记链接（必填）' : '请输入小红书笔记链接（选填）'}}"
+        value="{{noteUrl}}"
+        bindinput="onNoteUrlInput"
+        confirm-type="done"
+      />
+      <view class="input-hint">
+        <text>示例：https://www.xiaohongshu.com/explore/...</text>
       </view>
     </view>
   </view>
 
-  <!-- 步骤 3: 提交按钮 -->
+  <!-- 步骤 4: 提交按钮 -->
   <view class="footer-action">
     <button
-      class="submit-btn {{selectedDevice && selectedType && imageUrl ? 'active' : ''}}"
+      class="submit-btn {{selectedDevice && selectedType && imageUrls.length > 0 && (selectedType.value !== 'note' || (noteUrl && noteUrl.trim())) ? 'active' : ''}}"
       bindtap="submitTask"
       loading="{{uploading}}"
     >
-      立即提交任务
+      立即提交 {{imageUrls.length > 0 ? imageUrls.length + '张图片' : '任务'}}
     </button>
   </view>
 

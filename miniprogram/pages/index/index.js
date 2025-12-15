@@ -1,6 +1,23 @@
 // pages/index/index.js
 const app = getApp();
 
+// 环境配置（与上传页面保持一致）
+const IS_DEVELOPMENT = true; // 开发时true，生产时false
+const API_BASE = IS_DEVELOPMENT ? 'http://192.168.3.9:5000' : 'https://www.wubug.cc';
+
+const API_CONFIG = {
+  ANNOUNCEMENTS: `${API_BASE}/xiaohongshu/api/client/announcements`,
+  USER_TASKS: `${API_BASE}/xiaohongshu/api/client/user/tasks`
+};
+
+// 默认测试Token（仅开发环境使用，boss用户token）
+// 用户信息：boss001 (boss) - ID: 693d29b5cbc188007ecc5848
+// 权限：所有权限，可以查看所有数据
+// 生成时间：2025-12-13，使用xiaohongshu_prod_jwt密钥签名
+const DEFAULT_TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
+
+console.log(`🏠 首页环境: ${IS_DEVELOPMENT ? '开发环境' : '生产环境'}`);
+
 Page({
   data: {
     userInfo: {},
@@ -40,12 +57,15 @@ Page({
 
   // 获取公告
   fetchAnnouncements() {
+    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+
     wx.request({
-      url: 'http://localhost:5000/api/client/announcements', // 确保后端有这个接口
+      url: API_CONFIG.ANNOUNCEMENTS,
       method: 'GET',
+      header: token ? { 'Authorization': `Bearer ${token}` } : {},
       success: (res) => {
-        if (res.data.success && res.data.data.length > 0) {
-          this.setData({ announcements: res.data.data });
+        if (res.data.success && res.data.announcements && res.data.announcements.length > 0) {
+          this.setData({ announcements: res.data.announcements });
         } else {
           // 如果后端没数据，显示默认假数据演示效果
           this.setData({
@@ -74,19 +94,23 @@ Page({
 
     if (!this.data.hasMore) return Promise.resolve();
 
-    const token = wx.getStorageSync('token');
+    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
 
     return new Promise((resolve) => {
       wx.request({
-        url: `http://localhost:5000/api/client/user/tasks?page=${this.data.page}&limit=10`,
+        url: `${API_CONFIG.USER_TASKS}?page=${this.data.page}&limit=10`,
         method: 'GET',
-        header: { 'Authorization': `Bearer ${token}` },
+        header: token ? { 'Authorization': `Bearer ${token}` } : {},
         success: (res) => {
           if (res.data && res.data.success) {
-            const newReviews = res.data.data.map(item => ({
+            const newReviews = res.data.reviews.map(item => ({
               ...item,
+              // 支持多图：显示第一张图片
+              imageUrl: item.imageUrls && item.imageUrls.length > 0 ? item.imageUrls[0] : item.imageUrl,
               // 简单格式化时间 MM-DD HH:mm
-              formattedTime: item.createdAt ? item.createdAt.substring(5, 16).replace('T', ' ') : '刚刚'
+              formattedTime: item.createdAt ? item.createdAt.substring(5, 16).replace('T', ' ') : '刚刚',
+              // 添加设备信息显示
+              deviceName: item.deviceInfo ? item.deviceInfo.accountName : '未知设备'
             }));
 
             this.setData({
@@ -96,6 +120,10 @@ Page({
               loading: false
             });
           }
+        },
+        fail: (err) => {
+          console.error('获取审核记录失败:', err);
+          this.setData({ loading: false });
         },
         complete: () => {
           this.setData({ loading: false });

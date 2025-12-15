@@ -13,6 +13,17 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Multer错误处理中间件
+app.use((error, req, res, next) => {
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      success: false,
+      message: '文件过大，请选择小于10MB的图片'
+    });
+  }
+  next(error);
+});
+
 // 调试中间件
 app.use((req, res, next) => {
   console.log(`📡 ${req.method} ${req.path}`);
@@ -64,6 +75,11 @@ function registerRoutes() {
 
   apiRouter.use('/devices', require('./routes/devices'));
   console.log('✅ /xiaohongshu/api/devices 路由已注册');
+
+  // 测试设备路由是否正确加载
+  const devicesRouter = require('./routes/devices');
+  console.log('📋 设备路由对象:', typeof devicesRouter);
+  console.log('📋 设备路由栈长度:', devicesRouter.stack ? devicesRouter.stack.length : 'N/A');
 
   // 测试路由
   apiRouter.get('/test', (req, res) => {

@@ -64,7 +64,7 @@
 
 #### 2. 模型更新
 - [ ] **ImageReview模型**: 更新状态枚举和字段映射
-- [ ] **Submission模型**: 确保与新架构兼容
+- [x] **Submission模型**: 已合并到ImageReview模型
 - [ ] **User模型**: 更新角色字段
 
 #### 3. API路由更新

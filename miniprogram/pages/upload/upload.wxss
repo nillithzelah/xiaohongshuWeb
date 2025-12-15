@@ -185,14 +185,36 @@ page {
 /* 上传区域 */
 .upload-area {
   width: 100%;
-  height: 300rpx;
+  min-height: 200rpx;
 }
 
-.upload-placeholder {
-  width: 100%;
-  height: 100%;
+/* 新的多图上传样式 */
+.upload-tip {
+  font-size: 28rpx;
+  color: #666;
+  text-align: center;
+  padding: 40rpx 0;
+  margin-bottom: 20rpx;
+}
+
+.image-list {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 20rpx;
+}
+
+.image-item {
+  width: 180rpx;
+  height: 180rpx;
+  border-radius: 12rpx;
+  overflow: hidden;
+  margin-right: 20rpx;
+  margin-bottom: 20rpx;
+  position: relative;
+}
+
+.image-item.add-btn {
   border: 2rpx dashed #ddd;
-  border-radius: 16rpx;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -200,31 +222,15 @@ page {
   background: #fafafa;
 }
 
-.camera-icon {
-  font-size: 60rpx;
-  margin-bottom: 20rpx;
+.add-icon {
+  font-size: 50rpx;
   color: #ccc;
+  margin-bottom: 10rpx;
 }
 
-.upload-tip {
-  font-size: 28rpx;
-  color: #666;
-  margin-bottom: 8rpx;
-}
-
-.upload-subtip {
-  font-size: 22rpx;
+.add-text {
+  font-size: 24rpx;
   color: #999;
-}
-
-/* 预览图片 */
-.image-preview {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  border-radius: 16rpx;
-  overflow: hidden;
-  border: 2rpx solid #eee;
 }
 
 .preview-img {
@@ -234,16 +240,36 @@ page {
 
 .delete-btn {
   position: absolute;
-  top: 10rpx;
-  right: 10rpx;
-  width: 44rpx;
-  height: 44rpx;
+  top: 8rpx;
+  right: 8rpx;
+  width: 36rpx;
+  height: 36rpx;
   background: rgba(0,0,0,0.5);
   color: #fff;
   text-align: center;
-  line-height: 40rpx;
+  line-height: 32rpx;
   border-radius: 50%;
-  font-size: 32rpx;
+  font-size: 28rpx;
+  z-index: 10;
+}
+
+.image-index {
+  position: absolute;
+  bottom: 8rpx;
+  left: 8rpx;
+  background: rgba(0,0,0,0.5);
+  color: #fff;
+  padding: 4rpx 8rpx;
+  border-radius: 12rpx;
+  font-size: 20rpx;
+  z-index: 10;
+}
+
+.image-stats {
+  text-align: center;
+  font-size: 26rpx;
+  color: #666;
+  padding: 10rpx 0;
 }
 
 /* 底部按钮 */
@@ -267,4 +293,37 @@ page {
 .submit-btn.active {
   background: #1890ff; /* 激活时的颜色 */
   box-shadow: 0 6rpx 20rpx rgba(24, 144, 255, 0.3);
+}
+
+/* 表单样式 */
+.form-group {
+  margin-top: 20rpx;
+}
+
+.url-input {
+  width: 100%;
+  height: 80rpx;
+  border: 2rpx solid #e8e8e8;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  font-size: 28rpx;
+  background-color: #fff;
+  box-sizing: border-box;
+}
+
+.url-input:focus {
+  border-color: #1890ff;
+}
+
+.input-hint {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #999;
+  text-align: left;
+}
+
+.required-mark {
+  color: #ff4d4f;
+  margin-left: 8rpx;
+  font-size: 32rpx;
 }

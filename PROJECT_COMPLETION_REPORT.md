@@ -26,7 +26,7 @@
 ### 1. 系统架构设计
 - ✅ 采用模块化单体架构，平衡开发效率和系统复杂度
 - ✅ 前后端分离设计，支持多端访问
-- ✅ 数据库设计：4个核心模型(User, TaskConfig, Submission, Transaction)
+- ✅ 数据库设计：4个核心模型(User, TaskConfig, ImageReview, Transaction)
 - ✅ API设计：RESTful接口，模块化路由(/api/client/*, /api/admin/*)
 
 ### 2. 后端系统开发 (Node.js + Express + MongoDB)
@@ -34,8 +34,8 @@
 #### 数据库模型重构
 - ✅ **User模型**: 用户信息 + 财务账户 + 上级关系
 - ✅ **TaskConfig模型**: 任务配置 + 动态定价 + 佣金设置
-- ✅ **Submission模型**: 任务提交 + 风控字段 + 审核历史
-- ✅ **Transaction模型**: 资金流水 + 状态跟踪
+- ✅ **ImageReview模型**: 任务提交 + 风控字段 + 审核历史 + 多级审核流程
+- ✅ **Transaction模型**: 资金流水 + 状态跟踪 + ImageReview关联
 
 #### 核心业务逻辑
 - ✅ **用户认证**: JWT + 微信授权自动注册
@@ -108,7 +108,7 @@
 const md5 = crypto.createHash('md5').update(imageData).digest('hex');
 
 // 检查是否已存在
-const existing = await Submission.findOne({
+const existing = await ImageReview.findOne({
   image_md5: md5,
   status: { $ne: -1 } // 排除已驳回的
 });
@@ -122,10 +122,10 @@ const taskConfig = await TaskConfig.findOne({
   is_active: true
 });
 
-// 创建提交记录
-const submission = new Submission({
-  snapshot_price: taskConfig.price,      // 锁定本金
-  snapshot_commission: taskConfig.commission, // 锁定佣金
+// 创建审核记录
+const review = new ImageReview({
+  snapshotPrice: taskConfig.price,      // 锁定本金
+  snapshotCommission1: taskConfig.commission, // 锁定佣金
   // ... 其他字段
 });
 ```
@@ -133,11 +133,11 @@ const submission = new Submission({
 #### 分销佣金计算
 ```javascript
 // 老板确认时自动生成佣金记录
-if (user.parent_id && submission.snapshot_commission > 0) {
+if (user.parent_id && review.snapshotCommission1 > 0) {
   const commissionTransaction = new Transaction({
-    submission_id: submission._id,
+    imageReview_id: review._id,
     user_id: user.parent_id,
-    amount: submission.snapshot_commission,
+    amount: review.snapshotCommission1,
     type: 'referral_bonus'
   });
   await commissionTransaction.save();

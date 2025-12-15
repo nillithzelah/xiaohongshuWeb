@@ -1,4 +1,21 @@
 // pages/device-list/device-list.js
+
+// 环境配置（与上传页面保持一致）
+const IS_DEVELOPMENT = true; // 开发时true，生产时false
+const API_BASE = IS_DEVELOPMENT ? 'http://192.168.3.9:5000' : 'https://www.wubug.cc';
+
+const API_CONFIG = {
+  DEVICE_MY_LIST: `${API_BASE}/xiaohongshu/api/client/device/my-list`
+};
+
+// 默认测试Token（与上传页面保持一致，boss用户token）
+// 用户信息：boss001 - ID: 693d29b5cbc188007ecc5848
+// 权限：所有权限，可以查看所有数据
+// 生成时间：2025-12-13，使用xiaohongshu_prod_jwt密钥签名
+const DEFAULT_TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
+
+console.log(`📱 设备列表页环境: ${IS_DEVELOPMENT ? '开发环境' : '生产环境'}`);
+
 Page({
 
   /**
@@ -23,10 +40,10 @@ Page({
     // 设置加载状态
     this.setData({ loading: true });
 
-    const token = wx.getStorageSync('token');
+    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
 
     wx.request({
-      url: 'http://localhost:5000/api/client/device/my-list',
+      url: API_CONFIG.DEVICE_MY_LIST,
       method: 'GET',
       header: token ? { 'Authorization': `Bearer ${token}` } : {},
       success: (res) => {
@@ -44,6 +61,8 @@ Page({
       complete: () => {
         // 无论成功失败，都关闭骨架屏
         this.setData({ loading: false });
+        // 停止下拉刷新
+        wx.stopPullDownRefresh();
       }
     });
   },

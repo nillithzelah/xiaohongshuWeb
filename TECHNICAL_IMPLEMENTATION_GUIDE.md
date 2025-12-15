@@ -256,13 +256,13 @@ const calculateSampleMD5 = (buffer) => {
 // 去重检查逻辑 (优化版本)
 const checkDuplicateImage = async (imageMd5, fileSize) => {
   // 组合MD5和文件大小进行更精确的去重
-  const existingSubmission = await Submission.findOne({
+  const existingReview = await ImageReview.findOne({
     image_md5: imageMd5,
     file_size: fileSize, // 增加文件大小验证
-    status: { $ne: -1 }
+    status: { $ne: 'rejected' }
   });
 
-  return existingSubmission;
+  return existingReview;
 };
 ```
 
@@ -318,11 +318,11 @@ const getTaskConfigWithSnapshot = async (taskType) => {
 // 任务提交时创建快照
 const snapshot = await getTaskConfigWithSnapshot(taskType);
 
-const submission = new Submission({
-  user_id: req.user._id,
-  task_type: taskType,
-  snapshot_price: snapshot.price,      // 锁定本金
-  snapshot_commission: snapshot.commission, // 锁定佣金
+const review = new ImageReview({
+  userId: req.user._id,
+  imageType: taskType,
+  snapshotPrice: snapshot.price,      // 锁定本金
+  snapshotCommission1: snapshot.commission, // 锁定佣金
   // ... 其他字段
 });
 ```
@@ -342,21 +342,21 @@ const calculateCommission = async (submission) => {
 
   // 1. 为任务提交者创建本金奖励
   const userReward = new Transaction({
-    submission_id: submission._id,
-    user_id: submission.user_id,
+    imageReview_id: review._id,
+    user_id: review.userId,
     amount: submission.snapshot_price,
     type: 'task_reward'
   });
   transactions.push(userReward);
 
   // 2. 检查是否有上级用户
-  const user = await User.findById(submission.user_id);
-  if (user && user.parent_id && submission.snapshot_commission > 0) {
+  const user = await User.findById(review.userId);
+  if (user && user.parent_id && review.snapshotCommission1 > 0) {
     // 为上级创建佣金奖励
     const parentCommission = new Transaction({
-      submission_id: submission._id,
+      imageReview_id: review._id,
       user_id: user.parent_id,
-      amount: submission.snapshot_commission,
+      amount: review.snapshotCommission1,
       type: 'referral_bonus'
     });
     transactions.push(parentCommission);
@@ -376,15 +376,16 @@ router.post('/audit/boss', authenticateToken, async (req, res) => {
 
   try {
     for (const id of ids) {
-      const submission = await Submission.findById(id).session(session); // 绑定会话
-      if (submission && submission.status === 1) {
-        submission.status = 2;
-        submission.audit_history.push({
-          operator_id: req.user._id,
-          action: 'boss_confirm',
-          comment: '老板确认'
+      const review = await ImageReview.findById(id).session(session); // 绑定会话
+      if (review && review.status === 'mentor_approved') {
+        review.status = 'manager_approved';
+        review.auditHistory.push({
+          operator: req.user._id,
+          operatorName: req.user.username,
+          action: 'manager_approve',
+          comment: '经理确认'
         });
-        await submission.save({ session }); // 绑定会话
+        await review.save({ session }); // 绑定会话
 
         // 计算并保存流水
         const transactions = await calculateCommission(submission);
@@ -454,7 +455,7 @@ const STATUS = {
 ```javascript
 // 带教老师审核
 const mentorReview = async (submissionId, action, operatorId) => {
-  const submission = await Submission.findById(submissionId);
+  const review = await ImageReview.findById(submissionId);
 
   if (submission.status !== STATUS.PENDING) {
     throw new Error('任务状态不正确');
@@ -476,7 +477,7 @@ const managerApprove = async (submissionIds, operatorId) => {
   const results = [];
 
   for (const id of submissionIds) {
-    const submission = await Submission.findById(id);
+    const review = await ImageReview.findById(id);
 
     if (submission.status === STATUS.MENTOR_APPROVED) {
       submission.status = STATUS.MANAGER_APPROVED;
@@ -506,7 +507,7 @@ const updateStatusAtomically = async (submissionId, newStatus, operatorId) => {
   try {
     session.startTransaction();
 
-    const submission = await Submission.findById(submissionId).session(session);
+    const review = await ImageReview.findById(submissionId).session(session);
 
     if (submission.status !== expectedStatus) {
       throw new Error('状态已被其他操作修改');
@@ -549,19 +550,19 @@ const updateStatusAtomically = async (submissionId, newStatus, operatorId) => {
 
 ### 5.1 索引优化策略
 
-**文件**: `server/models/Submission.js`
+**文件**: `server/models/ImageReview.js`
 
 ```javascript
-const submissionSchema = new mongoose.Schema({
+const imageReviewSchema = new mongoose.Schema({
   // 复合索引：用户+时间查询
-  user_id: { type: mongoose.Schema.Types.ObjectId, index: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, index: true },
   createdAt: { type: Date, index: true },
 
   // 状态索引：审核队列查询
-  status: { type: Number, index: true },
+  status: { type: String, index: true },
 
   // 任务类型索引：统计查询
-  task_type: { type: String, index: true },
+  imageType: { type: String, index: true },
 
   // MD5唯一索引：去重查询
   image_md5: { type: String, index: true }
@@ -569,8 +570,8 @@ const submissionSchema = new mongoose.Schema({
 
 // 复合索引优化
 submissionSchema.index({ user_id: 1, createdAt: -1 });
-submissionSchema.index({ status: 1, createdAt: -1 });
-submissionSchema.index({ task_type: 1, status: 1 });
+imageReviewSchema.index({ status: 1, createdAt: -1 });
+imageReviewSchema.index({ imageType: 1, status: 1 });
 ```
 
 ### 5.2 查询优化
@@ -578,22 +579,22 @@ submissionSchema.index({ task_type: 1, status: 1 });
 **分页查询优化**:
 ```javascript
 // 高效的分页查询
-const getSubmissionsWithPagination = async (filter, page, limit) => {
+const getReviewsWithPagination = async (filter, page, limit) => {
   const skip = (page - 1) * limit;
 
-  const [submissions, total] = await Promise.all([
-    Submission.find(filter)
-      .populate('user_id', 'username')
+  const [reviews, total] = await Promise.all([
+    ImageReview.find(filter)
+      .populate('userId', 'username')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean(), // 使用lean()提高性能
 
-    Submission.countDocuments(filter)
+    ImageReview.countDocuments(filter)
   ]);
 
   return {
-    submissions,
+    reviews,
     pagination: {
       page,
       limit,
@@ -609,9 +610,9 @@ const getSubmissionsWithPagination = async (filter, page, limit) => {
 **预加载策略**:
 ```javascript
 // 选择性populate，减少查询开销
-const submission = await Submission.findById(id)
-  .populate('user_id', 'username avatar') // 只加载必要字段
-  .populate('cs_review.reviewer', 'username'); // 关联审核人信息
+const review = await ImageReview.findById(id)
+  .populate('userId', 'username avatar') // 只加载必要字段
+  .populate('mentorReview.reviewer', 'username'); // 关联审核人信息
 ```
 
 ---
@@ -929,15 +930,15 @@ server {
 const users = await User.find().lean();
 
 // 选择性字段查询
-const submissions = await Submission.find()
-  .select('user_id task_type status createdAt')
+const reviews = await ImageReview.find()
+  .select('userId imageType status createdAt')
   .lean();
 ```
 
 **索引策略**:
 ```javascript
 // 复合索引
-submissionSchema.index({ status: 1, createdAt: -1 });
+imageReviewSchema.index({ status: 1, createdAt: -1 });
 transactionSchema.index({ user_id: 1, status: 1 });
 ```
 
@@ -1066,10 +1067,10 @@ const taskProcessors = {
 };
 
 // 动态调用处理器
-const processTask = async (submission) => {
-  const processor = taskProcessors[submission.task_type];
+const processTask = async (review) => {
+  const processor = taskProcessors[review.imageType];
   if (processor) {
-    return await processor.validate(submission);
+    return await processor.validate(review);
   }
   throw new Error('不支持的任务类型');
 };

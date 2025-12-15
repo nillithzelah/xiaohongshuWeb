@@ -40,18 +40,19 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
     }
 
     const devices = await Device.find(query)
-      .populate({
-        path: 'assignedUser',
-        select: 'username nickname',
-        populate: {
-          path: 'hr_id',
-          select: 'username nickname'
-        }
-      })
+      .populate('assignedUser', 'username nickname mentor_id')
       .populate('createdBy', 'username nickname')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
+  
+    // 手动populate mentor信息
+    for (const device of devices) {
+      if (device.assignedUser && device.assignedUser.mentor_id) {
+        const mentor = await User.findById(device.assignedUser.mentor_id).select('username nickname');
+        device.assignedUser.mentor_id = mentor;
+      }
+    }
 
     const total = await Device.countDocuments(query);
 
@@ -75,7 +76,14 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
 router.get('/:id', authenticateToken, requireRole(deviceRoles), async (req, res) => {
   try {
     const device = await Device.findById(req.params.id)
-      .populate('assignedUser', 'username nickname')
+      .populate({
+        path: 'assignedUser',
+        select: 'username nickname mentor_id',
+        populate: {
+          path: 'mentor_id',
+          select: 'username nickname'
+        }
+      })
       .populate('createdBy', 'username nickname');
 
     if (!device) {
@@ -133,9 +141,9 @@ router.post('/', authenticateToken, requireRole(deviceRoles), async (req, res) =
     const populatedDevice = await Device.findById(device._id)
       .populate({
         path: 'assignedUser',
-        select: 'username nickname',
+        select: 'username nickname mentor_id',
         populate: {
-          path: 'hr_id',
+          path: 'mentor_id',
           select: 'username nickname'
         }
       })
@@ -218,9 +226,9 @@ router.put('/:id', authenticateToken, requireRole(deviceRoles), async (req, res)
     const updatedDevice = await Device.findById(req.params.id)
       .populate({
         path: 'assignedUser',
-        select: 'username nickname',
+        select: 'username nickname mentor_id',
         populate: {
-          path: 'hr_id',
+          path: 'mentor_id',
           select: 'username nickname'
         }
       })
@@ -330,19 +338,33 @@ router.put('/:id/add-points', authenticateToken, requireRole(['manager', 'boss']
 // 获取用户列表（用于分配设备）
 router.get('/users/list', authenticateToken, requireRole(deviceRoles), async (req, res) => {
   try {
-    const users = await User.find({
-      role: 'user',
+    console.log('🔍 查询兼职用户列表...');
+    console.log('📋 当前用户信息:', req.user);
+
+    const query = {
+      role: 'part_time', // 只查询普通兼职用户，带教老师不分配设备
       is_deleted: { $ne: true }
-    })
-    .select('username nickname phone wechat')
+    };
+
+    console.log('🔍 查询条件:', query);
+
+    const users = await User.find(query)
+    .select('username nickname phone wechat role') // 添加role字段用于前端区分
     .sort({ createdAt: -1 });
+
+    console.log(`📊 查询结果: 找到 ${users.length} 个兼职用户`);
+    console.log('👥 用户详情:', users.map(u => ({ username: u.username, role: u.role, is_deleted: u.is_deleted })));
 
     res.json({
       success: true,
       data: users
     });
   } catch (error) {
-    console.error('获取用户列表失败:', error);
+    console.error('❌ 获取用户列表失败:', error);
+    console.error('❌ 错误详情:', {
+      message: error.message,
+      stack: error.stack
+    });
     res.status(500).json({ success: false, message: '获取用户列表失败' });
   }
 });

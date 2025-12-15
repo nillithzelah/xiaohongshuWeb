@@ -109,8 +109,9 @@ async function initTestData() {
       const imageType = ['customer_resource', 'note', 'comment'][i % 3];
       reviews.push({
         userId: createdUsers[i]._id,
-        imageUrl: testImages[i],
+        imageUrls: [testImages[i]], // 多图格式：单图也存储为数组
         imageType: imageType,
+        imageMd5s: [`test_md5_${i}_${Date.now()}`], // 多图MD5格式
         snapshotPrice: getPriceByType(imageType),
         snapshotCommission1: getCommission1ByType(imageType),
         snapshotCommission2: getCommission2ByType(imageType),
@@ -138,8 +139,9 @@ async function initTestData() {
       const imageType = ['customer_resource', 'note', 'comment'][i % 3];
       reviews.push({
         userId: createdUsers[i % 5]._id,
-        imageUrl: testImages[i],
+        imageUrls: [testImages[i]], // 多图格式
         imageType: imageType,
+        imageMd5s: [`test_md5_${i}_${Date.now()}`], // 多图MD5格式
         snapshotPrice: getPriceByType(imageType),
         snapshotCommission1: getCommission1ByType(imageType),
         snapshotCommission2: getCommission2ByType(imageType),
@@ -181,8 +183,9 @@ async function initTestData() {
       const imageType = ['customer_resource', 'note', 'comment'][i % 3];
       reviews.push({
         userId: createdUsers[i % 5]._id,
-        imageUrl: testImages[i],
+        imageUrls: [testImages[i]], // 多图格式
         imageType: imageType,
+        imageMd5s: [`test_md5_${i}_${Date.now()}`], // 多图MD5格式
         snapshotPrice: getPriceByType(imageType),
         snapshotCommission1: getCommission1ByType(imageType),
         snapshotCommission2: getCommission2ByType(imageType),
@@ -227,8 +230,9 @@ async function initTestData() {
 
       reviews.push({
         userId: createdUsers[i % 5]._id,
-        imageUrl: testImages[i % 10],
+        imageUrls: [testImages[i % 10]], // 多图格式
         imageType: imageType,
+        imageMd5s: [`test_md5_${i}_${Date.now()}`], // 多图MD5格式
         snapshotPrice: getPriceByType(imageType),
         snapshotCommission1: getCommission1ByType(imageType),
         snapshotCommission2: getCommission2ByType(imageType),

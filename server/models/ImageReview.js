@@ -6,14 +6,27 @@ const imageReviewSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  imageUrl: {
-    type: String,
-    required: true
+  // 支持多图：将单图字段改为数组
+  imageUrls: {
+    type: [String],
+    required: true,
+    validate: [arrayLimit, '最多只能上传9张图片']
   },
   imageType: {
     type: String,
     enum: ['customer_resource', 'note', 'comment'],
     required: true
+  },
+  // 支持多图MD5：将单图MD5改为数组
+  imageMd5s: {
+    type: [String],
+    required: true,
+    validate: {
+      validator: function(v) {
+        return v.length === this.imageUrls.length;
+      },
+      message: '图片和MD5数量必须匹配'
+    }
   },
   snapshotPrice: {
     type: Number,
@@ -35,6 +48,16 @@ const imageReviewSchema = new mongoose.Schema({
   snapshotCommission2: {
     type: Number,
     default: 0
+  },
+  // 小红书笔记链接（笔记必填，评论选填）
+  noteUrl: {
+    type: String,
+    required: false,
+    default: null,
+    set: function(v) {
+      // 确保即使是null值也会被保存
+      return v === undefined ? null : v;
+    }
   },
   status: {
     type: String,
@@ -95,8 +118,19 @@ const imageReviewSchema = new mongoose.Schema({
   }
 });
 
+// 自定义验证器：限制数组最大长度为9
+function arrayLimit(val) {
+  return val.length <= 9 && val.length > 0;
+}
+
+// 确保noteUrl字段总是被包含在输出中
+// imageReviewSchema.set('toJSON', { getters: true, virtuals: false });
+// imageReviewSchema.set('toObject', { getters: true, virtuals: false });
+
 // 索引
 imageReviewSchema.index({ userId: 1, createdAt: -1 });
 imageReviewSchema.index({ status: 1 });
+imageReviewSchema.index({ 'imageUrls': 1 }); // 新增图片数组索引
+imageReviewSchema.index({ 'imageMd5s': 1 }); // 新增MD5数组索引
 
 module.exports = mongoose.model('ImageReview', imageReviewSchema);
