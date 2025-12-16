@@ -8,7 +8,8 @@ const API_BASE = IS_DEVELOPMENT ? 'http://192.168.3.9:5000' : 'https://www.wubug
 const API_CONFIG = {
   DEVICE_MY_LIST: `${API_BASE}/xiaohongshu/api/client/device/my-list`,
   UPLOAD_IMAGE: `${API_BASE}/xiaohongshu/api/upload/image`,
-  TASKS_BATCH_SUBMIT: `${API_BASE}/xiaohongshu/api/client/tasks/batch-submit`
+  TASKS_BATCH_SUBMIT: `${API_BASE}/xiaohongshu/api/client/tasks/batch-submit`,
+  USERS_LIST: `${API_BASE}/xiaohongshu/api/users`
 };
 
 // 默认测试Token（仅开发环境使用，boss用户token）
@@ -46,13 +47,19 @@ Page({
     uploading: false, // 上传状态
     uploadProgress: 0, // 上传进度 (0-100)
     uploadStatus: '', // 上传状态文本
-    processingMd5: false // MD5计算状态
+    processingMd5: false, // MD5计算状态
+    // 测试模式相关
+    testMode: false, // 是否启用测试模式
+    users: [], // 用户列表（测试模式下使用）
+    selectedUser: null // 选中的测试用户
   },
 
   onLoad() {
     this.loadUserDevices();
     // 初始化显示列表
     this.updateDisplayList();
+    // 加载用户列表（用于测试模式）
+    this.loadUsers();
   },
 
   // 加载用户设备列表
@@ -112,11 +119,102 @@ Page({
     })
   },
 
+  // 加载用户列表（用于测试模式）
+  loadUsers() {
+    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+
+    wx.request({
+      url: API_CONFIG.USERS_LIST,
+      method: 'GET',
+      header: token ? { 'Authorization': `Bearer ${token}` } : {},
+      success: (res) => {
+        if (res.data && res.data.success && res.data.users && res.data.users.length > 0) {
+          this.setData({
+            users: res.data.users,
+            selectedUser: res.data.users[0] // 默认选择第一个用户
+          });
+        } else {
+          // 使用模拟用户数据
+          this.loadMockUsers();
+        }
+      },
+      fail: () => {
+        // 网络失败时使用模拟数据
+        this.loadMockUsers();
+      }
+    });
+  },
+
+  // 加载模拟用户数据
+  loadMockUsers() {
+    const mockUsers = [
+      {
+        _id: '693d29b5cbc188007ecc5848',
+        username: 'boss001',
+        nickname: '管理员',
+        role: 'boss',
+        points: 1000
+      },
+      {
+        _id: '693d29b5cbc188007ecc5849',
+        username: 'mentor001',
+        nickname: '带教老师',
+        role: 'mentor',
+        points: 500
+      },
+      {
+        _id: '693d29b5cbc188007ecc5850',
+        username: 'parttime001',
+        nickname: '兼职用户',
+        role: 'part_time',
+        points: 100
+      }
+    ];
+
+    this.setData({
+      users: mockUsers,
+      selectedUser: mockUsers[0] // 默认选择第一个用户
+    });
+  },
+
   // 选择设备
   selectDevice(e) {
     const device = e.currentTarget.dataset.device;
     this.setData({
       selectedDevice: device
+    });
+  },
+
+  // 切换测试模式
+  toggleTestMode(e) {
+    const testMode = e.detail.value;
+    this.setData({
+      testMode: testMode
+    });
+
+    if (testMode) {
+      wx.showToast({
+        title: '已启用测试模式',
+        icon: 'success'
+      });
+    } else {
+      wx.showToast({
+        title: '已关闭测试模式',
+        icon: 'none'
+      });
+    }
+  },
+
+  // 选择测试用户
+  selectUser(e) {
+    const user = e.currentTarget.dataset.user;
+    this.setData({
+      selectedUser: user
+    });
+
+    wx.showToast({
+      title: `已选择用户: ${user.username}`,
+      icon: 'success'
     });
   },
 
@@ -641,7 +739,16 @@ Page({
       const urls = uploadResults.map(result => result.url);
       const md5s = uploadResults.map(result => result.md5);
 
-      const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+      // 获取token：测试模式下使用选中用户的token，否则使用默认逻辑
+      let token;
+      if (this.data.testMode && this.data.selectedUser) {
+        // 测试模式：生成选中用户的token
+        // 注意：这里需要后端支持生成任意用户的token，实际实现可能需要调整
+        token = DEFAULT_TEST_TOKEN; // 暂时使用默认token，实际应该根据selectedUser生成对应token
+        console.log('🧪 测试模式：使用用户', this.data.selectedUser.username, '的身份提交任务');
+      } else {
+        token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+      }
 
       // 准备提交数据
       const submitData = {

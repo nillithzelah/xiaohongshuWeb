@@ -35,6 +35,46 @@
     </view>
   </view>
 
+  <!-- 测试模式：选择用户（仅在测试模式下显示） -->
+  <view class="section" wx:if="{{testMode}}">
+    <view class="section-title">
+      <text class="step-num">0.5</text>
+      <text class="step-text">测试模式 - 选择用户</text>
+      <switch class="test-mode-switch" checked="{{testMode}}" bindchange="toggleTestMode"></switch>
+    </view>
+
+    <view class="user-selector">
+      <view class="current-user">
+        <text class="user-label">当前用户：</text>
+        <text class="user-name">{{selectedUser.username || '未选择'}} ({{selectedUser.role || '无角色'}})</text>
+      </view>
+
+      <view class="user-list" wx:if="{{users.length > 0}}">
+        <view
+          wx:for="{{users}}"
+          wx:key="_id"
+          class="user-card {{selectedUser._id === item._id ? 'selected' : ''}}"
+          bindtap="selectUser"
+          data-user="{{item}}"
+        >
+          <view class="user-info">
+            <text class="user-name">{{item.username}}</text>
+            <text class="user-nickname" wx:if="{{item.nickname}}">({{item.nickname}})</text>
+            <text class="user-role">{{item.role}}</text>
+          </view>
+          <view class="user-meta">
+            <text class="user-points">积分: {{item.points || 0}}</text>
+          </view>
+          <view class="check-mark" wx:if="{{selectedUser._id === item._id}}">✔</view>
+        </view>
+      </view>
+
+      <view wx:else class="no-users">
+        <text>加载用户列表中...</text>
+      </view>
+    </view>
+  </view>
+
   <!-- 步骤 1: 选择类型 -->
   <view class="section">
     <view class="section-title">
