@@ -40,7 +40,13 @@ Page({
     noteUrl: '', // 小红书笔记链接
     noteAuthor: '', // 笔记作者昵称
     noteTitle: '', // 笔记标题
-    uploading: false
+    commentContent: '', // 评论内容（评论类型专用）
+    customerPhone: '', // 客户电话（客资类型专用）
+    customerWechat: '', // 客户微信（客资类型专用）
+    uploading: false, // 上传状态
+    uploadProgress: 0, // 上传进度 (0-100)
+    uploadStatus: '', // 上传状态文本
+    processingMd5: false // MD5计算状态
   },
 
   onLoad() {
@@ -121,7 +127,10 @@ Page({
       selectedType: type,
       noteUrl: '', // 切换类型时清空链接
       noteAuthor: '', // 清空昵称
-      noteTitle: '' // 清空标题
+      noteTitle: '', // 清空标题
+      commentContent: '', // 清空评论内容
+      customerPhone: '', // 清空客户电话
+      customerWechat: '' // 清空客户微信
     });
   },
 
@@ -143,6 +152,27 @@ Page({
   onNoteTitleInput(e) {
     this.setData({
       noteTitle: e.detail.value
+    });
+  },
+
+  // 输入评论内容
+  onCommentContentInput(e) {
+    this.setData({
+      commentContent: e.detail.value
+    });
+  },
+
+  // 输入客户电话
+  onCustomerPhoneInput(e) {
+    this.setData({
+      customerPhone: e.detail.value
+    });
+  },
+
+  // 输入客户微信
+  onCustomerWechatInput(e) {
+    this.setData({
+      customerWechat: e.detail.value
     });
   },
 
@@ -253,16 +283,19 @@ Page({
             wx.getFileSystemManager().readFile({
               filePath: filePath,
               success: (fileRes) => {
-                // 使用小程序的crypto API计算MD5
-                const md5 = this.calculateMD5(fileRes.data);
-                this.setData({
-                  imageUrl: data.data.url,
-                  imageMd5: md5
+                // 使用异步MD5计算，避免UI卡顿
+                this.calculateMD5(fileRes.data).then(md5 => {
+                  this.setData({
+                    imageUrl: data.data.url,
+                    imageMd5: md5
+                  });
+                  wx.showToast({ title: '上传成功', icon: 'success' });
+                }).catch(() => {
+                  wx.showToast({ title: '计算文件MD5失败', icon: 'none' });
                 });
-                wx.showToast({ title: '上传成功', icon: 'success' });
               },
               fail: () => {
-                wx.showToast({ title: '计算文件MD5失败', icon: 'none' });
+                wx.showToast({ title: '读取文件失败', icon: 'none' });
               }
             });
           } else {
@@ -282,37 +315,57 @@ Page({
     });
   },
 
-  // 计算MD5的辅助函数（改进版哈希算法）
+  // 计算MD5的辅助函数（优化版：异步分块处理，避免UI卡顿）
   calculateMD5(data) {
-    // 检查数据有效性
-    if (!data) {
-      console.error('MD5计算失败: 数据为空', data);
-      return 'error_null_data_' + Date.now();
-    }
-
-    let dataArray;
-    let dataLength;
-
-    try {
-      // 处理ArrayBuffer（小程序文件数据）
-      if (data.byteLength !== undefined) {
-        // ArrayBuffer类型检测
-        dataArray = new Uint8Array(data);
-        dataLength = dataArray.length;
-      } else if (data.length !== undefined) {
-        // 普通数组或类似数组的对象
-        dataArray = data;
-        dataLength = data.length;
-      } else {
-        console.error('MD5计算失败: 不支持的数据类型', typeof data, data.constructor?.name, data);
-        return 'error_unsupported_type_' + Date.now();
+    return new Promise((resolve) => {
+      // 检查数据有效性
+      if (!data) {
+        console.error('MD5计算失败: 数据为空', data);
+        resolve('error_null_data_' + Date.now());
+        return;
       }
 
-      if (dataLength === 0) {
-        console.error('MD5计算失败: 数据长度为0');
-        return 'error_empty_data_' + Date.now();
-      }
+      let dataArray;
+      let dataLength;
 
+      try {
+        // 处理ArrayBuffer（小程序文件数据）
+        if (data.byteLength !== undefined) {
+          // ArrayBuffer类型检测
+          dataArray = new Uint8Array(data);
+          dataLength = dataArray.length;
+        } else if (data.length !== undefined) {
+          // 普通数组或类似数组的对象
+          dataArray = data;
+          dataLength = data.length;
+        } else {
+          console.error('MD5计算失败: 不支持的数据类型', typeof data, data.constructor?.name, data);
+          resolve('error_unsupported_type_' + Date.now());
+          return;
+        }
+
+        if (dataLength === 0) {
+          console.error('MD5计算失败: 数据长度为0');
+          resolve('error_empty_data_' + Date.now());
+          return;
+        }
+
+        // 使用分块异步处理，避免长时间占用主线程
+        this.calculateMD5Async(dataArray, dataLength).then(resolve).catch((error) => {
+          console.error('异步MD5计算失败:', error);
+          resolve('error_async_calculation_failed_' + Date.now());
+        });
+
+      } catch (error) {
+        console.error('MD5计算过程中出错:', error, data);
+        resolve('error_calculation_failed_' + Date.now());
+      }
+    });
+  },
+
+  // 异步MD5计算（分块处理，避免UI卡顿）
+  calculateMD5Async(dataArray, dataLength) {
+    return new Promise((resolve) => {
       // 使用改进的哈希算法，包含文件大小和内容特征
       let hash = 0;
 
@@ -320,30 +373,42 @@ Page({
       hash = ((hash << 5) - hash) + dataLength;
       hash = hash & hash;
 
-      // 处理文件内容（采样策略：头、中、尾）
-      const sampleSize = Math.min(1024, dataLength); // 最多采样1KB
-      const step = Math.max(1, Math.floor(dataLength / sampleSize));
+      // 分块处理文件内容，避免一次性处理大量数据
+      const chunkSize = 1024; // 每块1KB
+      const totalChunks = Math.min(10, Math.ceil(dataLength / chunkSize)); // 最多处理10块
+      let processedChunks = 0;
 
-      for (let i = 0; i < sampleSize; i++) {
-        const index = (i * step) % dataLength;
-        const char = dataArray[index];
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // 转换为32位整数
-      }
+      const processChunk = (chunkIndex) => {
+        const start = chunkIndex * chunkSize;
+        const end = Math.min(start + chunkSize, dataLength);
+        const chunk = dataArray.slice(start, end);
 
-      // 注意：不添加时间戳，确保相同文件产生相同MD5
-      // 如果需要避免哈希碰撞，可以在文件名中添加时间戳，而不是MD5中
+        // 处理当前块
+        for (let i = 0; i < chunk.length; i++) {
+          const char = chunk[i];
+          hash = ((hash << 5) - hash) + char;
+          hash = hash & hash; // 转换为32位整数
+        }
 
-      // 转换为16进制字符串，确保32位
-      const hexHash = Math.abs(hash).toString(16).padStart(8, '0');
+        processedChunks++;
 
-      // 添加文件大小后缀确保唯一性
-      return hexHash + '_' + dataLength.toString(16).padStart(6, '0');
+        // 如果还有更多块，继续处理
+        if (processedChunks < totalChunks) {
+          // 使用setTimeout让出主线程，避免UI卡顿
+          setTimeout(() => processChunk(processedChunks), 0);
+        } else {
+          // 所有块处理完成
+          // 转换为16进制字符串，确保32位
+          const hexHash = Math.abs(hash).toString(16).padStart(8, '0');
+          // 添加文件大小后缀确保唯一性
+          const finalMd5 = hexHash + '_' + dataLength.toString(16).padStart(6, '0');
+          resolve(finalMd5);
+        }
+      };
 
-    } catch (error) {
-      console.error('MD5计算过程中出错:', error, data);
-      return 'error_calculation_failed_' + Date.now();
-    }
+      // 开始处理第一块
+      processChunk(0);
+    });
   },
 
   // 删除单张图片
@@ -364,14 +429,21 @@ Page({
     this.updateDisplayList();
   },
 
-  // 上传所有图片到服务器（并行上传）
+  // 上传所有图片到服务器（并行上传，带进度反馈）
   uploadAllImages() {
     if (this.data.imageUrls.length === 0) {
       wx.showToast({ title: '请先选择图片', icon: 'none' });
       return Promise.resolve([]);
     }
 
-    this.setData({ uploading: true });
+    this.setData({
+      uploading: true,
+      uploadProgress: 0,
+      uploadStatus: '准备上传...'
+    });
+
+    const totalImages = this.data.imageUrls.length;
+    let completedUploads = 0;
     const uploadPromises = [];
 
     // 使用环境对应的Token
@@ -382,6 +454,10 @@ Page({
       const filePath = this.data.imageUrls[i];
 
       uploadPromises.push(new Promise((resolve) => {
+        this.setData({
+          uploadStatus: `正在上传第 ${i + 1}/${totalImages} 张图片...`
+        });
+
         wx.uploadFile({
           url: API_CONFIG.UPLOAD_IMAGE, // 使用本地开发地址
           filePath: filePath,
@@ -393,36 +469,62 @@ Page({
             try {
               const data = JSON.parse(res.data);
               if (data.success) {
-                // 计算MD5
+                // 更新进度
+                completedUploads++;
+                const progress = Math.round((completedUploads / totalImages) * 50); // 上传占50%进度
+                this.setData({
+                  uploadProgress: progress,
+                  uploadStatus: `上传完成 ${completedUploads}/${totalImages}，正在处理...`
+                });
+
+                // 异步计算MD5，避免UI卡顿
+                this.setData({ processingMd5: true });
                 wx.getFileSystemManager().readFile({
                   filePath: filePath,
                   success: (fileRes) => {
-                    const md5 = this.calculateMD5(fileRes.data);
-                    resolve({
-                      url: data.data.url,
-                      md5: md5,
-                      index: i
+                    this.calculateMD5(fileRes.data).then(md5 => {
+                      // MD5计算完成，更新最终进度
+                      const finalProgress = Math.round(((completedUploads) / totalImages) * 100);
+                      this.setData({
+                        uploadProgress: finalProgress,
+                        processingMd5: false
+                      });
+
+                      resolve({
+                        url: data.data.url,
+                        md5: md5,
+                        index: i
+                      });
+                    }).catch(() => {
+                      resolve({
+                        url: data.data.url,
+                        md5: `error_${i}`,
+                        index: i
+                      });
                     });
                   },
                   fail: () => {
                     resolve({
                       url: data.data.url,
-                      md5: `error_${i}`,
+                      md5: `read_error_${i}`,
                       index: i
                     });
                   }
                 });
               } else {
                 console.error(`第${i+1}张图片上传失败:`, data.message);
+                completedUploads++;
                 resolve(null);
               }
             } catch (e) {
               console.error(`解析第${i+1}张图片响应失败:`, e);
+              completedUploads++;
               resolve(null);
             }
           },
           fail: (err) => {
             console.error(`上传第${i+1}张图片失败:`, err);
+            completedUploads++;
             resolve(null);
           }
         });
@@ -433,6 +535,11 @@ Page({
     return Promise.all(uploadPromises).then(results => {
       // 过滤掉失败的上传
       const successfulUploads = results.filter(result => result !== null);
+
+      this.setData({
+        uploadProgress: 100,
+        uploadStatus: '上传完成'
+      });
 
       if (successfulUploads.length === 0) {
         wx.showToast({ title: '所有图片上传失败', icon: 'none' });
@@ -445,15 +552,31 @@ Page({
           title: `上传完成 ${successfulUploads.length}/${results.length} 张图片`,
           icon: 'none'
         });
+      } else {
+        wx.showToast({
+          title: `成功上传 ${successfulUploads.length} 张图片`,
+          icon: 'success',
+          duration: 1500
+        });
       }
 
       return successfulUploads;
+    }).finally(() => {
+      // 延迟清除状态，让用户看到完成状态
+      setTimeout(() => {
+        this.setData({
+          uploading: false,
+          uploadProgress: 0,
+          uploadStatus: '',
+          processingMd5: false
+        });
+      }, 2000);
     });
   },
 
   // 提交任务（使用批量提交接口）
   submitTask() {
-    const { selectedDevice, selectedType, imageUrls, noteUrl, noteAuthor, noteTitle } = this.data;
+    const { selectedDevice, selectedType, imageUrls, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = this.data;
 
     if (!selectedDevice) {
       wx.showToast({ title: '请选择操作设备', icon: 'none' });
@@ -465,12 +588,9 @@ Page({
       return;
     }
 
-    if (imageUrls.length === 0) {
-      wx.showToast({ title: '请先选择图片', icon: 'none' });
-      return;
-    }
+    // 图片现在对于所有类型都是可选的，不再强制要求
 
-    // 验证笔记信息（笔记必填，评论选填）
+    // 验证笔记信息（笔记必填，评论必填链接和内容，客资必填电话或微信）
     if (selectedType.value === 'note') {
       if (!noteUrl || noteUrl.trim() === '') {
         wx.showToast({ title: '笔记类型必须填写小红书笔记链接', icon: 'none' });
@@ -482,6 +602,24 @@ Page({
       }
       if (!noteTitle || noteTitle.trim() === '') {
         wx.showToast({ title: '笔记类型必须填写笔记标题', icon: 'none' });
+        return;
+      }
+    } else if (selectedType.value === 'comment') {
+      if (!noteUrl || noteUrl.trim() === '') {
+        wx.showToast({ title: '评论类型必须填写小红书笔记链接', icon: 'none' });
+        return;
+      }
+      if (!commentContent || commentContent.trim() === '') {
+        wx.showToast({ title: '评论类型必须填写评论内容', icon: 'none' });
+        return;
+      }
+    } else if (selectedType.value === 'customer_resource') {
+      // 客资类型：电话和微信至少填写一项
+      const hasPhone = customerPhone && customerPhone.trim() !== '';
+      const hasWechat = customerWechat && customerWechat.trim() !== '';
+
+      if (!hasPhone && !hasWechat) {
+        wx.showToast({ title: '客资类型必须填写客户电话或微信号', icon: 'none' });
         return;
       }
     }
@@ -513,7 +651,10 @@ Page({
         imageMd5s: md5s,
         noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
         noteAuthor: noteAuthor && noteAuthor.trim() ? noteAuthor.trim() : null,
-        noteTitle: noteTitle && noteTitle.trim() ? noteTitle.trim() : null
+        noteTitle: noteTitle && noteTitle.trim() ? noteTitle.trim() : null,
+        commentContent: commentContent && commentContent.trim() ? commentContent.trim() : null,
+        customerPhone: customerPhone && customerPhone.trim() ? customerPhone.trim() : null,
+        customerWechat: customerWechat && customerWechat.trim() ? customerWechat.trim() : null
       };
 
       // 添加调试日志
@@ -547,9 +688,19 @@ Page({
                 noteUrl: '', // 清空笔记链接
                 noteAuthor: '', // 清空昵称
                 noteTitle: '', // 清空标题
+                commentContent: '', // 清空评论内容
+                customerPhone: '', // 清空客户电话
+                customerWechat: '', // 清空客户微信
                 displayList: [{ type: 'add' }] // 重置显示列表，只保留添加按钮
               });
-              wx.switchTab({ url: '/pages/index/index' });
+              wx.showToast({
+                title: '提交成功，返回首页',
+                icon: 'success',
+                duration: 2000
+              });
+              setTimeout(() => {
+                wx.switchTab({ url: '/pages/index/index' });
+              }, 500);
             }, 1500);
 
           } else {

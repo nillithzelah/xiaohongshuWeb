@@ -95,15 +95,15 @@
   </view>
 
   <!-- 步骤 3: 填写链接和信息 -->
-  <view class="section" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment'}}">
+  <view class="section" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment' || selectedType.value === 'customer_resource'}}">
     <view class="section-title">
       <text class="step-num">3</text>
-      <text class="step-text">填写小红书笔记信息</text>
-      <text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text>
+      <text class="step-text">{{selectedType.value === 'customer_resource' ? '填写客户信息' : '填写小红书笔记信息'}}</text>
+      <text class="required-mark" wx:if="{{selectedType.value === 'note' || selectedType.value === 'customer_resource'}}">*</text>
     </view>
 
-    <!-- 笔记链接 -->
-    <view class="form-group">
+    <!-- 笔记链接（仅笔记和评论类型显示） -->
+    <view class="form-group" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment'}}">
       <view class="input-label">笔记链接<text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text></view>
       <input
         class="url-input"
@@ -118,8 +118,8 @@
       </view>
     </view>
 
-    <!-- 作者昵称 -->
-    <view class="form-group">
+    <!-- 作者昵称（笔记和评论类型都显示） -->
+    <view class="form-group" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment'}}">
       <view class="input-label">作者昵称<text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text></view>
       <input
         class="text-input"
@@ -130,9 +130,9 @@
       />
     </view>
 
-    <!-- 笔记标题 -->
-    <view class="form-group">
-      <view class="input-label">笔记标题<text class="required-mark" wx:if="{{selectedType.value === 'note'}}">*</text></view>
+    <!-- 笔记标题（仅笔记类型显示） -->
+    <view class="form-group" wx:if="{{selectedType.value === 'note'}}">
+      <view class="input-label">笔记标题<text class="required-mark">*</text></view>
       <input
         class="text-input"
         placeholder="请输入笔记标题"
@@ -141,16 +141,73 @@
         maxlength="200"
       />
     </view>
+
+    <!-- 评论内容（仅评论类型显示） -->
+    <view class="form-group" wx:if="{{selectedType.value === 'comment'}}">
+      <view class="input-label">评论内容<text class="required-mark">*</text></view>
+      <textarea
+        class="text-input comment-input"
+        placeholder="请输入评论内容"
+        value="{{commentContent}}"
+        bindinput="onCommentContentInput"
+        maxlength="500"
+        auto-height="true"
+      />
+    </view>
+
+    <!-- 客资信息（仅客资类型显示） -->
+    <view wx:if="{{selectedType.value === 'customer_resource'}}">
+      <view class="form-group">
+        <view class="input-label">客户电话<text class="required-mark">*</text></view>
+        <input
+          class="text-input"
+          placeholder="请输入客户电话号码"
+          value="{{customerPhone}}"
+          bindinput="onCustomerPhoneInput"
+          type="number"
+          maxlength="11"
+        />
+      </view>
+
+      <view class="form-group">
+        <view class="input-label">客户微信<text class="required-mark">*</text></view>
+        <input
+          class="text-input"
+          placeholder="请输入客户微信号"
+          value="{{customerWechat}}"
+          bindinput="onCustomerWechatInput"
+          maxlength="50"
+        />
+        <view class="input-hint">
+          <text>电话号和微信号至少填写一项</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 上传进度显示 -->
+  <view class="upload-progress" wx:if="{{uploading || uploadProgress > 0}}">
+    <view class="progress-container">
+      <view class="progress-bar">
+        <view class="progress-fill" style="width: {{uploadProgress}}%;"></view>
+      </view>
+      <view class="progress-text">
+        <text>{{uploadStatus || '上传中...'}}</text>
+        <text wx:if="{{processingMd5}}">正在处理图片...</text>
+      </view>
+      <view class="progress-percent">{{uploadProgress}}%</view>
+    </view>
   </view>
 
   <!-- 步骤 4: 提交按钮 -->
   <view class="footer-action">
     <button
-      class="submit-btn {{selectedDevice && selectedType && imageUrls.length > 0 && (selectedType.value !== 'note' || (noteUrl && noteUrl.trim())) ? 'active' : ''}}"
+      class="submit-btn {{selectedDevice && selectedType ? 'active' : ''}}"
       bindtap="submitTask"
       loading="{{uploading}}"
+      disabled="{{uploading}}"
     >
-      立即提交 {{imageUrls.length > 0 ? imageUrls.length + '张图片' : '任务'}}
+      {{uploading ? '上传中...' : '立即提交'}} {{imageUrls.length > 0 ? imageUrls.length + '张图片' : '任务'}}
     </button>
   </view>
 

@@ -61,8 +61,9 @@ const imageReviewSchema = new mongoose.Schema({
   },
   // 用户提供的笔记信息（用于AI审核比对）
   userNoteInfo: {
-    author: String, // 用户填写的作者昵称
-    title: String   // 用户填写的笔记标题
+    author: String,     // 用户填写的作者昵称
+    title: String,      // 用户填写的笔记标题
+    comment: String     // 用户填写的评论内容（评论类型专用）
   },
   // AI审核解析的笔记信息
   aiParsedNoteInfo: {
@@ -84,6 +85,23 @@ const imageReviewSchema = new mongoose.Schema({
       titleMatch: Number,   // 标题匹配度 (0-100)
       pageAuthor: String,   // 页面解析的作者
       pageTitle: String     // 页面解析的标题
+    },
+    commentVerification: {  // 评论验证结果（仅评论类型）
+      exists: Boolean,      // 评论是否存在
+      confidence: Number,   // 验证信心度 (0-1)
+      reason: String,       // 验证结果说明
+      pageCommentCount: Number, // 页面评论总数
+      scannedComments: Number,  // 扫描的评论数
+      foundComments: [{     // 找到的匹配评论
+        text: String,       // 评论文本
+        author: String,     // 评论作者
+        contentMatch: Number, // 内容匹配度
+        authorMatch: Number   // 作者匹配度
+      }],
+      pageComments: [{      // 页面评论列表（用于显示）
+        text: String,       // 评论文本
+        author: String      // 评论作者
+      }]
     }
   },
   status: {
@@ -131,7 +149,7 @@ const imageReviewSchema = new mongoose.Schema({
     operatorName: String, // 操作人姓名
     action: {
       type: String,
-      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'ai_auto_approved']
+      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'ai_auto_approved', 'daily_check_passed', 'daily_check_failed', 'note_deleted']
     },
     comment: String, // 操作意见
     timestamp: {
@@ -139,15 +157,39 @@ const imageReviewSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+  // 持续存在性检查相关字段（仅对笔记类型）
+  continuousCheck: {
+    enabled: {
+      type: Boolean,
+      default: false // 是否启用持续检查
+    },
+    status: {
+      type: String,
+      enum: ['active', 'inactive', 'deleted'], // active: 笔记存在，继续检查; inactive: 暂停检查; deleted: 笔记已删除，停止检查
+      default: 'inactive'
+    },
+    lastCheckTime: Date, // 最后检查时间
+    nextCheckTime: Date, // 下次检查时间（每天9点）
+    checkHistory: [{ // 检查历史记录
+      checkTime: Date, // 检查时间
+      result: {
+        type: String,
+        enum: ['success', 'failed', 'error']
+      },
+      noteExists: Boolean, // 笔记是否存在
+      rewardPoints: Number, // 奖励积分（0.3）
+      errorMessage: String // 错误信息
+    }]
+  },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
 
-// 自定义验证器：限制数组最大长度为9
+// 自定义验证器：限制数组最大长度为9，允许空数组
 function arrayLimit(val) {
-  return val.length <= 9 && val.length > 0;
+  return val.length <= 9;
 }
 
 // 确保noteUrl字段总是被包含在输出中
@@ -159,5 +201,9 @@ imageReviewSchema.index({ userId: 1, createdAt: -1 });
 imageReviewSchema.index({ status: 1 });
 imageReviewSchema.index({ 'imageUrls': 1 }); // 新增图片数组索引
 imageReviewSchema.index({ 'imageMd5s': 1 }); // 新增MD5数组索引
+// 持续检查相关索引
+imageReviewSchema.index({ 'continuousCheck.enabled': 1 });
+imageReviewSchema.index({ 'continuousCheck.status': 1 });
+imageReviewSchema.index({ 'continuousCheck.nextCheckTime': 1 });
 
 module.exports = mongoose.model('ImageReview', imageReviewSchema);

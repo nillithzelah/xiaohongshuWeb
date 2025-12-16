@@ -79,14 +79,29 @@ npm install
 echo "⚙️ 配置生产环境..."
 cat > server/.env.production << EOL
 MONGODB_URI=mongodb://127.0.0.1:27017/${SERVER_DB}
-JWT_SECRET=xiaohongshu_prod_jwt_secret_2025
+JWT_SECRET=xiaohongshu_prod_jwt
 PORT=3001
 
 # 阿里云OSS配置
 OSS_ACCESS_KEY_ID=your_access_key_id
 OSS_ACCESS_KEY_SECRET=your_access_key_secret
-OSS_BUCKET=your_bucket_name
-OSS_REGION=your_region
+OSS_BUCKET=zerobug-img
+OSS_REGION=oss-cn-shenzhen
+
+# 数据库连接池配置
+MONGODB_POOL_SIZE=10
+MONGODB_MAX_IDLE_TIME=30000
+
+# 定时任务配置
+CONTINUOUS_CHECK_INTERVAL_MINUTES=1
+CONTINUOUS_CHECK_TIMEZONE=Asia/Shanghai
+
+# 日志配置
+LOG_LEVEL=info
+LOG_FILE_PATH=logs/app.log
+
+# 性能监控
+ENABLE_PERFORMANCE_MONITORING=true
 
 # 微信小程序配置
 WX_APP_ID=your_app_id
@@ -99,7 +114,12 @@ npm install
 npm run build
 cd ..
 
-echo "📋 创建PM2配置文件..."
+echo "🗄️ 执行数据库迁移..."
+cd server
+node scripts/migrate-db.js || echo "数据库迁移脚本不存在，跳过"
+cd ..
+
+echo "� 创建PM2配置文件..."
 cat > ecosystem.config.js << EOL
 module.exports = {
   apps: [{
@@ -111,7 +131,16 @@ module.exports = {
       NODE_ENV: 'production',
       PORT: 3001
     },
-    cwd: '$REMOTE_PATH'
+    cwd: '$REMOTE_PATH',
+    // 自动重启配置
+    autorestart: true,
+    max_restarts: 5,
+    min_uptime: '10s',
+    // 日志配置
+    log_file: '$REMOTE_PATH/logs/combined.log',
+    out_file: '$REMOTE_PATH/logs/out.log',
+    error_file: '$REMOTE_PATH/logs/error.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z'
   }]
 };
 EOL
@@ -121,6 +150,16 @@ pm2 stop xiaohongshu-web 2>/dev/null || true
 pm2 delete xiaohongshu-web 2>/dev/null || true
 pm2 start ecosystem.config.js
 pm2 save
+
+echo "⏰ 持续检查服务已在应用启动时自动启动"
+
+echo "🔍 检查环境变量..."
+if [ ! -f "server/.env.production" ]; then
+    echo "❌ 生产环境配置文件不存在"
+    exit 1
+fi
+
+echo "✅ 环境变量检查完成"
 
 echo "✅ 后端部署完成！"
 EOF

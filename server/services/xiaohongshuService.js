@@ -1,6 +1,7 @@
 // 小红书服务：验证笔记链接和AI审核
 const axios = require('axios');
 const cheerio = require('cheerio');
+const CommentVerificationService = require('./CommentVerificationService');
 
 class XiaohongshuService {
   constructor() {
@@ -14,6 +15,9 @@ class XiaohongshuService {
       'Connection': 'keep-alive',
       'Upgrade-Insecure-Requests': '1',
     };
+    
+    // 初始化评论验证服务
+    this.commentVerifier = new CommentVerificationService();
   }
 
   /**
@@ -78,6 +82,167 @@ class XiaohongshuService {
         reason: '验证过程出错：' + error.message
       };
     }
+  }
+
+  /**
+   * 执行评论AI审核（增强版）
+   * @param {string} noteUrl - 小红书笔记链接
+   * @param {string} commentContent - 用户提交的评论内容
+   * @param {string} commentAuthor - 评论者昵称
+   * @param {string} cookieString - 小红书登录Cookie字符串（可选）
+   * @returns {Promise<Object>} 审核结果
+   */
+  async performCommentAIReview(noteUrl, commentContent, commentAuthor, cookieString = null) {
+    try {
+      console.log('🤖 开始评论AI审核...');
+
+      const reviewResult = {
+        passed: true,
+        confidence: 0.8,
+        reasons: [],
+        riskLevel: 'low'
+      };
+
+      // 1. 链接验证
+      const linkValidation = await this.validateNoteUrl(noteUrl);
+      if (!linkValidation.valid) {
+        return {
+          passed: false,
+          confidence: 0.1,
+          reasons: ['笔记链接无效: ' + linkValidation.reason],
+          riskLevel: 'high'
+        };
+      }
+
+      // 2. 评论内容基本验证
+      if (!commentContent || commentContent.trim().length < 5) {
+        reviewResult.passed = false;
+        reviewResult.confidence = 0.2;
+        reviewResult.reasons.push('评论内容过短或为空');
+        reviewResult.riskLevel = 'high';
+      } else if (commentContent.length < 20) {
+        reviewResult.confidence += 0.02;
+        reviewResult.reasons.push('评论内容偏短');
+      } else if (commentContent.length > 300) {
+        reviewResult.confidence += 0.05;
+        reviewResult.reasons.push('评论内容详细');
+      } else {
+        reviewResult.confidence += 0.05;
+        reviewResult.reasons.push('评论内容长度适中');
+      }
+
+      // 3. **新增**: 真实评论验证（通过浏览器自动化）
+      console.log('🔍 开始验证评论是否真实存在...');
+      const commentVerification = await this.commentVerifier.verifyCommentExists(
+        noteUrl,
+        commentContent,
+        commentAuthor,
+        cookieString // 传递Cookie字符串用于登录状态
+      );
+
+      if (commentVerification.error) {
+        // 验证服务出错，不直接影响审核结果，但降低信心度
+        reviewResult.confidence *= 0.8;
+        reviewResult.reasons.push('评论验证服务暂时不可用，使用基础审核');
+      } else if (commentVerification.exists) {
+        reviewResult.confidence += 0.15;
+        reviewResult.reasons.push('评论验证通过，确认真实存在');
+      } else {
+        reviewResult.passed = false;
+        reviewResult.confidence = Math.min(reviewResult.confidence, 0.3);
+        reviewResult.reasons.push(`评论验证失败: ${commentVerification.reason}`);
+        reviewResult.riskLevel = 'high';
+      }
+
+      // 4. 其他质量检查
+      const qualityChecks = this.performQualityChecks(commentContent, commentAuthor);
+      reviewResult.confidence += qualityChecks.confidenceDelta;
+      reviewResult.reasons.push(...qualityChecks.reasons);
+
+      // 决定最终结果
+      reviewResult.passed = reviewResult.passed && reviewResult.confidence >= 0.7;
+
+      if (!reviewResult.passed) {
+        reviewResult.reasons.push('综合审核未通过');
+        if (reviewResult.riskLevel === 'low') {
+          reviewResult.riskLevel = 'medium';
+        }
+      }
+
+      console.log('🤖 评论AI审核完成:', reviewResult);
+      return {
+        ...reviewResult,
+        commentVerification: {
+          exists: commentVerification.exists,
+          confidence: commentVerification.confidence,
+          reason: commentVerification.reason,
+          pageCommentCount: commentVerification.pageCommentCount || 0,
+          scannedComments: commentVerification.scannedComments || 0,
+          foundComments: commentVerification.foundComments || [],
+          pageComments: commentVerification.pageComments || []
+        }
+      };
+
+    } catch (error) {
+      console.error('评论AI审核失败:', error);
+      return {
+        passed: false,
+        confidence: 0,
+        reasons: ['评论审核过程出错'],
+        riskLevel: 'high',
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * 质量检查
+   * @param {string} commentContent - 评论内容
+   * @param {string} commentAuthor - 评论者昵称
+   * @returns {Object} 检查结果
+   */
+  performQualityChecks(commentContent, commentAuthor) {
+    let confidenceDelta = 0;
+    const reasons = [];
+
+    // 长度检查
+    if (commentContent.length > 20) {
+      confidenceDelta += 0.05;
+      reasons.push('评论长度适中');
+    }
+
+    // 关键词检查
+    const positiveKeywords = ['好', '不错', '喜欢', '支持', '棒', '赞', '推荐', '优秀'];
+    const hasPositiveWords = positiveKeywords.some(word => commentContent.includes(word));
+    
+    if (hasPositiveWords) {
+      confidenceDelta += 0.05;
+      reasons.push('包含正面评价');
+    }
+
+    // 昵称合理性检查
+    if (commentAuthor && commentAuthor.length >= 2 && commentAuthor.length <= 20) {
+      const validPattern = /^[\u4e00-\u9fa5a-zA-Z0-9_\-]+$/;
+      if (validPattern.test(commentAuthor)) {
+        confidenceDelta += 0.02;
+        reasons.push('昵称格式正常');
+      } else {
+        confidenceDelta -= 0.05;
+        reasons.push('昵称格式异常');
+      }
+    }
+
+    // 检查重复字符
+    const repeatPattern = /(.)\1{4,}/;
+    if (repeatPattern.test(commentContent)) {
+      confidenceDelta -= 0.1;
+      reasons.push('包含重复字符');
+    }
+
+    return {
+      confidenceDelta,
+      reasons
+    };
   }
 
   /**
@@ -442,6 +607,22 @@ class XiaohongshuService {
         riskLevel: 'high',
         error: error.message
       };
+    }
+  }
+
+  /**
+   * 获取评论验证服务状态
+   */
+  getCommentVerifierStatus() {
+    return this.commentVerifier.getStatus();
+  }
+
+  /**
+   * 清理资源
+   */
+  async cleanup() {
+    if (this.commentVerifier) {
+      await this.commentVerifier.close();
     }
   }
 

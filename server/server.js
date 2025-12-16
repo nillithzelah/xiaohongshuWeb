@@ -84,7 +84,14 @@ function registerRoutes() {
   // 测试路由
   apiRouter.get('/test', (req, res) => {
     console.log('🧪 测试路由被调用!');
-    res.json({ success: true, message: '测试路由工作正常' });
+    res.json({
+      success: true,
+      message: '测试路由工作正常',
+      env: {
+        XIAOHONGSHU_COOKIE_EXISTS: !!process.env.XIAOHONGSHU_COOKIE,
+        XIAOHONGSHU_COOKIE_LENGTH: process.env.XIAOHONGSHU_COOKIE ? process.env.XIAOHONGSHU_COOKIE.length : 0
+      }
+    });
   });
 
   // 挂载到 /xiaohongshu 前缀
@@ -102,6 +109,10 @@ function startServer() {
     console.log(`📍 服务地址: http://localhost:${PORT}`);
     console.log('🎯 API 基础路径: http://localhost:' + PORT + '/xiaohongshu/api');
     console.log('🔄 服务正在运行中...');
+
+    // 启动持续检查服务
+    const continuousCheckService = require('./services/continuousCheckService');
+    continuousCheckService.start();
   });
 
   // 处理服务器错误

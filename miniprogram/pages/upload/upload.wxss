@@ -295,6 +295,50 @@ page {
   box-shadow: 0 6rpx 20rpx rgba(24, 144, 255, 0.3);
 }
 
+/* 上传进度条样式 */
+.upload-progress {
+  margin: 20rpx 0;
+  padding: 20rpx;
+  background: #fff;
+  border-radius: 12rpx;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.05);
+}
+
+.progress-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8rpx;
+  background: #f0f0f0;
+  border-radius: 4rpx;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #1890ff, #52c41a);
+  border-radius: 4rpx;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 26rpx;
+  color: #666;
+}
+
+.progress-percent {
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #1890ff;
+}
+
 /* 表单样式 */
 .form-group {
   margin-top: 20rpx;

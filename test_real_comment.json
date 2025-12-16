@@ -1,0 +1,14 @@
+{
+  "deviceId": "device_003",
+  "imageType": "comment",
+  "imageUrls": [
+    "https://example.com/comment-screenshot.jpg"
+  ],
+  "imageMd5s": [
+    "test_md5_hash_comment_1765850392756"
+  ],
+  "noteUrl": "https://www.xiaohongshu.com/explore/693e5d73000000001e00aab2?note_flow_source=wechat&xsec_token=CBdC1IAKDFifZngecxguDVTAbv8ozG8Bwc1B7Fwmo9750=",
+  "noteAuthor": "阳 77",
+  "commentContent": "还真是这样，我就是 我的天咯怎么办",
+  "commentAuthor": "也许呢jgk"
+}

@@ -305,6 +305,8 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     console.log('🔍 Reviews API 被调用了!');
     const { page = 1, limit = 10, status, userId, imageType, keyword, reviewer, deviceName } = req.query;
+    const limitNum = parseInt(limit);
+    const pageNum = parseInt(page);
 
     let query = {};
     if (status) query.status = status;
@@ -345,7 +347,7 @@ router.get('/', authenticateToken, async (req, res) => {
 
     console.log('🔍 开始查询审核记录...');
     console.log('   查询条件:', query);
-    console.log('   分页参数:', { page, limit });
+    console.log('   分页参数:', { page: pageNum, limit: limitNum });
 
     // 获取当前用户ID（如果已认证）
     const currentUserId = req.user ? req.user._id : null;
@@ -402,8 +404,8 @@ router.get('/', authenticateToken, async (req, res) => {
       reviews = [...ownPending, ...otherPending, ...nonPending];
 
       // 应用分页
-      const startIndex = (page - 1) * limit;
-      const endIndex = startIndex + limit;
+      const startIndex = (pageNum - 1) * limitNum;
+      const endIndex = startIndex + limitNum;
       reviews = reviews.slice(startIndex, endIndex);
     } else if (currentUserId) {
       // 其他角色用户：按原有逻辑
@@ -460,8 +462,25 @@ router.get('/', authenticateToken, async (req, res) => {
       reviews = [...selfReviewed, ...otherReviewed];
       console.log('📊 合并后总数量:', reviews.length);
 
-      const startIndex = (page - 1) * limit;
-      const endIndex = startIndex + limit;
+      // 对整个合并后的数组按最新审核时间排序
+      reviews.sort((a, b) => {
+        const getLatestAuditTime = (review) => {
+          const times = [];
+          if (review.mentorReview?.reviewedAt) times.push(new Date(review.mentorReview.reviewedAt));
+          if (review.managerApproval?.approvedAt) times.push(new Date(review.managerApproval.approvedAt));
+          if (review.financeProcess?.processedAt) times.push(new Date(review.financeProcess.processedAt));
+          if (review.auditHistory && review.auditHistory.length > 0) {
+            review.auditHistory.forEach(history => {
+              if (history.timestamp) times.push(new Date(history.timestamp));
+            });
+          }
+          return times.length > 0 ? Math.max(...times.map(t => t.getTime())) : new Date(review.createdAt).getTime();
+        };
+        return getLatestAuditTime(b) - getLatestAuditTime(a);
+      });
+
+      const startIndex = (pageNum - 1) * limitNum;
+      const endIndex = startIndex + limitNum;
       reviews = reviews.slice(startIndex, endIndex);
       console.log('📊 分页后数量:', reviews.length);
     } else {
@@ -474,15 +493,23 @@ router.get('/', authenticateToken, async (req, res) => {
         .skip((page - 1) * limit);
     }
 
-    // 为每个审核记录添加设备信息
+    // 为每个审核记录添加设备信息（优先使用已有的deviceInfo，否则查询Device表）
     console.log('🔗 开始为审核记录添加设备信息...');
     for (const review of reviews) {
       console.log(`🔍 处理记录 ${review._id}, 用户: ${review.userId?.username || '未知'}`);
+
+      // 如果审核记录已经有deviceInfo，直接使用
+      if (review.deviceInfo && review.deviceInfo.accountName) {
+        console.log(`📱 使用已有设备信息: ${review.deviceInfo.accountName}`);
+        continue;
+      }
+
+      // 如果没有deviceInfo，从Device表查询
       if (review.userId) {
         try {
           const Device = require('../models/Device');
           const device = await Device.findOne({ assignedUser: review.userId._id });
-          console.log(`📱 找到设备: ${device ? device.accountName : '无设备'}`);
+          console.log(`📱 从数据库查询设备: ${device ? device.accountName : '无设备'}`);
           review._doc.deviceInfo = device ? {
             accountName: device.accountName,
             status: device.status,
@@ -499,7 +526,52 @@ router.get('/', authenticateToken, async (req, res) => {
     }
     console.log('✅ 设备信息关联完成');
 
-    const total = await ImageReview.countDocuments(query);
+    // 计算实际返回的记录总数
+    let total;
+    if (currentUserId && req.user.role === 'mentor') {
+      // 带教老师：需要计算所有可能记录的总数
+      const assignedUsers = await User.find({ mentor_id: currentUserId }).select('_id');
+      const assignedUserIds = assignedUsers.map(u => u._id);
+
+      // 计算自己名下用户的记录数
+      const ownQuery = { ...query, status: 'pending', userId: { $in: assignedUserIds } };
+      const ownCount = await ImageReview.countDocuments(ownQuery);
+
+      // 计算其他记录数
+      const otherQuery = { ...query, status: 'pending', userId: { $nin: assignedUserIds } };
+      const otherCount = await ImageReview.countDocuments(otherQuery);
+
+      // 计算非待审核记录数
+      const nonPendingQuery = { ...query };
+      nonPendingQuery.$and = nonPendingQuery.$and || [];
+      nonPendingQuery.$and.push({ status: { $ne: 'pending' } });
+      const nonPendingCount = await ImageReview.countDocuments(nonPendingQuery);
+
+      total = ownCount + otherCount + nonPendingCount;
+    } else if (currentUserId) {
+      // 其他角色：计算所有相关记录的总数
+      const selfQuery = { ...query };
+      selfQuery.$or = [
+        { 'mentorReview.reviewer': currentUserId },
+        { 'auditHistory.operator': currentUserId }
+      ];
+      const selfCount = await ImageReview.countDocuments(selfQuery);
+
+      const otherQuery = { ...query };
+      otherQuery.$and = otherQuery.$and || [];
+      otherQuery.$and.push({
+        $nor: [
+          { 'mentorReview.reviewer': currentUserId },
+          { 'auditHistory.operator': currentUserId }
+        ]
+      });
+      const otherCount = await ImageReview.countDocuments(otherQuery);
+
+      total = selfCount + otherCount;
+    } else {
+      // 未登录或简单查询：使用数据库计数
+      total = await ImageReview.countDocuments(query);
+    }
 
     console.log('✅ 查询成功，记录数量:', reviews.length);
 
@@ -507,10 +579,10 @@ router.get('/', authenticateToken, async (req, res) => {
       success: true,
       reviews,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / limit)
+        pages: Math.ceil(total / limitNum)
       }
     });
 
@@ -794,6 +866,142 @@ router.put('/batch-cs-review', authenticateToken, requireRole(['manager', 'boss'
   }
 });
 
-module.exports = router;       
+// 获取AI自动审核记录（老板、主管、带教老师可见）
+router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manager', 'boss']), async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, userId, imageType, keyword } = req.query;
+    const limitNum = parseInt(limit);
+    const pageNum = parseInt(page);
+
+    let query = {
+      'auditHistory.action': 'ai_auto_approved'
+    };
+
+    // 添加其他筛选条件
+    if (status) query.status = status;
+    if (userId) query.userId = userId;
+    if (imageType) query.imageType = imageType;
+
+    // 如果有keyword，搜索用户名匹配的用户ID
+    if (keyword) {
+      const matchedUsers = await User.find({
+        $or: [
+          { username: { $regex: keyword, $options: 'i' } },
+          { nickname: { $regex: keyword, $options: 'i' } }
+        ]
+      }).select('_id');
+      const userIds = matchedUsers.map(user => user._id);
+      query.userId = { $in: userIds };
+    }
+
+    console.log('🔍 AI自动审核记录查询条件:', query);
+    console.log('   分页参数:', { page: pageNum, limit: limitNum });
+
+    // 查询AI自动审核的记录
+    const reviews = await ImageReview.find(query)
+      .populate('userId', 'username nickname')
+      .populate('mentorReview.reviewer', 'username nickname')
+      .sort({ 'auditHistory.timestamp': -1 }) // 按AI审核时间倒序
+      .limit(limitNum)
+      .skip((pageNum - 1) * limitNum);
+
+    const total = await ImageReview.countDocuments(query);
+
+    // 为每个审核记录计算持续检查收益和生存天数
+    console.log('💰 开始计算持续检查收益...');
+    for (const review of reviews) {
+      // 计算生存天数：从AI审核通过开始到今天的天数
+      const aiAuditTime = review.auditHistory.find(h => h.action === 'ai_auto_approved')?.timestamp;
+      const survivalDays = aiAuditTime ? Math.floor((Date.now() - new Date(aiAuditTime).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 1;
+
+      // 计算总收益：第一天原价 + 后续每天0.3元
+      const initialPrice = review.snapshotPrice || 0; // 第一天收益（原笔记价格）
+      const dailyReward = 0.3; // 后续每天奖励
+      const additionalDays = Math.max(0, survivalDays - 1); // 除了第一天外的天数
+      const additionalEarnings = additionalDays * dailyReward; // 后续天数的收益
+      const totalEarnings = initialPrice + additionalEarnings; // 总收益
+
+      // 计算上级用户佣金
+      let parentCommission = 0;
+      let grandParentCommission = 0;
+
+      if (review.userId && review.userId.parent_id) {
+        // 一级佣金
+        parentCommission = additionalEarnings * (review.snapshotCommission1 / review.snapshotPrice);
+
+        // 二级佣金
+        const parentUser = await User.findById(review.userId.parent_id);
+        if (parentUser && parentUser.parent_id) {
+          grandParentCommission = additionalEarnings * (review.snapshotCommission2 / review.snapshotPrice);
+        }
+      }
+
+      // 添加计算结果到记录中
+      review._doc.survivalDays = survivalDays;
+      review._doc.totalEarnings = totalEarnings;
+      review._doc.initialPrice = initialPrice;
+      review._doc.additionalEarnings = additionalEarnings;
+      review._doc.dailyReward = dailyReward;
+      review._doc.parentCommission = parentCommission;
+      review._doc.grandParentCommission = grandParentCommission;
+
+      console.log(`📊 记录 ${review._id}: 生存${survivalDays}天，总收益${totalEarnings}元 (初始${initialPrice} + 后续${additionalEarnings})，上级佣金: ${parentCommission}元，二级佣金: ${grandParentCommission}元`);
+    }
+
+    // 为每个审核记录添加设备信息
+    console.log('🔗 开始为AI审核记录添加设备信息...');
+    for (const review of reviews) {
+      console.log(`🔍 处理记录 ${review._id}, 用户: ${review.userId?.username || '未知'}`);
+
+      // 如果审核记录已经有deviceInfo，直接使用
+      if (review.deviceInfo && review.deviceInfo.accountName) {
+        console.log(`📱 使用已有设备信息: ${review.deviceInfo.accountName}`);
+        continue;
+      }
+
+      // 如果没有deviceInfo，从Device表查询
+      if (review.userId) {
+        try {
+          const Device = require('../models/Device');
+          const device = await Device.findOne({ assignedUser: review.userId._id });
+          console.log(`📱 从数据库查询设备: ${device ? device.accountName : '无设备'}`);
+          review._doc.deviceInfo = device ? {
+            accountName: device.accountName,
+            status: device.status,
+            influence: device.influence
+          } : null;
+        } catch (error) {
+          console.error('❌ 设备查询失败:', error);
+          review._doc.deviceInfo = null;
+        }
+      } else {
+        console.log('⚠️ 记录没有userId');
+        review._doc.deviceInfo = null;
+      }
+    }
+    console.log('✅ 设备信息关联完成');
+
+    console.log('✅ AI自动审核记录查询成功，记录数量:', reviews.length);
+
+    res.json({
+      success: true,
+      reviews,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+
+  } catch (error) {
+    console.error('获取AI自动审核记录错误:', error);
+    console.error('错误详情:', error.message);
+    console.error('错误堆栈:', error.stack);
+    res.status(500).json({ success: false, message: '获取AI自动审核记录失败' });
+  }
+});
+
+module.exports = router;
 
 

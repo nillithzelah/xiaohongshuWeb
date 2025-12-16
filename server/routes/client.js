@@ -379,16 +379,56 @@ router.get('/announcements', async (req, res) => {
 // 批量提交多图任务
 router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
   try {
-    const { deviceId, imageType, imageUrls, imageMd5s, noteUrl, noteAuthor, noteTitle } = req.body;
+    const { deviceId, imageType, imageUrls, imageMd5s, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = req.body;
 
     // 验证参数
-    if (!deviceId || !imageType || !imageUrls || !imageMd5s) {
-      return res.status(400).json({ success: false, message: '参数不完整' });
+    if (!deviceId || !imageType) {
+      return res.status(400).json({ success: false, message: '参数不完整：缺少设备或任务类型' });
     }
 
-    // 验证笔记链接（笔记必填，评论选填）
-    if (imageType === 'note' && (!noteUrl || noteUrl.trim() === '')) {
-      return res.status(400).json({ success: false, message: '笔记类型必须填写小红书笔记链接' });
+    // 图片现在是可选的，只有当提供了图片时才验证
+    if (imageUrls && imageMd5s) {
+      if (imageUrls.length !== imageMd5s.length) {
+        return res.status(400).json({ success: false, message: '图片和MD5数量不匹配' });
+      }
+      if (imageUrls.length > 9) {
+        return res.status(400).json({ success: false, message: '图片数量不能超过9张' });
+      }
+    }
+
+    // 验证不同类型的要求
+    if (imageType === 'note') {
+      if (!noteUrl || noteUrl.trim() === '') {
+        return res.status(400).json({ success: false, message: '笔记类型必须填写小红书笔记链接' });
+      }
+      if (!noteAuthor || noteAuthor.trim() === '') {
+        return res.status(400).json({ success: false, message: '笔记类型必须填写作者昵称' });
+      }
+      if (!noteTitle || noteTitle.trim() === '') {
+        return res.status(400).json({ success: false, message: '笔记类型必须填写笔记标题' });
+      }
+    } else if (imageType === 'comment') {
+      if (!noteUrl || noteUrl.trim() === '') {
+        return res.status(400).json({ success: false, message: '评论类型必须填写小红书笔记链接' });
+      }
+      if (!noteAuthor || noteAuthor.trim() === '') {
+        return res.status(400).json({ success: false, message: '评论类型必须填写作者昵称' });
+      }
+      if (!commentContent || commentContent.trim() === '') {
+        return res.status(400).json({ success: false, message: '评论类型必须填写评论内容' });
+      }
+      // 评论类型也需要提供图片作为证据
+      if (!imageUrls || imageUrls.length === 0) {
+        return res.status(400).json({ success: false, message: '评论类型必须上传评论截图作为证据' });
+      }
+    } else if (imageType === 'customer_resource') {
+      // 客资类型：电话和微信至少填写一项
+      const hasPhone = customerPhone && customerPhone.trim() !== '';
+      const hasWechat = customerWechat && customerWechat.trim() !== '';
+
+      if (!hasPhone && !hasWechat) {
+        return res.status(400).json({ success: false, message: '客资类型必须填写客户电话或微信号' });
+      }
     }
 
     // 如果提供了链接，验证格式
@@ -399,12 +439,9 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       }
     }
 
-    if (imageUrls.length !== imageMd5s.length) {
-      return res.status(400).json({ success: false, message: '图片和MD5数量不匹配' });
-    }
-
-    if (imageUrls.length === 0 || imageUrls.length > 9) {
-      return res.status(400).json({ success: false, message: '图片数量必须在1-9张之间' });
+    // 图片数量验证（如果提供了图片）
+    if (imageUrls && imageUrls.length > 0 && imageUrls.length > 9) {
+      return res.status(400).json({ success: false, message: '图片数量不能超过9张' });
     }
 
     // 验证设备是否属于当前用户
@@ -447,34 +484,39 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: '无效的任务类型' });
     }
 
-    // 检查MD5重复（批量检查，兼容新格式）
-    const existingReviews = await ImageReview.find({
-      imageMd5s: { $in: imageMd5s }, // 检查MD5数组中是否包含
-      status: { $ne: 'rejected' }
-    });
+    // 检查MD5重复（只有当提供了图片时才检查）
+    if (imageMd5s && imageMd5s.length > 0) {
+      const existingReviews = await ImageReview.find({
+        imageMd5s: { $in: imageMd5s }, // 检查MD5数组中是否包含
+        status: { $ne: 'rejected' }
+      });
 
-    if (existingReviews.length > 0) {
-      // 收集所有重复的MD5值
-      const duplicateMd5s = [];
-      existingReviews.forEach(review => {
-        // 检查每个review的imageMd5s数组中哪些MD5与上传的重复
-        review.imageMd5s.forEach(existingMd5 => {
-          if (imageMd5s.includes(existingMd5)) {
-            duplicateMd5s.push(existingMd5);
-          }
+      if (existingReviews.length > 0) {
+        // 收集所有重复的MD5值
+        const duplicateMd5s = [];
+        existingReviews.forEach(review => {
+          // 检查每个review的imageMd5s数组中哪些MD5与上传的重复
+          review.imageMd5s.forEach(existingMd5 => {
+            if (imageMd5s.includes(existingMd5)) {
+              duplicateMd5s.push(existingMd5);
+            }
+          });
         });
-      });
 
-      return res.status(400).json({
-        success: false,
-        message: '部分图片已被使用，请勿重复提交',
-        duplicates: [...new Set(duplicateMd5s)] // 去重
-      });
+        return res.status(400).json({
+          success: false,
+          message: '部分图片已被使用，请勿重复提交',
+          duplicates: [...new Set(duplicateMd5s)] // 去重
+        });
+      }
     }
 
     // AI审核逻辑（仅对笔记和评论类型）
     let aiReviewResult = null;
-    if ((imageType === 'note' || imageType === 'comment') && noteUrl) {
+    if (imageType === 'note' || imageType === 'comment') {
+      if (!noteUrl || noteUrl.trim() === '') {
+        return res.status(400).json({ success: false, message: '笔记和评论类型必须提供小红书链接' });
+      }
       console.log('🤖 开始AI审核笔记链接和内容...');
 
       // 首先验证链接有效性
@@ -558,23 +600,104 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
           aiReviewResult.aiReview.reasons.push('无法验证笔记内容，疑似无效链接');
           aiReviewResult.aiReview.riskLevel = 'high';
         }
+      } else if (imageType === 'comment' && commentContent) {
+        // 评论类型：使用浏览器自动化验证评论真实性
+        console.log('🔍 开始验证评论内容和真实性...');
+
+        // 评论内容长度检查
+        if (commentContent.length < 5) {
+          aiReviewResult.aiReview.passed = false;
+          aiReviewResult.aiReview.confidence = 0.3;
+          aiReviewResult.aiReview.reasons.push('评论内容过短，疑似无效评论');
+          aiReviewResult.aiReview.riskLevel = 'high';
+        } else if (commentContent.length > 200) {
+          aiReviewResult.aiReview.confidence += 0.1;
+          aiReviewResult.aiReview.reasons.push('评论内容详细，质量较高');
+        } else {
+          aiReviewResult.aiReview.confidence += 0.05;
+          aiReviewResult.aiReview.reasons.push('评论内容长度适中');
+        }
+
+        // 检查是否包含关键词（可选的额外验证）
+        const positiveKeywords = ['好', '不错', '喜欢', '支持', '棒'];
+        const hasPositiveWords = positiveKeywords.some(word => commentContent.includes(word));
+
+        if (hasPositiveWords) {
+          aiReviewResult.aiReview.confidence += 0.1;
+          aiReviewResult.aiReview.reasons.push('评论包含正面评价');
+        }
+
+        // 检查是否重复内容（简单的重复检测）
+        const words = commentContent.split('');
+        const uniqueWords = new Set(words);
+        const repetitionRatio = uniqueWords.size / words.length;
+
+        if (repetitionRatio < 0.3) {
+          aiReviewResult.aiReview.passed = false;
+          aiReviewResult.aiReview.confidence *= 0.5;
+          aiReviewResult.aiReview.reasons.push('评论内容重复度过高，疑似刷单');
+          aiReviewResult.aiReview.riskLevel = 'high';
+        }
+
+        // **新增**: 浏览器自动化评论验证
+        console.log('🔍 开始验证评论是否真实存在...');
+        try {
+          // 从环境变量获取Cookie
+          const cookieString = process.env.XIAOHONGSHU_COOKIE;
+          console.log('🍪 Cookie配置状态:', {
+            exists: !!cookieString,
+            length: cookieString ? cookieString.length : 0
+          });
+
+          const commentVerification = await xiaohongshuService.performCommentAIReview(
+            noteUrl,
+            commentContent,
+            null, // 评论验证不需要作者信息，因为我们只验证评论内容是否存在
+            cookieString // 传递Cookie用于登录状态
+          );
+
+          if (commentVerification.error) {
+            // 验证服务出错，不直接影响审核结果，但降低信心度
+            aiReviewResult.aiReview.confidence *= 0.8;
+            aiReviewResult.aiReview.reasons.push('评论验证服务暂时不可用，使用基础审核');
+          } else if (commentVerification.passed) {
+            aiReviewResult.aiReview.confidence += 0.15;
+            aiReviewResult.aiReview.reasons.push('评论验证通过，确认真实存在');
+          } else {
+            aiReviewResult.aiReview.passed = false;
+            aiReviewResult.aiReview.confidence = Math.min(aiReviewResult.aiReview.confidence, 0.3);
+            aiReviewResult.aiReview.reasons.push(`评论验证失败: ${commentVerification.reasons.join(', ')}`);
+            aiReviewResult.aiReview.riskLevel = 'high';
+          }
+
+          // 评论验证结果已经包含在aiReviewResult中
+
+        } catch (verificationError) {
+          console.error('评论验证过程出错:', verificationError);
+          // 验证失败不影响整体审核，但记录错误
+          aiReviewResult.aiReview.confidence *= 0.9;
+          aiReviewResult.aiReview.reasons.push('评论验证过程出错，使用基础审核');
+        }
       }
 
       console.log('🤖 最终AI审核结果:', aiReviewResult);
     }
 
     // 批量创建审核记录（使用新的多图格式）
-    const reviews = await Promise.all(imageUrls.map(async (url, index) => {
+    const reviews = await Promise.all((imageUrls && imageUrls.length > 0 ? imageUrls : [null]).map(async (url, index) => {
       const reviewData = {
         userId: req.user._id,
-        imageUrls: [url], // 多图格式：单图也存储为数组
+        imageUrls: url ? [url] : [], // 多图格式：单图也存储为数组，没有图片时为空数组
         imageType: imageType,
-        imageMd5s: [imageMd5s[index]], // 多图MD5格式：单MD5也存储为数组
+        imageMd5s: (imageMd5s && imageMd5s[index]) ? [imageMd5s[index]] : [], // 多图MD5格式：单MD5也存储为数组
         noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
         // 用户提供的笔记信息
-        userNoteInfo: (imageType === 'note' && noteAuthor && noteTitle) ? {
-          author: noteAuthor.trim(),
-          title: noteTitle.trim()
+        userNoteInfo: ((imageType === 'note' && noteAuthor && noteTitle) || (imageType === 'comment' && commentContent) || (imageType === 'customer_resource' && (customerPhone || customerWechat))) ? {
+          author: noteAuthor && noteAuthor.trim() ? noteAuthor.trim() : null,
+          title: noteTitle && noteTitle.trim() ? noteTitle.trim() : null,
+          comment: commentContent && commentContent.trim() ? commentContent.trim() : null,
+          customerPhone: customerPhone && customerPhone.trim() ? customerPhone.trim() : null,
+          customerWechat: customerWechat && customerWechat.trim() ? customerWechat.trim() : null
         } : null,
         snapshotPrice: taskConfig.price,
         snapshotCommission1: taskConfig.commission_1,
@@ -601,6 +724,10 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
             title: aiReviewResult.contentMatch.pageTitle
           };
         }
+        // 保存评论验证结果
+        if (aiReviewResult.commentVerification) {
+          reviewData.aiReviewResult.commentVerification = aiReviewResult.commentVerification;
+        }
       }
 
       // 如果AI审核通过且信心度足够高，直接设置为完成状态
@@ -623,6 +750,18 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
           comment: `AI自动审核通过 (信心度: ${(aiReviewResult.aiReview.confidence * 100).toFixed(1)}%)`,
           timestamp: new Date()
         });
+
+        // 如果是笔记类型，启用持续存在性检查（评论不需要定时检查）
+        if (imageType === 'note') {
+          // 计算第一次检查时间：创建时间 + 24小时
+          const firstCheckTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          reviewData.continuousCheck = {
+            enabled: true,
+            status: 'active',
+            nextCheckTime: firstCheckTime
+          };
+          console.log(`⏰ 已为笔记启用持续存在性检查，首次检查时间: ${firstCheckTime.toLocaleString()}`);
+        }
       }
 
       const review = await new ImageReview(reviewData).save();

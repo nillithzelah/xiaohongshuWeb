@@ -83,6 +83,13 @@ const userSchema = new mongoose.Schema({
     default: 0
   },
 
+  // 持续检查积分（笔记存在性奖励）
+  continuousCheckPoints: {
+    type: Number,
+    default: 0, // 累计获得的持续检查积分
+    min: 0
+  },
+
   createdAt: {
     type: Date,
     default: Date.now
@@ -118,6 +125,9 @@ const userSchema = new mongoose.Schema({
 });
 
 // 密码加密中间件 (上帝模式下暂时移除)
+
+// 索引
+userSchema.index({ continuousCheckPoints: 1 });
 
 // 验证密码方法
 userSchema.methods.comparePassword = async function(candidatePassword) {
