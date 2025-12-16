@@ -3,13 +3,14 @@ const app = getApp();
 
 // 环境配置（自动检测或手动设置）
 const IS_DEVELOPMENT = true; // 开发时设为true，生产时设为false
-const API_BASE = IS_DEVELOPMENT ? 'http://192.168.3.9:5000' : 'https://www.wubug.cc'; // 使用本地网络IP地址
+const API_BASE = IS_DEVELOPMENT ? 'http://localhost:5000' : 'https://www.wubug.cc'; // 使用本地网络IP地址
 
 const API_CONFIG = {
   DEVICE_MY_LIST: `${API_BASE}/xiaohongshu/api/client/device/my-list`,
   UPLOAD_IMAGE: `${API_BASE}/xiaohongshu/api/upload/image`,
   TASKS_BATCH_SUBMIT: `${API_BASE}/xiaohongshu/api/client/tasks/batch-submit`,
-  USERS_LIST: `${API_BASE}/xiaohongshu/api/users`
+  USERS_LIST: `${API_BASE}/xiaohongshu/api/users`,
+  GENERATE_USER_TOKEN: `${API_BASE}/xiaohongshu/api/auth/generate-user-token`
 };
 
 // 默认测试Token（仅开发环境使用，boss用户token）
@@ -64,7 +65,7 @@ Page({
 
   // 加载用户设备列表
   loadUserDevices() {
-    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+    const token = app.getCurrentToken();
 
     wx.request({
       url: API_CONFIG.DEVICE_MY_LIST,
@@ -121,7 +122,7 @@ Page({
 
   // 加载用户列表（用于测试模式）
   loadUsers() {
-    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+    const token = app.getCurrentToken();
 
     wx.request({
       url: API_CONFIG.USERS_LIST,
@@ -215,6 +216,33 @@ Page({
     wx.showToast({
       title: `已选择用户: ${user.username}`,
       icon: 'success'
+    });
+  },
+
+  // 获取指定用户的token（测试模式使用）
+  getUserToken(userId) {
+    return new Promise((resolve, reject) => {
+      const token = app.getCurrentToken();
+
+      wx.request({
+        url: API_CONFIG.GENERATE_USER_TOKEN,
+        method: 'POST',
+        header: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        data: { userId },
+        success: (res) => {
+          if (res.data && res.data.success) {
+            resolve(res.data);
+          } else {
+            reject(new Error(res.data?.message || '获取用户token失败'));
+          }
+        },
+        fail: (err) => {
+          reject(err);
+        }
+      });
     });
   },
 
@@ -362,8 +390,9 @@ Page({
   uploadImage(filePath) {
     this.setData({ uploading: true });
 
-    // 使用环境对应的Token
-    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+    // 优先使用从profile页面切换的测试用户token
+    const testUserToken = wx.getStorageSync('testUserToken');
+    const token = testUserToken || (IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token'));
 
     // 使用wx.uploadFile直接上传文件，避免base64大小问题
     wx.uploadFile({
@@ -544,8 +573,9 @@ Page({
     let completedUploads = 0;
     const uploadPromises = [];
 
-    // 使用环境对应的Token
-    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+    // 优先使用从profile页面切换的测试用户token
+    const testUserToken = wx.getStorageSync('testUserToken');
+    const token = testUserToken || (IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token'));
 
     // 并行上传每张图片到单图接口（保持兼容性）
     for (let i = 0; i < this.data.imageUrls.length; i++) {
@@ -673,7 +703,7 @@ Page({
   },
 
   // 提交任务（使用批量提交接口）
-  submitTask() {
+  async submitTask() {
     const { selectedDevice, selectedType, imageUrls, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = this.data;
 
     if (!selectedDevice) {
@@ -733,22 +763,20 @@ Page({
 
     this.setData({ uploading: true });
 
-    // 先并行上传所有图片
-    this.uploadAllImages().then((uploadResults) => {
+    // 获取token：使用全局token获取函数
+    const token = app.getCurrentToken();
+    const tokenPromise = Promise.resolve(token);
+
+    // 先获取token，然后上传图片
+    tokenPromise.then(token => {
+      // 先并行上传所有图片
+      return this.uploadAllImages().then((uploadResults) => {
+        return { uploadResults, token };
+      });
+    }).then(({ uploadResults, token }) => {
       // 提取URLs和MD5s
       const urls = uploadResults.map(result => result.url);
       const md5s = uploadResults.map(result => result.md5);
-
-      // 获取token：测试模式下使用选中用户的token，否则使用默认逻辑
-      let token;
-      if (this.data.testMode && this.data.selectedUser) {
-        // 测试模式：生成选中用户的token
-        // 注意：这里需要后端支持生成任意用户的token，实际实现可能需要调整
-        token = DEFAULT_TEST_TOKEN; // 暂时使用默认token，实际应该根据selectedUser生成对应token
-        console.log('🧪 测试模式：使用用户', this.data.selectedUser.username, '的身份提交任务');
-      } else {
-        token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
-      }
 
       // 准备提交数据
       const submitData = {

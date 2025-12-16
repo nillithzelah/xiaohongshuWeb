@@ -36,6 +36,28 @@ App({
     })
   },
 
+  // 获取当前使用的token（优先使用测试用户token）
+  getCurrentToken: function() {
+    // 优先使用从profile页面切换的测试用户token
+    const testUserToken = wx.getStorageSync('testUserToken');
+    if (testUserToken) {
+      console.log('🎯 使用测试用户token:', testUserToken.substring(0, 50) + '...');
+      return testUserToken;
+    }
+
+    // 开发环境使用默认token
+    const IS_DEVELOPMENT = true; // 与其他页面保持一致
+    if (IS_DEVELOPMENT) {
+      console.log('🎯 使用默认开发token');
+      return 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
+    }
+
+    // 生产环境使用存储的token
+    const token = wx.getStorageSync('token');
+    console.log('🎯 使用生产环境token:', token ? token.substring(0, 50) + '...' : '无token');
+    return token;
+  },
+
   globalData: {
     userInfo: null,
     token: null,

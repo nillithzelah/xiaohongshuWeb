@@ -18,6 +18,12 @@ const generateToken = (userId) => {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
 };
 
+// 生成指定用户的JWT token（仅管理员可用，用于测试）
+const generateUserToken = (userId, username) => {
+  const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
+  return jwt.sign({ userId, username }, JWT_SECRET, { expiresIn: '7d' });
+};
+
 // 微信小程序登录/注册
 router.post('/wechat-login', async (req, res) => {
   try {
@@ -281,6 +287,51 @@ router.post('/register', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('注册错误:', error);
     res.status(500).json({ success: false, message: '注册失败' });
+  }
+});
+
+// 生成指定用户的测试token（仅管理员可用）
+router.post('/generate-user-token', authenticateToken, async (req, res) => {
+  try {
+    console.log('🎯 生成用户token请求:', req.body);
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: '缺少userId参数' });
+    }
+
+    // 权限检查：只允许管理员使用
+    const adminRoles = ['boss', 'manager'];
+    if (!adminRoles.includes(req.user.role)) {
+      console.log('❌ 权限不足:', req.user.role, '尝试生成用户token');
+      return res.status(403).json({ success: false, message: '只有管理员可以生成用户token' });
+    }
+
+    // 查找用户
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    // 生成用户token
+    const token = generateUserToken(targetUser._id, targetUser.username);
+
+    console.log('✅ 成功生成用户token:', targetUser.username);
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: targetUser._id,
+        username: targetUser.username,
+        role: targetUser.role,
+        nickname: targetUser.nickname
+      }
+    });
+
+  } catch (error) {
+    console.error('生成用户token错误:', error);
+    res.status(500).json({ success: false, message: '生成token失败' });
   }
 });
 

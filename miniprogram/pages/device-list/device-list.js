@@ -1,8 +1,9 @@
 // pages/device-list/device-list.js
+const app = getApp();
 
 // 环境配置（与上传页面保持一致）
 const IS_DEVELOPMENT = true; // 开发时true，生产时false
-const API_BASE = IS_DEVELOPMENT ? 'http://192.168.3.9:5000' : 'https://www.wubug.cc';
+const API_BASE = IS_DEVELOPMENT ? 'http://localhost:5000' : 'https://www.wubug.cc';
 
 const API_CONFIG = {
   DEVICE_MY_LIST: `${API_BASE}/xiaohongshu/api/client/device/my-list`
@@ -40,7 +41,7 @@ Page({
     // 设置加载状态
     this.setData({ loading: true });
 
-    const token = IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token');
+    const token = app.getCurrentToken();
 
     wx.request({
       url: API_CONFIG.DEVICE_MY_LIST,
