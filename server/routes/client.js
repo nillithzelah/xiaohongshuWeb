@@ -373,7 +373,7 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
     // 验证不同类型的要求
     if (imageType === 'note') {
       if (!noteUrl || noteUrl.trim() === '') {
-        return res.status(400).json({ success: false, message: '笔记类型必须填写小红书笔记链接' });
+        return res.status(400).json({ success: false, message: '笔记类型必须填写笔记链接' });
       }
       if (!noteAuthor || noteAuthor.trim() === '') {
         return res.status(400).json({ success: false, message: '笔记类型必须填写作者昵称' });
@@ -383,7 +383,7 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       }
     } else if (imageType === 'comment') {
       if (!noteUrl || noteUrl.trim() === '') {
-        return res.status(400).json({ success: false, message: '评论类型必须填写小红书笔记链接' });
+        return res.status(400).json({ success: false, message: '评论类型必须填写链接' });
       }
       if (!noteAuthor || noteAuthor.trim() === '') {
         return res.status(400).json({ success: false, message: '评论类型必须填写作者昵称' });
@@ -409,7 +409,7 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
     if (noteUrl && noteUrl.trim() !== '') {
       const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/.+/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
-        return res.status(400).json({ success: false, message: '小红书笔记链接格式不正确' });
+        return res.status(400).json({ success: false, message: '笔记链接格式不正确' });
       }
     }
 
@@ -657,6 +657,15 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       console.log('🤖 最终AI审核结果:', aiReviewResult);
     }
 
+    // 获取用户的mentor信息
+    const user = await require('../models/User').findById(req.user._id);
+    let mentorInfo = null;
+    if (user && user.mentor_id) {
+      mentorInfo = {
+        reviewer: user.mentor_id // 只保存ObjectId，populate会在查询时填充
+      };
+    }
+
     // 批量创建审核记录（使用新的多图格式）
     const reviews = await Promise.all((imageUrls && imageUrls.length > 0 ? imageUrls : [null]).map(async (url, index) => {
       const reviewData = {
@@ -681,6 +690,7 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
           status: device.status,
           influence: device.influence
         },
+        mentorReview: mentorInfo, // 添加mentor信息
         auditHistory: [{
           operator: req.user._id,
           operatorName: req.user.username,

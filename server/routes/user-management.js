@@ -280,4 +280,69 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// 更新用户培训状态（升级/降级专用）
+router.put('/:id/training-status', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { training_status } = req.body;
+
+    if (!training_status) {
+      return res.status(400).json({ success: false, message: '培训状态不能为空' });
+    }
+
+    // 查找要更新的用户
+    const targetUser = await User.findById(id);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    // 检查用户是否为兼职用户
+    if (targetUser.role !== 'part_time') {
+      return res.status(400).json({ success: false, message: '只能修改兼职用户的培训状态' });
+    }
+
+    // 权限检查：老板、主管可以修改所有兼职用户，带教老师只能修改自己名下的用户
+    const currentUserRole = req.user.role;
+    const hasPermission = currentUserRole === 'boss' ||
+                         currentUserRole === 'manager' ||
+                         (currentUserRole === 'mentor' && targetUser.mentor_id?.toString() === req.user.id);
+
+    if (!hasPermission) {
+      return res.status(403).json({ success: false, message: '没有权限修改此用户的培训状态' });
+    }
+
+    // 验证培训状态是否有效
+    const validStatuses = [
+      '已筛选', '培训中', '业务实操', '评论能力培养',
+      '发帖能力培养', '素人已申请发帖内容', '持续跟进', '已结业',
+      '未通过', '中止'
+    ];
+
+    if (!validStatuses.includes(training_status)) {
+      return res.status(400).json({ success: false, message: '无效的培训状态' });
+    }
+
+    // 更新培训状态
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      { training_status },
+      { new: true }
+    ).select('-password');
+
+    res.json({
+      success: true,
+      message: '培训状态更新成功',
+      user: {
+        id: updatedUser._id,
+        username: updatedUser.username,
+        training_status: updatedUser.training_status
+      }
+    });
+
+  } catch (error) {
+    console.error('更新培训状态错误:', error);
+    res.status(500).json({ success: false, message: '更新培训状态失败' });
+  }
+});
+
 module.exports = router;

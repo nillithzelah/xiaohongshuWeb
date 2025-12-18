@@ -1,7 +1,7 @@
 // 小程序API配置管理
 
 // 当前环境设置（开发时改为 'development'，生产时改为 'production'）
-const CURRENT_ENV = 'development';
+const CURRENT_ENV = 'production';
 
 // 开发环境配置
 const development = {

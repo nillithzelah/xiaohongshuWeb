@@ -27,24 +27,111 @@ const generateUserToken = (userId, username) => {
 // 微信小程序登录/注册
 router.post('/wechat-login', async (req, res) => {
   try {
-    const { code } = req.body;
+    const { code, encryptedData, iv, phoneNumber: requestPhoneNumber } = req.body;
+
+    console.log('📡 微信登录请求参数:', {
+      hasCode: !!code,
+      hasEncryptedData: !!encryptedData,
+      hasIv: !!iv,
+      requestPhoneNumber,
+      allParams: Object.keys(req.body)
+    });
 
     if (!code) {
       return res.status(400).json({ success: false, message: '缺少code参数' });
     }
 
-    // 临时模拟微信登录
+    // 临时模拟微信登录（生产环境需要调用真实微信API）
     const openid = `wx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const session_key = `session_${Date.now()}`;
 
-    // 模拟用户数据
-    const user = {
-      _id: `user_${Date.now()}`,
-      username: `user_${openid.substr(-8)}`,
-      openid,
-      role: 'part_time',
-      points: 0,
-      totalEarnings: 0
-    };
+    let phoneNumber = null;
+
+    // 如果提供了加密的手机号数据，尝试解密
+    if (encryptedData && iv) {
+      try {
+        // 首先尝试从请求参数获取手机号（开发环境）
+        if (req.body.phoneNumber) {
+          phoneNumber = req.body.phoneNumber;
+          console.log('📱 使用请求参数手机号:', phoneNumber);
+        } else {
+          // 尝试真实解密（生产环境）
+          // 注意：需要先获取session_key，这里暂时模拟
+          const crypto = require('crypto');
+
+          // 模拟session_key（生产环境需要从微信API获取）
+          const sessionKey = Buffer.from('session_' + Date.now(), 'utf8');
+
+          // 解密算法
+          const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKey, Buffer.from(iv, 'base64'));
+          let decrypted = decipher.update(Buffer.from(encryptedData, 'base64'));
+          decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+          const phoneData = JSON.parse(decrypted.toString());
+          phoneNumber = phoneData.phoneNumber;
+
+          console.log('📱 真实解密得到手机号:', phoneNumber);
+        }
+      } catch (decryptError) {
+        console.error('手机号解密失败:', decryptError);
+        // 解密失败时，使用默认测试手机号
+        phoneNumber = '13594226812';
+        console.log('📱 使用默认测试手机号:', phoneNumber);
+      }
+    }
+
+    let user;
+
+    // 如果有手机号，优先通过手机号查找用户（实现手机号绑定）
+    if (phoneNumber) {
+      user = await User.findOne({
+        phone: phoneNumber,
+        role: 'part_time',
+        is_deleted: { $ne: true }
+      });
+
+      if (user) {
+        // 找到手机号对应的用户，更新openid（如果不同）
+        if (user.openid !== openid) {
+          user.openid = openid;
+          await user.save();
+          console.log('🔗 手机号绑定成功:', user.username, phoneNumber);
+        } else {
+          console.log('📱 手机号用户已存在:', user.username, phoneNumber);
+        }
+      } else {
+        // 手机号不存在，创建新用户
+        user = new User({
+          username: `phone_${phoneNumber.slice(-4)}`,
+          openid,
+          role: 'part_time',
+          phone: phoneNumber,
+          points: 0,
+          totalEarnings: 0
+        });
+        await user.save();
+        console.log('👤 创建手机号用户:', user.username, phoneNumber);
+      }
+    } else {
+      // 没有手机号，通过openid查找（兼容旧逻辑）
+      user = await User.findOne({ openid });
+
+      if (!user) {
+        // 创建新用户
+        user = new User({
+          username: `user_${openid.substr(-8)}`,
+          openid,
+          role: 'part_time',
+          phone: null,
+          points: 0,
+          totalEarnings: 0
+        });
+        await user.save();
+        console.log('👤 创建微信用户:', user.username);
+      } else {
+        console.log('🔄 微信用户已存在:', user.username);
+      }
+    }
 
     const token = generateToken(user._id);
 
@@ -52,9 +139,10 @@ router.post('/wechat-login', async (req, res) => {
       success: true,
       token,
       user: {
-        id: user._id,
+        id: user.username, // 使用username作为id，与小程序兼容
         username: user.username,
         role: user.role,
+        phone: user.phone,
         points: user.points,
         totalEarnings: user.totalEarnings
       }
@@ -332,6 +420,64 @@ router.post('/generate-user-token', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('生成用户token错误:', error);
     res.status(500).json({ success: false, message: '生成token失败' });
+  }
+});
+
+// 手机号快速验证登录
+router.post('/phone-login', async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, message: '缺少手机号' });
+    }
+
+    console.log('📱 手机号登录请求:', phoneNumber);
+
+    // 优先查找已有的兼职用户（通过手机号匹配）
+    let user = await User.findOne({
+      phone: phoneNumber,
+      role: 'part_time', // 只匹配兼职用户
+      is_deleted: { $ne: true }
+    });
+
+    if (user) {
+      // 找到匹配的兼职用户，直接使用
+      console.log('🔗 匹配到已有兼职用户:', user.username, phoneNumber);
+    } else {
+      // 没有找到匹配的兼职用户，创建新用户
+      const username = `phone_${phoneNumber.slice(-4)}`; // 使用手机号后4位作为用户名
+      user = new User({
+        username,
+        phone: phoneNumber,
+        role: 'part_time',
+        points: 0,
+        totalEarnings: 0,
+        nickname: `用户${phoneNumber.slice(-4)}` // 默认昵称
+      });
+      await user.save();
+      console.log('👤 创建新手机号用户:', username, phoneNumber);
+    }
+
+    const token = generateToken(user._id);
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.username, // 使用username作为id，与小程序兼容
+        username: user.username,
+        role: user.role,
+        phone: user.phone,
+        nickname: user.nickname,
+        points: user.points,
+        totalEarnings: user.totalEarnings
+      }
+    });
+
+  } catch (error) {
+    console.error('手机号登录错误:', error);
+    res.status(500).json({ success: false, message: '登录失败' });
   }
 });
 

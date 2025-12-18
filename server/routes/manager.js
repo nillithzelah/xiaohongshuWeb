@@ -40,6 +40,7 @@ router.get('/leads', authenticateToken, requireRole(['manager', 'boss']), async 
         wechat: lead.wechat,
         notes: lead.notes,
         hr_id: lead.hr_id,
+        xiaohongshuAccounts: lead.xiaohongshuAccounts, // 添加小红书账号信息
         createdAt: lead.createdAt
       })),
       pagination: {
@@ -107,6 +108,35 @@ router.put('/assign-mentor/:leadId', authenticateToken, requireRole(['manager', 
 
     // 分配带教老师
     leadUser.mentor_id = mentor_id;
+    leadUser.assigned_to_mentor_at = new Date();
+
+    // 根据小红书账号信息创建设备
+    const Device = require('../models/Device');
+    const createdDevices = [];
+
+    if (leadUser.xiaohongshuAccounts && leadUser.xiaohongshuAccounts.length > 0) {
+      for (let i = 0; i < leadUser.xiaohongshuAccounts.length; i++) {
+        const account = leadUser.xiaohongshuAccounts[i];
+        const device = new Device({
+          accountName: account.account,
+          nickname: account.nickname,
+          assignedUser: leadUser._id,
+          mentor_id: mentor_id,
+          status: 'online',
+          influence: ['new']
+        });
+
+        await device.save();
+        createdDevices.push(device);
+
+        // 更新账号状态和设备关联
+        leadUser.xiaohongshuAccounts[i].deviceId = device._id;
+        leadUser.xiaohongshuAccounts[i].status = 'assigned';
+      }
+
+      // 标记数组已修改，确保保存到数据库
+      leadUser.markModified('xiaohongshuAccounts');
+    }
 
     await leadUser.save();
 

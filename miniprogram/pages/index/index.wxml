@@ -1,7 +1,7 @@
 <!-- pages/index/index.wxml -->
 <view class="container">
 
-  <!-- 👤 简化的用户信息头图 (静态展示，不需按钮) -->
+  <!-- 👤 简化的用户信息头图 -->
   <view class="header-card">
     <view class="user-info">
       <view class="avatar-container">
@@ -9,7 +9,19 @@
       </view>
       <view class="user-text">
         <view class="greeting">你好，{{userInfo.nickName || '奋斗者'}}</view>
-        <view class="subtitle">今天也是努力搞钱的一天！💪</view>
+        <view class="subtitle">{{userInfo.phone ? '今天也是努力搞积分的一天！💪' : '请先完成手机号授权'}}</view>
+
+        <!-- 📱 手机号授权按钮 -->
+        <view class="phone-auth-section" wx:if="{{!userInfo.phone}}">
+          <button
+            class="auth-button"
+            open-type="getPhoneNumber"
+            bindgetphonenumber="onGetPhoneNumber"
+          >
+            📱 授权获取手机号
+          </button>
+          <view class="auth-tip">授权后即可开始使用完整功能</view>
+        </view>
       </view>
     </view>
   </view>
@@ -19,8 +31,6 @@
     <swiper
       class="card-swiper"
       indicator-dots="{{true}}"
-      indicator-color="rgba(255, 255, 255, .3)"
-      indicator-active-color="#ffffff"
       autoplay="{{true}}"
       interval="4000"
       duration="500"
@@ -33,12 +43,18 @@
         <swiper-item class="card-swiper-item">
           <view class="swiper-box {{cardCur==index?'cur':''}}">
             <image src="{{item.url}}" class="swiper-image" mode="aspectFill"></image>
-            <!-- 可以在图上加文字 -->
-            <view class="swiper-text" wx:if="{{item.title}}">{{item.title}}</view>
           </view>
         </swiper-item>
       </block>
     </swiper>
+
+    <!-- 通告栏 -->
+    <view class="announcement-bar">
+      <view class="announcement-content">
+        📢 今日笔记任务单价上调至 10 积分！
+      </view>
+    </view>
+  
   </view>
 
   <!-- 📋 审核记录列表 -->
@@ -55,7 +71,10 @@
     <!-- 列表内容 -->
     <block wx:for="{{reviews}}" wx:key="_id">
       <view class="review-card">
-        <image class="card-thumb" src="{{item.imageUrl}}" mode="aspectFill"></image>
+        <view class="card-thumb-container">
+          <image class="card-thumb" src="{{item.imageUrl}}" mode="aspectFill"></image>
+          <view class="completion-icon" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">✓</view>
+        </view>
         <view class="card-content">
           <view class="card-row">
             <text class="task-type">{{item.imageType === 'customer_resource' ? '客资' : (item.imageType === 'note' ? '笔记' : '评论')}}</text>
@@ -68,7 +87,7 @@
           </view>
           <view class="card-row time-row">
             <text class="submit-time">{{item.deviceName}} · {{item.formattedTime}}</text>
-            <text class="amount" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">+ ¥{{item.snapshotPrice}}</text>
+            <text class="amount" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">+ {{item.snapshotPrice}}</text>
           </view>
 
           <!-- 驳回原因 -->
@@ -82,6 +101,37 @@
     <!-- 加载更多/到底提示 -->
     <view class="loading-more" wx:if="{{reviews.length > 0}}">
       {{hasMore ? '加载中...' : '--- 到底啦 ---'}}
+    </view>
+  </view>
+
+  <!-- 📱 手机号授权模态框 -->
+  <view class="phone-auth-modal" wx:if="{{showPhoneAuthModal}}">
+    <view class="modal-mask" wx:if="{{!forceAuth}}" bindtap="closePhoneAuthModal"></view>
+    <view class="modal-mask force-mask" wx:if="{{forceAuth}}"></view>
+    <view class="modal-content">
+      <view class="modal-header">
+        <text class="modal-title">📱 手机号授权</text>
+      </view>
+      <view class="modal-body">
+        <view class="auth-icon">📞</view>
+        <view class="auth-text">
+          <text wx:if="{{!forceAuth}}">为了更好地为您服务，需要获取您的手机号信息，账号仅限特定人群登录并进行登录账号鉴权</text>
+          <text wx:if="{{forceAuth}}">为了您的账户安全和完整功能使用，必须获取您的手机号信息</text>
+        </view>
+        <view class="auth-tips">
+          <text>授权后即可享受完整功能，包括任务提交、审核进度查看等</text>
+        </view>
+      </view>
+      <view class="modal-footer">
+        <button class="cancel-btn" wx:if="{{!forceAuth}}" bindtap="closePhoneAuthModal">暂不授权</button>
+        <button
+          class="auth-btn"
+          open-type="getPhoneNumber"
+          bindgetphonenumber="onGetPhoneNumber"
+        >
+          📱 立即授权
+        </button>
+      </view>
     </view>
   </view>
 </view>

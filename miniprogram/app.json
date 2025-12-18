@@ -8,30 +8,30 @@
   "window": {
     "backgroundTextStyle": "light",
     "navigationBarBackgroundColor": "#fff",
-    "navigationBarTitleText": "小红书审核",
+    "navigationBarTitleText": "审核系统",
     "navigationBarTextStyle": "black",
     "enablePullDownRefresh": true,
     "backgroundColor": "#f7f8fa"
-  },
-  "window": {
-    "backgroundTextStyle": "light",
-    "navigationBarBackgroundColor": "#fff",
-    "navigationBarTitleText": "小红书审核",
-    "navigationBarTextStyle": "black"
   },
   "tabBar": {
     "list": [
       {
         "pagePath": "pages/index/index",
-        "text": "首页"
+        "text": "首页",
+        "iconPath": "images/home.png",
+        "selectedIconPath": "images/home-active.png"
       },
       {
         "pagePath": "pages/upload/upload",
-        "text": "上传"
+        "text": "上传",
+        "iconPath": "images/upload.png",
+        "selectedIconPath": "images/upload-active.png"
       },
       {
         "pagePath": "pages/profile/profile",
-        "text": "我的"
+        "text": "我的",
+        "iconPath": "images/profile.png",
+        "selectedIconPath": "images/profile-active.png"
       }
     ]
   },

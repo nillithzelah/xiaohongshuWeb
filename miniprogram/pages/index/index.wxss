@@ -1,10 +1,29 @@
 /* pages/index/index.wxss */
 page {
-  background-color: #f5f7fa;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  min-height: 100vh;
 }
+
 
 .container {
   padding-bottom: 40rpx;
+  position: relative;
+}
+
+/* 添加背景装饰 */
+.container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(120, 219, 226, 0.08) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
 }
 
 /* 🖼️ 画廊轮播图样式 */
@@ -17,6 +36,19 @@ page {
   height: 360rpx; /* 轮播图高度 */
 }
 
+/* 自定义轮播图指示点样式 */
+.card-swiper .wx-swiper-dot {
+  width: 32rpx;
+  height: 6rpx;
+  border-radius: 3rpx;
+  background: rgba(0, 0, 0, 0.3);
+  margin: 0 6rpx;
+}
+
+.card-swiper .wx-swiper-dot.wx-swiper-dot-active {
+  background: #667eea;
+}
+
 .card-swiper-item {
   display: flex;
   justify-content: center;
@@ -27,19 +59,19 @@ page {
 .swiper-box {
   width: 100%;
   height: 100%;
-  border-radius: 16rpx;
+  border-radius: 20rpx;
   overflow: hidden;
-  transform: scale(0.92); /* 默认缩小一点 */
-  transition: all 0.2s ease-in 0s;
-  box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.1);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 8rpx 20rpx rgba(0, 0, 0, 0.15);
   position: relative;
   margin: 0 10rpx; /* 图片之间的间距 */
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+  transform: translateZ(0); /* 启用硬件加速 */
 }
 
 /* 当前选中的图片放大 */
 .swiper-box.cur {
-  transform: scale(1);
-  box-shadow: 0 8rpx 20rpx rgba(24, 144, 255, 0.3); /* 选中时加深阴影 */
+  box-shadow: 0 12rpx 30rpx rgba(102, 126, 234, 0.4);
   z-index: 10;
 }
 
@@ -64,25 +96,52 @@ page {
   backdrop-filter: blur(4px);
 }
 
+/* 通告栏 */
+.announcement-bar {
+  background: linear-gradient(135deg, #f0f2ff 0%, #e8f2ff 100%);
+  border-radius: 12rpx;
+  margin: 20rpx 30rpx 32rpx 30rpx;
+  padding: 16rpx 20rpx;
+  border-left: 4rpx solid #667eea;
+  position: relative;
+  z-index: 10;
+}
+
+.announcement-content {
+  font-size: 26rpx;
+  color: #856404;
+  line-height: 1.4;
+  text-align: center;
+  font-weight: 500;
+}
+
 /* 👤 头部用户信息卡片 */
 .header-card {
-  background: #fff;
-  padding: 30rpx;
+  background: #ffffff;
+  padding: 32rpx;
   margin: 20rpx 30rpx;
   border-radius: 20rpx;
-  box-shadow: 0 4rpx 12rpx rgba(0,0,0,0.05);
+  border: 1rpx solid #EBEEF5;
+  position: relative;
+  overflow: hidden;
 }
 
 .user-info {
   display: flex;
   align-items: center;
+  justify-content: space-between;
 }
 
 .avatar {
   width: 100rpx;
   height: 100rpx;
   border-radius: 50%;
-  border: 4rpx solid #f0f0f0;
+  background: #f5f5f5;
+  transition: all 0.3s ease;
+}
+
+.avatar:hover {
+  transform: scale(1.05);
 }
 
 .user-text {
@@ -97,8 +156,30 @@ page {
 
 .subtitle {
   font-size: 24rpx;
-  color: #999;
+  color: #606266;
   margin-top: 8rpx;
+}
+
+/* 手机号授权按钮 */
+.phone-auth-container {
+  margin-left: 20rpx;
+}
+
+.phone-auth-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 24rpx;
+  border-radius: 20rpx;
+  padding: 12rpx 24rpx;
+  border: none;
+  box-shadow: 0 4rpx 12rpx rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+  min-width: 120rpx;
+}
+
+.phone-auth-btn:hover {
+  transform: translateY(-2rpx);
+  box-shadow: 0 6rpx 16rpx rgba(102, 126, 234, 0.4);
 }
 
 /* 📋 列表样式 */
@@ -114,25 +195,55 @@ page {
 }
 
 .review-card {
-  background: #fff;
-  border-radius: 16rpx;
-  padding: 24rpx;
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 20rpx;
   margin-bottom: 20rpx;
   display: flex;
-  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.03);
+  border: 1rpx solid #EBEEF5;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.review-card:hover {
+  transform: translateY(-1rpx);
+  border-color: #667eea;
+}
+
+.card-thumb-container {
+  position: relative;
+  flex-shrink: 0;
 }
 
 .card-thumb {
-  width: 120rpx;
-  height: 120rpx;
+  width: 100rpx;
+  height: 100rpx;
   border-radius: 12rpx;
   background: #f0f0f0;
-  flex-shrink: 0;
+}
+
+.completion-icon {
+  position: absolute;
+  top: -8rpx;
+  right: -8rpx;
+  width: 32rpx;
+  height: 32rpx;
+  background: #52c41a;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20rpx;
+  font-weight: bold;
+  border: 2rpx solid #fff;
+  box-shadow: 0 2rpx 8rpx rgba(82, 196, 26, 0.3);
 }
 
 .card-content {
   flex: 1;
-  margin-left: 24rpx;
+  margin-left: 20rpx;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -160,9 +271,10 @@ page {
 }
 
 .amount {
-  font-size: 32rpx;
-  color: #52c41a;
+  font-size: 40rpx;
+  color: #ff4d4f;
   font-weight: bold;
+  text-shadow: 0 2rpx 4rpx rgba(255, 77, 79, 0.3);
 }
 
 /* 状态标签颜色 */
@@ -170,13 +282,14 @@ page {
   font-size: 22rpx;
   padding: 4rpx 12rpx;
   border-radius: 8rpx;
+  font-weight: 500;
 }
 .status-tag.pending, .status-tag.cs_review, .status-tag.boss_approved {
   background: #e6f7ff;
   color: #1890ff;
 }
 .status-tag.completed, .status-tag.finance_done {
-  background: #f6ffed;
+  background: #f0f9ff;
   color: #52c41a;
 }
 .status-tag.rejected {
@@ -208,11 +321,35 @@ page {
 
 .go-upload-btn {
   margin-top: 30rpx;
-  background: #1890ff;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: #fff;
   font-size: 28rpx;
   border-radius: 40rpx;
   padding: 0 60rpx;
+  box-shadow: 0 6rpx 16rpx rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.go-upload-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  transition: left 0.6s;
+}
+
+.go-upload-btn:hover {
+  transform: translateY(-2rpx);
+  box-shadow: 0 10rpx 24rpx rgba(102, 126, 234, 0.4);
+}
+
+.go-upload-btn:hover::before {
+  left: 100%;
 }
 
 .loading-more {
@@ -220,4 +357,113 @@ page {
   color: #ccc;
   font-size: 24rpx;
   padding: 20rpx 0;
+}
+
+/* 📱 手机号授权模态框 */
+.phone-auth-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
+}
+
+.modal-mask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  overflow: hidden;
+  box-shadow: 0 20rpx 40rpx rgba(0, 0, 0, 0.3);
+}
+
+.modal-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 40rpx 30rpx 30rpx;
+  text-align: center;
+}
+
+.modal-title {
+  color: #fff;
+  font-size: 36rpx;
+  font-weight: bold;
+}
+
+.modal-body {
+  padding: 40rpx 30rpx;
+  text-align: center;
+}
+
+.auth-icon {
+  font-size: 120rpx;
+  margin-bottom: 20rpx;
+  display: block;
+}
+
+.auth-text {
+  font-size: 30rpx;
+  color: #333;
+  margin-bottom: 20rpx;
+  line-height: 1.4;
+}
+
+.auth-tips {
+  font-size: 24rpx;
+  color: #666;
+  line-height: 1.4;
+}
+
+.modal-footer {
+  display: flex;
+  padding: 0 30rpx 30rpx;
+  gap: 20rpx;
+}
+
+.cancel-btn, .auth-btn {
+  flex: 1;
+  height: 80rpx;
+  border-radius: 40rpx;
+  font-size: 28rpx;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.cancel-btn {
+  background: #f5f5f5;
+  color: #666;
+  border: 1rpx solid #ddd;
+}
+
+.cancel-btn:active {
+  background: #e8e8e8;
+  transform: scale(0.98);
+}
+
+.auth-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border: none;
+  box-shadow: 0 6rpx 16rpx rgba(102, 126, 234, 0.3);
+}
+
+.auth-btn:active {
+  transform: scale(0.98);
+  box-shadow: 0 4rpx 12rpx rgba(102, 126, 234, 0.4);
 }

@@ -64,6 +64,7 @@ function registerRoutes() {
   apiRouter.use('/users', require('./routes/user-management'));
   apiRouter.use('/user', require('./routes/user'));
   apiRouter.use('/reviews', require('./routes/reviews'));
+  console.log('✅ /xiaohongshu/api/reviews 路由已注册');
   apiRouter.use('/admin', require('./routes/admin'));
   apiRouter.use('/client', require('./routes/client'));
   apiRouter.use('/upload', require('./routes/upload'));

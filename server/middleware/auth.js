@@ -18,7 +18,16 @@ const authenticateToken = async (req, res, next) => {
     console.log('✅ Token验证成功:', decoded);
 
     // 从数据库获取真实用户信息
-    const user = await User.findById(decoded.userId).select('-password');
+    let user;
+    try {
+      // 首先尝试按ObjectId查找
+      user = await User.findById(decoded.userId).select('-password');
+    } catch (error) {
+      // 如果ObjectId查找失败，尝试按username查找（兼容旧数据）
+      console.log('ObjectId查找失败，尝试按username查找:', decoded.userId);
+      user = await User.findOne({ username: decoded.userId }).select('-password');
+    }
+
     if (!user) {
       return res.status(401).json({ success: false, message: '用户不存在' });
     }
@@ -30,7 +39,7 @@ const authenticateToken = async (req, res, next) => {
 
     req.user = {
       _id: user._id,
-      id: user._id.toString(),
+      id: user.username, // 使用username作为id，与小程序兼容
       username: user.username,
       role: user.role,
       nickname: user.nickname

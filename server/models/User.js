@@ -113,6 +113,28 @@ const userSchema = new mongoose.Schema({
     default: null // 默认为null，表示未设置
   },
 
+  // 小红书账号信息（HR创建线索时录入）
+  xiaohongshuAccounts: [{
+    account: {
+      type: String,
+      required: true
+    },
+    nickname: {
+      type: String,
+      required: true
+    },
+    deviceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Device',
+      default: null
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'assigned', 'active'],
+      default: 'pending'
+    }
+  }],
+
   // 软删除相关字段
   is_deleted: {
     type: Boolean,
@@ -120,6 +142,11 @@ const userSchema = new mongoose.Schema({
   },
   deleted_at: {
     type: Date,
+    default: null
+  },
+  deleted_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
     default: null
   }
 });

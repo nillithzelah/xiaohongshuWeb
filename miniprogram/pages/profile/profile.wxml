@@ -7,10 +7,6 @@
       <view class="user-info">
         <text class="nickname">{{userInfo.nickname || '未设置昵称'}}</text>
         <text class="username">{{userInfo.username}}</text>
-        <!-- 测试用户标识 -->
-        <view class="test-user-badge" wx:if="{{testUser}}">
-          <text class="test-badge-text">🧪 测试模式</text>
-        </view>
       </view>
     </view>
   </view>
@@ -18,7 +14,7 @@
   <!-- 资产卡片 -->
   <view class="assets-card">
     <view class="asset-item">
-      <view class="asset-icon">💰</view>
+      <view class="asset-icon">⭐</view>
       <view class="asset-info">
         <text class="asset-value">{{balance}}</text>
         <text class="asset-label">积分余额</text>
@@ -28,10 +24,11 @@
     <view class="asset-item">
       <view class="asset-icon">📈</view>
       <view class="asset-info">
-        <text class="asset-value">¥{{totalEarnings}}</text>
+        <text class="asset-value">{{totalEarnings}}</text>
         <text class="asset-label">累计收益</text>
       </view>
     </view>
+    <view class="asset-vertical-divider"></view>
   </view>
 
   <!-- 菜单列表 -->
@@ -42,57 +39,8 @@
       <view class="menu-arrow">›</view>
     </navigator>
 
-    <!-- 测试模式：用户切换 -->
-    <view class="menu-item" bindtap="showUserSelector">
-      <view class="menu-icon">👤</view>
-      <text class="menu-text">测试模式 - 切换用户</text>
-      <view class="menu-badge">测试</view>
-      <view class="menu-arrow">›</view>
-    </view>
 
-    <view class="menu-item" bindtap="logout">
-      <view class="menu-icon">🚪</view>
-      <text class="menu-text">退出登录</text>
-      <view class="menu-arrow">›</view>
-    </view>
+
   </view>
 
-  <!-- 底部提示 -->
-  <view class="footer-tips">
-    <text>💡 如有问题请联系客服</text>
-  </view>
-
-  <!-- 用户选择器弹窗 -->
-  <view class="user-selector-modal" wx:if="{{showUserSelector}}" bindtap="hideUserSelector">
-    <view class="modal-content" bindtap="">
-      <view class="modal-header">
-        <text class="modal-title">选择测试用户</text>
-        <view class="modal-close" bindtap="hideUserSelector">×</view>
-      </view>
-
-      <view class="modal-body">
-        <view class="user-list">
-          <view
-            wx:for="{{users}}"
-            wx:key="_id"
-            class="user-item"
-            bindtap="selectUser"
-            data-user="{{item}}"
-          >
-            <view class="user-avatar">{{item.username.charAt(0).toUpperCase()}}</view>
-            <view class="user-details">
-              <text class="user-name">{{item.username}}</text>
-              <text class="user-nickname" wx:if="{{item.nickname}}">({{item.nickname}})</text>
-              <text class="user-role">{{item.role}}</text>
-            </view>
-            <view class="user-points">积分: {{item.points || 0}}</view>
-          </view>
-        </view>
-      </view>
-
-      <view class="modal-footer">
-        <button class="cancel-btn" bindtap="hideUserSelector">取消</button>
-      </view>
-    </view>
-  </view>
 </view>

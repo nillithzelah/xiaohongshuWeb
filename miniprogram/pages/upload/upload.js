@@ -1,16 +1,15 @@
 // pages/upload/upload.js
 const app = getApp();
 
-// 环境配置（自动检测或手动设置）
-const IS_DEVELOPMENT = true; // 开发时设为true，生产时设为false
-const API_BASE = IS_DEVELOPMENT ? 'http://localhost:5000' : 'https://www.wubug.cc'; // 使用本地网络IP地址
+const CONFIG = require('../../config.js');
 
 const API_CONFIG = {
-  DEVICE_MY_LIST: `${API_BASE}/xiaohongshu/api/client/device/my-list`,
-  UPLOAD_IMAGE: `${API_BASE}/xiaohongshu/api/upload/image`,
-  TASKS_BATCH_SUBMIT: `${API_BASE}/xiaohongshu/api/client/tasks/batch-submit`,
-  USERS_LIST: `${API_BASE}/xiaohongshu/api/users`,
-  GENERATE_USER_TOKEN: `${API_BASE}/xiaohongshu/api/auth/generate-user-token`
+  DEVICE_MY_LIST: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/device/my-list`,
+  UPLOAD_IMAGE: `${CONFIG.API_BASE_URL}/xiaohongshu/api/upload/image`,
+  TASKS_BATCH_SUBMIT: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/tasks/batch-submit`,
+  USERS_LIST: `${CONFIG.API_BASE_URL}/xiaohongshu/api/users`,
+  GENERATE_USER_TOKEN: `${CONFIG.API_BASE_URL}/xiaohongshu/api/auth/generate-user-token`,
+  TASK_CONFIGS: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/task-configs`
 };
 
 // 默认测试Token（仅开发环境使用，boss用户token）
@@ -21,25 +20,20 @@ const API_CONFIG = {
 // 注意：JWT签名生成有问题，暂时使用boss用户确保功能可用
 const DEFAULT_TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
 
-console.log(`🚀 小程序环境: ${IS_DEVELOPMENT ? '开发环境' : '生产环境'}`);
-console.log(`📡 API地址: ${API_BASE}`);
+console.log(`🚀 小程序环境: ${CONFIG.ENV}`);
+console.log(`📡 API地址: ${CONFIG.API_BASE_URL}`);
 
 Page({
   data: {
-    // 任务类型配置 (对应后端的 TaskConfig)
-    // 注意：这里的 value 必须和数据库 TaskConfig 的 type_key 一致
-    taskTypes: [
-      { id: 1, value: 'customer_resource', name: '客资', price: '5.00', desc: '上传客户添加好友截图', icon: '👥' },
-      { id: 2, value: 'note', name: '笔记', price: '10.00', desc: '发布小红书笔记截图', icon: '📝' },
-      { id: 3, value: 'comment', name: '评论', price: '3.00', desc: '笔记下方评论截图', icon: '💬' }
-    ],
+    // 任务类型配置 (从后端动态获取)
+    taskTypes: [],
     devices: [], // 用户的设备列表
     selectedDevice: null, // 选中的设备
     selectedType: null, // 当前选中的类型对象
     imageUrls: [], // 多张图片地址数组
     imageMd5s: [], // 多张图片的MD5数组
     displayList: [], // 显示列表（图片 + 添加按钮）
-    noteUrl: '', // 小红书笔记链接
+    noteUrl: '', // 笔记链接
     noteAuthor: '', // 笔记作者昵称
     noteTitle: '', // 笔记标题
     commentContent: '', // 评论内容（评论类型专用）
@@ -49,6 +43,7 @@ Page({
     uploadProgress: 0, // 上传进度 (0-100)
     uploadStatus: '', // 上传状态文本
     processingMd5: false, // MD5计算状态
+    noDevicesMessage: null, // 无设备时的提示信息
     // 测试模式相关
     testMode: false, // 是否启用测试模式
     users: [], // 用户列表（测试模式下使用）
@@ -56,6 +51,7 @@ Page({
   },
 
   onLoad() {
+    this.loadTaskConfigs();
     this.loadUserDevices();
     // 初始化显示列表
     this.updateDisplayList();
@@ -63,26 +59,130 @@ Page({
     this.loadUsers();
   },
 
+  // 加载任务配置
+  loadTaskConfigs() {
+    const app = getApp();
+
+    // 检查全局共享数据
+    const sharedData = app.globalDataManager.get('taskConfigs');
+    if (sharedData) {
+      console.log('📦 使用共享任务配置数据');
+      this.processTaskConfigs(sharedData);
+      return;
+    }
+
+    // 使用优化的请求方法
+    app.request({
+      url: API_CONFIG.TASK_CONFIGS,
+      method: 'GET',
+      useCache: true
+    }).then(res => {
+      if (res.data && res.data.success && res.data.configs && res.data.configs.length > 0) {
+        // 保存到全局共享数据
+        app.globalDataManager.set('taskConfigs', res.data.configs);
+        this.processTaskConfigs(res.data.configs);
+      } else {
+        // 使用模拟数据
+        this.loadMockTaskConfigs();
+      }
+    }).catch(() => {
+      // 网络失败时使用模拟数据
+      this.loadMockTaskConfigs();
+    });
+  },
+
+  // 处理任务配置数据
+  processTaskConfigs(configs) {
+    const taskTypes = configs.map((config, index) => ({
+      id: index + 1,
+      value: config.type_key,
+      name: config.name,
+      price: config.price.toString(),
+      desc: this.getTaskDesc(config.type_key),
+      icon: this.getTaskIcon(config.type_key)
+    }));
+    this.setData({ taskTypes });
+  },
+
+  // 获取任务描述
+  getTaskDesc(typeKey) {
+    const descMap = {
+      'customer_resource': '添加好友截图',
+      'note': '发布笔记截图',
+      'comment': '评论截图'
+    };
+    return descMap[typeKey] || '任务截图';
+  },
+
+  // 获取任务图标
+  getTaskIcon(typeKey) {
+    const iconMap = {
+      'customer_resource': '👥',
+      'note': '📝',
+      'comment': '💬'
+    };
+    return iconMap[typeKey] || '📄';
+  },
+
+  // 加载模拟任务配置数据
+  loadMockTaskConfigs() {
+    const mockTaskTypes = [
+      { id: 1, value: 'customer_resource', name: '客资', price: '5.00', desc: '添加好友截图', icon: '👥' },
+      { id: 2, value: 'note', name: '笔记', price: '10.00', desc: '发布笔记截图', icon: '📝' },
+      { id: 3, value: 'comment', name: '评论', price: '3.00', desc: '评论截图', icon: '💬' }
+    ];
+    this.setData({ taskTypes: mockTaskTypes });
+  },
+
   // 加载用户设备列表
   loadUserDevices() {
+    const app = getApp();
+
+    // 检查全局共享数据
+    const sharedData = app.globalDataManager.get('userDevices');
+    if (sharedData) {
+      console.log('📦 使用共享设备数据');
+      this.processUserDevices(sharedData);
+      return;
+    }
+
     const token = app.getCurrentToken();
 
-    wx.request({
+    app.request({
       url: API_CONFIG.DEVICE_MY_LIST,
       method: 'GET',
       header: token ? { 'Authorization': `Bearer ${token}` } : {},
-      success: (res) => {
-        if (res.data && res.data.success && res.data.devices && res.data.devices.length > 0) {
-          this.setData({ devices: res.data.devices });
-        } else {
-          // 使用模拟设备数据（开发环境或无设备时）
-          this.loadMockDevices()
-        }
-      },
-      fail: () => {
-        // 网络失败时使用模拟数据
-        this.loadMockDevices()
+      useCache: true
+    }).then(res => {
+      if (res.data && res.data.success && res.data.devices && res.data.devices.length > 0) {
+        // 保存到全局共享数据
+        app.globalDataManager.set('userDevices', res.data.devices);
+        this.processUserDevices(res.data.devices);
+      } else {
+        // 没有设备时显示提示信息
+        this.setData({
+          devices: [],
+          noDevicesMessage: '暂无可用设备，请联系带教老师分配设备'
+        });
       }
+    }).catch(() => {
+      // 网络失败时显示提示信息
+      this.setData({
+        devices: [],
+        noDevicesMessage: '网络连接失败，请稍后重试'
+      });
+    });
+  },
+
+  // 处理用户设备数据
+  processUserDevices(devices) {
+    const devicesWithSelection = devices.map(device => ({
+      ...device,
+      selectable: device.status === 'online' // 只有在线设备可以选择
+    }));
+    this.setData({
+      devices: devicesWithSelection,
+      noDevicesMessage: null // 有设备时清除提示信息
     });
   },
 
@@ -115,8 +215,14 @@ Page({
       }
     ]
 
+    // 显示所有设备，但标记哪些是可选择的
+    const devicesWithSelection = mockDevices.map(device => ({
+      ...device,
+      selectable: device.status === 'online' // 只有在线设备可以选择
+    }));
+
     this.setData({
-      devices: mockDevices
+      devices: devicesWithSelection
     })
   },
 
@@ -181,8 +287,24 @@ Page({
   // 选择设备
   selectDevice(e) {
     const device = e.currentTarget.dataset.device;
+
+    // 检查设备是否可选择
+    if (!device.selectable) {
+      wx.showToast({
+        title: '该设备当前不可用',
+        icon: 'none'
+      });
+      return;
+    }
+
     this.setData({
-      selectedDevice: device
+      selectedDevice: device,
+      noteAuthor: device.accountName // 自动设置昵称为设备账号名
+    });
+
+    wx.showToast({
+      title: `已选择设备: ${device.accountName}`,
+      icon: 'success'
     });
   },
 
@@ -392,7 +514,7 @@ Page({
 
     // 优先使用从profile页面切换的测试用户token
     const testUserToken = wx.getStorageSync('testUserToken');
-    const token = testUserToken || (IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token'));
+    const token = testUserToken || wx.getStorageSync('token');
 
     // 使用wx.uploadFile直接上传文件，避免base64大小问题
     wx.uploadFile({
@@ -558,8 +680,14 @@ Page({
 
   // 上传所有图片到服务器（并行上传，带进度反馈）
   uploadAllImages() {
+    // 所有类型图片都可选
+    // if (this.data.selectedType && this.data.selectedType.value === 'comment' && this.data.imageUrls.length === 0) {
+    //   wx.showToast({ title: '评论类型必须上传评论截图作为证据', icon: 'none' });
+    //   return Promise.reject(new Error('评论类型必须有图片'));
+    // }
+
     if (this.data.imageUrls.length === 0) {
-      wx.showToast({ title: '请先选择图片', icon: 'none' });
+      // 没有图片，直接返回空数组（对于可选图片的情况）
       return Promise.resolve([]);
     }
 
@@ -575,7 +703,7 @@ Page({
 
     // 优先使用从profile页面切换的测试用户token
     const testUserToken = wx.getStorageSync('testUserToken');
-    const token = testUserToken || (IS_DEVELOPMENT ? DEFAULT_TEST_TOKEN : wx.getStorageSync('token'));
+    const token = testUserToken || wx.getStorageSync('token');
 
     // 并行上传每张图片到单图接口（保持兼容性）
     for (let i = 0; i < this.data.imageUrls.length; i++) {
@@ -716,12 +844,16 @@ Page({
       return;
     }
 
-    // 图片现在对于所有类型都是可选的，不再强制要求
+    // 验证图片（所有类型都可选）
+    // if (selectedType.value === 'comment' && (!imageUrls || imageUrls.length === 0)) {
+    //   wx.showToast({ title: '评论类型必须上传评论截图作为证据', icon: 'none' });
+    //   return;
+    // }
 
     // 验证笔记信息（笔记必填，评论必填链接和内容，客资必填电话或微信）
     if (selectedType.value === 'note') {
       if (!noteUrl || noteUrl.trim() === '') {
-        wx.showToast({ title: '笔记类型必须填写小红书笔记链接', icon: 'none' });
+        wx.showToast({ title: '笔记类型必须填写笔记链接', icon: 'none' });
         return;
       }
       if (!noteAuthor || noteAuthor.trim() === '') {
@@ -734,7 +866,7 @@ Page({
       }
     } else if (selectedType.value === 'comment') {
       if (!noteUrl || noteUrl.trim() === '') {
-        wx.showToast({ title: '评论类型必须填写小红书笔记链接', icon: 'none' });
+        wx.showToast({ title: '评论类型必须填写笔记链接', icon: 'none' });
         return;
       }
       if (!commentContent || commentContent.trim() === '') {
@@ -756,7 +888,7 @@ Page({
     if (noteUrl && noteUrl.trim() !== '') {
       const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/.+/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
-        wx.showToast({ title: '小红书笔记链接格式不正确', icon: 'none' });
+        wx.showToast({ title: '笔记链接格式不正确', icon: 'none' });
         return;
       }
     }

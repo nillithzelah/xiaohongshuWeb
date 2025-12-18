@@ -1,12 +1,9 @@
 // pages/device-list/device-list.js
 const app = getApp();
-
-// 环境配置（与上传页面保持一致）
-const IS_DEVELOPMENT = true; // 开发时true，生产时false
-const API_BASE = IS_DEVELOPMENT ? 'http://localhost:5000' : 'https://www.wubug.cc';
+const CONFIG = require('../../config.js');
 
 const API_CONFIG = {
-  DEVICE_MY_LIST: `${API_BASE}/xiaohongshu/api/client/device/my-list`
+  DEVICE_MY_LIST: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/device/my-list`
 };
 
 // 默认测试Token（与上传页面保持一致，boss用户token）
@@ -15,7 +12,7 @@ const API_CONFIG = {
 // 生成时间：2025-12-13，使用xiaohongshu_prod_jwt密钥签名
 const DEFAULT_TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
 
-console.log(`📱 设备列表页环境: ${IS_DEVELOPMENT ? '开发环境' : '生产环境'}`);
+console.log(`📱 设备列表页环境: ${CONFIG.ENV}`);
 
 Page({
 
@@ -38,34 +35,57 @@ Page({
    * 加载用户设备列表
    */
   loadUserDevices: function() {
+    console.log('🔍 开始加载用户设备列表');
     // 设置加载状态
     this.setData({ loading: true });
 
-    const token = app.getCurrentToken();
+    const app = getApp();
 
-    wx.request({
+    // 检查全局共享数据
+    const sharedData = app.globalDataManager.get('userDevices');
+    if (sharedData) {
+      console.log('📦 使用共享设备数据');
+      this.processUserDevices(sharedData);
+      return;
+    }
+
+    const token = app.getCurrentToken();
+    console.log('🎯 使用token:', token ? token.substring(0, 50) + '...' : '无token');
+
+    app.request({
       url: API_CONFIG.DEVICE_MY_LIST,
       method: 'GET',
       header: token ? { 'Authorization': `Bearer ${token}` } : {},
-      success: (res) => {
-        if (res.data && res.data.success) {
-          this.setData({ devices: res.data.devices || [] });
-        } else {
-          // 使用模拟设备数据
-          this.loadMockDevices()
-        }
-      },
-      fail: () => {
-        // 网络失败时使用模拟数据
+      useCache: true
+    }).then(res => {
+      console.log('📡 设备列表API响应:', res);
+      console.log('📊 响应数据结构:', res.data);
+      if (res.data && res.data.success) {
+        console.log('✅ API返回成功，设备数据:', res.data.devices);
+        console.log('📱 设备数量:', res.data.devices ? res.data.devices.length : 0);
+        // 保存到全局共享数据
+        app.globalDataManager.set('userDevices', res.data.devices || []);
+        this.processUserDevices(res.data.devices || []);
+      } else {
+        console.log('❌ API返回失败，使用模拟数据');
+        // 使用模拟设备数据
         this.loadMockDevices()
-      },
-      complete: () => {
-        // 无论成功失败，都关闭骨架屏
-        this.setData({ loading: false });
-        // 停止下拉刷新
-        wx.stopPullDownRefresh();
       }
+    }).catch(err => {
+      console.log('❌ 网络请求失败:', err);
+      // 网络失败时使用模拟数据
+      this.loadMockDevices()
+    }).finally(() => {
+      // 无论成功失败，都关闭骨架屏
+      this.setData({ loading: false });
+      // 停止下拉刷新
+      wx.stopPullDownRefresh();
     });
+  },
+
+  // 处理用户设备数据
+  processUserDevices: function(devices) {
+    this.setData({ devices });
   },
 
   /**

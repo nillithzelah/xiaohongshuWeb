@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"},{"v":{"$numberInt":"2"},"key":{"type_key":{"$numberInt":"1"}},"name":"type_key_1","unique":true}],"uuid":"65a8f4a4766e47409092b1761f2feed2","collectionName":"taskconfigs","type":"collection"}

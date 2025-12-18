@@ -1,11 +1,28 @@
 /* pages/device-list/device-list.wxss */
 page {
-  background-color: #f7f8fa;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   min-height: 100vh;
 }
 
 .container {
   padding: 20rpx;
+  position: relative;
+}
+
+/* 添加背景装饰 */
+.container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(120, 219, 226, 0.08) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
 }
 
 /* 页面头部 */
@@ -119,10 +136,30 @@ page {
 }
 
 .device-card {
-  background: white;
-  border-radius: 16rpx;
-  padding: 30rpx;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, #ffffff 0%, #fefefe 100%);
+  border-radius: 20rpx;
+  padding: 32rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0,0,0,0.1);
+  border: 1rpx solid rgba(0,0,0,0.04);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.device-card:hover {
+  transform: translateY(-2rpx);
+  box-shadow: 0 10rpx 24rpx rgba(0,0,0,0.15);
+}
+
+.device-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4rpx;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+  border-radius: 20rpx 20rpx 0 0;
 }
 
 .device-header {
@@ -159,8 +196,14 @@ page {
   border-radius: 20rpx;
   font-size: 24rpx;
   font-weight: bold;
-  border: 1rpx solid;
+  border: 2rpx solid;
   white-space: nowrap;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.1);
+  transition: all 0.3s ease;
+}
+
+.status-badge:hover {
+  transform: scale(1.05);
 }
 
 .device-stats {
