@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "xiaohongshu-remote-db": {
+      "command": "node",
+      "args": [
+        "D:/Desktop/projects/xiaohongshuWeb/server/mcp-server-remote.js"
+      ]
+    }
+  }
+}

@@ -109,28 +109,50 @@ router.put('/assign-mentor/:leadId', authenticateToken, requireRole(['manager', 
     // 分配带教老师
     leadUser.mentor_id = mentor_id;
     leadUser.assigned_to_mentor_at = new Date();
+    leadUser.training_status = '培训中'; // 分配后更新培训状态
 
-    // 根据小红书账号信息创建设备
+    // 更新已存在的小红书账号设备信息（复用HR创建时已创建设备）
     const Device = require('../models/Device');
-    const createdDevices = [];
 
     if (leadUser.xiaohongshuAccounts && leadUser.xiaohongshuAccounts.length > 0) {
       for (let i = 0; i < leadUser.xiaohongshuAccounts.length; i++) {
         const account = leadUser.xiaohongshuAccounts[i];
-        const device = new Device({
-          accountName: account.account,
-          nickname: account.nickname,
-          assignedUser: leadUser._id,
-          mentor_id: mentor_id,
-          status: 'online',
-          influence: ['new']
-        });
 
-        await device.save();
-        createdDevices.push(device);
+        // 如果已经有设备ID，说明HR创建时已创建设备，直接更新设备信息
+        if (account.deviceId) {
+          await Device.findByIdAndUpdate(account.deviceId, {
+            assignedUser: leadUser._id,
+            mentor_id: mentor_id,
+            updatedAt: new Date()
+          });
+        } else {
+          // 如果没有设备ID（兼容旧数据），按昵称查找设备并更新
+          const existingDevice = await Device.findOne({ accountName: account.nickname.trim() });
+          if (existingDevice) {
+            await Device.findByIdAndUpdate(existingDevice._id, {
+              assignedUser: leadUser._id,
+              mentor_id: mentor_id,
+              updatedAt: new Date()
+            });
+            // 更新账号关联
+            leadUser.xiaohongshuAccounts[i].deviceId = existingDevice._id;
+          } else {
+            // 如果设备不存在，创建新设备（兜底逻辑）
+            const device = new Device({
+              accountName: account.nickname,  // 小红书昵称
+              accountId: account.account,     // 小红书账号ID
+              assignedUser: leadUser._id,
+              mentor_id: mentor_id,
+              status: 'online',
+              influence: ['new'],
+              createdBy: req.user._id
+            });
+            await device.save();
+            leadUser.xiaohongshuAccounts[i].deviceId = device._id;
+          }
+        }
 
-        // 更新账号状态和设备关联
-        leadUser.xiaohongshuAccounts[i].deviceId = device._id;
+        // 更新账号状态
         leadUser.xiaohongshuAccounts[i].status = 'assigned';
       }
 

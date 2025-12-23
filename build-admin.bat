@@ -1,11 +1,16 @@
 @echo off
 echo 🚀 开始构建和部署 Admin 前端...
 
-echo 📦 进入 admin 目录...
-cd admin
+if not exist admin\node_modules (
+  echo 📦 node_modules 不存在，开始安装依赖...
+  cd admin
+  call npm install
+  cd ..
+) else (
+  echo ✅ 依赖已存在，跳过安装
+)
 
-echo 🔧 安装依赖...
-call npm install
+cd admin
 
 echo 🏗️ 构建项目...
 call npm run build

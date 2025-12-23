@@ -1,5 +1,6 @@
 const express = require('express');
 const User = require('../models/User');
+const Device = require('../models/Device');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const router = express.Router();
 
@@ -55,6 +56,30 @@ router.post('/create-lead', authenticateToken, requireRole(['hr', 'boss']), asyn
       }
     }
 
+    // 为每个小红书账号创建设备记录
+    // 注意：phone 是客户联系电话，xiaohongshuAccounts[].account 才是小红书账号
+    const devices = [];
+    for (const account of xiaohongshuAccounts) {
+      // 检查设备是否已存在（按小红书昵称查询）
+      const existingDevice = await Device.findOne({ accountName: account.nickname.trim() });
+      if (existingDevice) {
+        // 设备已存在，只记录ID
+        devices.push(existingDevice._id);
+      } else {
+        // 创建设备 - accountName 使用小红书昵称
+        const device = new Device({
+          accountName: account.nickname.trim(),  // 小红书昵称
+          accountId: account.account.trim(),     // 小红书账号ID
+          assignedUser: null,
+          status: 'online',
+          influence: ['new'], // 默认新号
+          createdBy: req.user._id
+        });
+        await device.save();
+        devices.push(device._id);
+      }
+    }
+
     // 创建线索用户
     const leadUser = new User({
       username, // 使用客户姓名作为用户名，如果重复则添加数字后缀
@@ -64,11 +89,12 @@ router.post('/create-lead', authenticateToken, requireRole(['hr', 'boss']), asyn
       notes,
       role: 'part_time', // 关键：设置为兼职用户状态
       training_status: '已筛选', // 默认培训状态
-      hr_id: req.user.id, // 记录是哪个HR创建的
-      xiaohongshuAccounts: xiaohongshuAccounts.map(account => ({
+      hr_id: req.user._id, // 记录是哪个HR创建的
+      xiaohongshuAccounts: xiaohongshuAccounts.map((account, index) => ({
         account: account.account.trim(),
         nickname: account.nickname.trim(),
-        status: 'pending'
+        status: 'pending',
+        deviceId: devices[index] // 关联设备ID
       }))
     });
 
@@ -104,6 +130,7 @@ router.get('/my-leads', authenticateToken, requireRole(['hr', 'boss', 'manager']
     const { page = 1, limit = 10, status } = req.query;
 
     let query = {
+      role: 'part_time', // 只查询兼职用户（线索）
       is_deleted: { $ne: true }
     };
 
@@ -132,6 +159,7 @@ router.get('/my-leads', authenticateToken, requireRole(['hr', 'boss', 'manager']
     res.json({
       success: true,
       leads: leads.map(lead => ({
+        _id: lead._id,
         id: lead._id,
         nickname: lead.nickname,
         phone: lead.phone,
@@ -192,7 +220,7 @@ router.delete('/delete-lead/:id', authenticateToken, requireRole(['hr', 'boss', 
     // 软删除：设置is_deleted字段
     lead.is_deleted = true;
     lead.deleted_at = new Date();
-    lead.deleted_by = req.user.id;
+    lead.deleted_by = req.user._id;
 
     await lead.save();
 

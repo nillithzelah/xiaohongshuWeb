@@ -407,7 +407,7 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
 
     // 如果提供了链接，验证格式
     if (noteUrl && noteUrl.trim() !== '') {
-      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/.+/i;
+      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a)\/[a-zA-Z0-9]+/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
         return res.status(400).json({ success: false, message: '笔记链接格式不正确' });
       }

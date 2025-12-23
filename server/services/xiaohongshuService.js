@@ -249,7 +249,13 @@ class XiaohongshuService {
    * 检查URL是否为有效的小红书链接
    */
   isValidXiaohongshuUrl(url) {
-    const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/explore\/[a-zA-Z0-9]+/;
+    // 支持多种小红书链接格式：
+    // 1. https://xiaohongshu.com/explore/xxxxx
+    // 2. https://www.xiaohongshu.com/explore/xxxxx
+    // 3. https://xhslink.com/explore/xxxxx
+    // 4. https://xhslink.com/o/xxxxx (新的短链接格式)
+    // 5. https://xhslink.com/a/xxxxx (文章链接格式)
+    const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a)\/[a-zA-Z0-9]+/;
     return xiaohongshuUrlPattern.test(url);
   }
 
@@ -257,8 +263,9 @@ class XiaohongshuService {
    * 从URL中提取笔记ID
    */
   extractNoteId(url) {
-    const match = url.match(/\/explore\/([a-zA-Z0-9]+)/);
-    return match ? match[1] : null;
+    // 支持多种路径格式：/explore/xxxxx, /o/xxxxx, /a/xxxxx
+    const match = url.match(/\/(explore|o|a)\/([a-zA-Z0-9]+)/);
+    return match ? match[2] : null;
   }
 
   /**

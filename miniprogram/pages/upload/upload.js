@@ -154,7 +154,15 @@ Page({
       header: token ? { 'Authorization': `Bearer ${token}` } : {},
       useCache: true
     }).then(res => {
+      console.log('📡 设备列表API响应:', res.data);
+      console.log('📋 设备数据:', JSON.stringify(res.data?.devices, null, 2));
+      
       if (res.data && res.data.success && res.data.devices && res.data.devices.length > 0) {
+        // 检查第一个设备是否有accountName
+        const firstDevice = res.data.devices[0];
+        console.log('🔍 第一个设备完整数据:', firstDevice);
+        console.log('🔍 第一个设备accountName:', firstDevice?.accountName);
+        
         // 保存到全局共享数据
         app.globalDataManager.set('userDevices', res.data.devices);
         this.processUserDevices(res.data.devices);
@@ -287,6 +295,10 @@ Page({
   // 选择设备
   selectDevice(e) {
     const device = e.currentTarget.dataset.device;
+    
+    console.log('📱 选择设备事件:', device);
+    console.log('📱 设备accountName:', device?.accountName);
+    console.log('📱 设备完整数据:', JSON.stringify(device, null, 2));
 
     // 检查设备是否可选择
     if (!device.selectable) {
@@ -399,6 +411,64 @@ Page({
     this.setData({
       noteUrl: e.detail.value
     });
+  },
+
+  // 粘贴分享文本并提取小红书链接
+  pasteShareText: function() {
+    const that = this;
+    wx.showModal({
+      title: '粘贴分享文本',
+      content: '请粘贴小红书分享的完整文本，系统将自动提取链接',
+      editable: true,
+      placeholderText: '例如：玩ai聊天有哪些伤身体的行为 http://xhslink.com/o/2rV8kDR9MxK 复制后打开【小红书】查看笔记！',
+      success: function(res) {
+        if (res.confirm && res.content) {
+          const extractedUrl = that.extractXiaohongshuUrl(res.content);
+          if (extractedUrl) {
+            that.setData({
+              noteUrl: extractedUrl
+            });
+            wx.showToast({
+              title: '链接提取成功',
+              icon: 'success',
+              duration: 2000
+            });
+          } else {
+            wx.showToast({
+              title: '未找到小红书链接',
+              icon: 'none',
+              duration: 2000
+            });
+          }
+        }
+      }
+    });
+  },
+
+  // 提取小红书链接的工具方法
+  extractXiaohongshuUrl: function(text) {
+    // 匹配小红书链接的正则表达式
+    // 支持 xhslink.com 和其他小红书域名
+    const xiaohongshuUrlRegex = /(https?:\/\/(?:[a-zA-Z0-9-]+\.)*(?:xiaohongshu|xhslink)\.com\/(?:[a-zA-Z0-9]+\/)?[a-zA-Z0-9]+)/i;
+
+    const match = text.match(xiaohongshuUrlRegex);
+    if (match) {
+      return match[1];
+    }
+
+    // 如果没找到，尝试查找其他可能的链接格式
+    const generalUrlRegex = /(https?:\/\/[^\s]+)/g;
+    const urls = text.match(generalUrlRegex);
+    if (urls) {
+      // 查找包含 xhslink 或 xiaohongshu 的链接
+      for (const url of urls) {
+        if (url.includes('xhslink') || url.includes('xiaohongshu')) {
+          return url;
+        }
+      }
+    }
+
+    return null;
   },
 
   // 输入笔记作者昵称
@@ -902,7 +972,7 @@ Page({
 
     // 如果填写了链接，验证格式
     if (noteUrl && noteUrl.trim() !== '') {
-      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/.+/i;
+      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a)\/[a-zA-Z0-9]+/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
         wx.showToast({ title: '笔记链接格式不正确', icon: 'none' });
         return;

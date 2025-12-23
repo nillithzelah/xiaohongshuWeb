@@ -145,14 +145,20 @@
     <!-- 笔记链接（仅笔记和评论类型显示） -->
     <view class="form-group" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment'}}">
       <view class="input-label">笔记链接<text class="required-mark">*</text></view>
-      <input
-        class="url-input"
-        placeholder="请输入笔记链接"
-        value="{{noteUrl}}"
-        bindinput="onNoteUrlInput"
-        confirm-type="done"
-        maxlength="500"
-      />
+      <view class="url-input-container">
+        <input
+          class="url-input"
+          placeholder="请输入笔记链接或粘贴分享文本"
+          value="{{noteUrl}}"
+          bindinput="onNoteUrlInput"
+          confirm-type="done"
+          maxlength="500"
+        />
+        <button class="paste-btn" bindtap="pasteShareText" size="mini">粘贴分享</button>
+      </view>
+      <view class="input-hint">
+        <text>支持小红书分享文本自动提取链接</text>
+      </view>
     </view>
 
 

@@ -227,16 +227,12 @@ router.post('/wechat-login', async (req, res) => {
           console.log('📱 手机号用户已存在:', user.username, phoneNumber);
         }
       } else {
-        // 手机号不存在，创建新用户
-        user = new User({
-          username: `phone_${phoneNumber.slice(-4)}`,
-          openid,
-          role: 'part_time',
-          phone: phoneNumber,
-          points: 0
+        // 手机号不存在，拒绝登录
+        console.log('❌ 手机号未注册，拒绝登录:', phoneNumber);
+        return res.status(403).json({
+          success: false,
+          message: '该手机号尚未注册，请先通过账号密码注册或联系管理员'
         });
-        await user.save();
-        console.log('👤 创建手机号用户:', user.username, phoneNumber);
       }
     } else {
       // 没有手机号，通过openid查找（兼容旧逻辑）
@@ -473,6 +469,8 @@ router.post('/register', authenticateToken, async (req, res) => {
       phone,
       wechat,
       notes,
+      // 如果是创建兼职用户，自动设置培训状态为"已筛选"
+      training_status: role === 'part_time' ? '已筛选' : null,
       // 如果当前用户是HR，自动设置hr_id
       hr_id: req.user.role === 'hr' ? req.user._id : null,
       // 如果提供了mentor_id，设置分配时间为注册时间之前
