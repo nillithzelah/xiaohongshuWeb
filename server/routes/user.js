@@ -23,7 +23,7 @@ router.get('/me', authenticateToken, async (req, res) => {
         avatar: user.avatar,
         wallet: user.wallet,
         points: user.points,
-        totalEarnings: user.totalEarnings,
+        totalWithdrawn: user.wallet?.total_withdrawn || 0,
         parent: user.parent_id,
         createdAt: user.createdAt
       }

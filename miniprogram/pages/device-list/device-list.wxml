@@ -94,8 +94,8 @@
     <!-- 空状态 -->
     <view wx:else class="empty-state">
       <view class="empty-icon">📱</view>
-      <text class="empty-title">暂无设备</text>
-      <text class="empty-subtitle">请联系管理员为您分配设备</text>
+      <text class="empty-title">{{noDevicesMessage ? '提示' : '暂无设备'}}</text>
+      <text class="empty-subtitle">{{noDevicesMessage || '请联系管理员为您分配设备'}}</text>
     </view>
   </view>
 

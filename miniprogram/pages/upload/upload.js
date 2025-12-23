@@ -12,13 +12,6 @@ const API_CONFIG = {
   TASK_CONFIGS: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/task-configs`
 };
 
-// 默认测试Token（仅开发环境使用，boss用户token）
-// 用户信息：boss001 - ID: 693d29b5cbc188007ecc5848
-// 权限：所有权限，可以上传图片、提交任务、查看所有数据
-// 角色：boss（管理员）
-// 生成时间：2025-12-13，使用xiaohongshu_prod_jwt密钥签名
-// 注意：JWT签名生成有问题，暂时使用boss用户确保功能可用
-const DEFAULT_TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
 
 console.log(`🚀 小程序环境: ${CONFIG.ENV}`);
 console.log(`📡 API地址: ${CONFIG.API_BASE_URL}`);
@@ -57,6 +50,13 @@ Page({
     this.updateDisplayList();
     // 加载用户列表（用于测试模式）
     this.loadUsers();
+  },
+
+  onShow() {
+    // 检查用户是否已完成手机号授权
+    if (!getApp().navigateGuard()) {
+      return; // 如果未授权，会自动跳转到首页
+    }
   },
 
   // 加载任务配置
@@ -302,6 +302,8 @@ Page({
       noteAuthor: device.accountName // 自动设置昵称为设备账号名
     });
 
+    console.log('📱 已选择设备:', device.accountName, '昵称设置为:', device.accountName);
+
     wx.showToast({
       title: `已选择设备: ${device.accountName}`,
       icon: 'success'
@@ -371,15 +373,25 @@ Page({
   // 选择任务类型
   selectType(e) {
     const type = e.currentTarget.dataset.type;
+    // 保存当前设备信息（如果已选择设备）
+    const currentDevice = this.data.selectedDevice;
+
     this.setData({
       selectedType: type,
       noteUrl: '', // 切换类型时清空链接
-      noteAuthor: '', // 清空昵称
       noteTitle: '', // 清空标题
       commentContent: '', // 清空评论内容
       customerPhone: '', // 清空客户电话
       customerWechat: '' // 清空客户微信
+      // 注意：不清空 noteAuthor，因为它应该来自设备选择
     });
+
+    // 如果已选择设备，重新设置昵称
+    if (currentDevice && currentDevice.accountName) {
+      this.setData({
+        noteAuthor: currentDevice.accountName
+      });
+    }
   },
 
   // 输入笔记链接
@@ -867,6 +879,10 @@ Page({
     } else if (selectedType.value === 'comment') {
       if (!noteUrl || noteUrl.trim() === '') {
         wx.showToast({ title: '评论类型必须填写笔记链接', icon: 'none' });
+        return;
+      }
+      if (!noteAuthor || noteAuthor.trim() === '') {
+        wx.showToast({ title: '评论类型必须填写作者昵称', icon: 'none' });
         return;
       }
       if (!commentContent || commentContent.trim() === '') {

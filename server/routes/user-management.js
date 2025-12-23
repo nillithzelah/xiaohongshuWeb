@@ -20,7 +20,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
         username: user.username,
         role: user.role,
         points: user.points || 0,
-        totalEarnings: user.totalEarnings || 0,
+        totalWithdrawn: user.wallet?.total_withdrawn || 0,
         avatar: user.avatar,
         nickname: user.nickname || user.username,
         phone: user.phone,
@@ -52,7 +52,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         username: user.username,
         role: user.role,
         points: user.points,
-        totalEarnings: user.totalEarnings,
+        totalWithdrawn: user.wallet?.total_withdrawn || 0,
         avatar: user.avatar,
         nickname: user.nickname,
         phone: user.phone
@@ -220,7 +220,9 @@ router.get('/', authenticateToken, async (req, res) => {
     const usersWithAssignmentTime = users.map(user => ({
       ...user.toObject(),
       assigned_to_mentor_at: user.assigned_to_mentor_at,
-      training_status: user.training_status
+      training_status: user.training_status,
+      points: user.points,
+      wallet: user.wallet
     }));
 
     const total = await User.countDocuments({
@@ -228,9 +230,20 @@ router.get('/', authenticateToken, async (req, res) => {
       is_deleted: { $ne: true } // 只统计未删除的用户
     });
 
+    // 标准化用户数据，确保字段完整性
+    const standardizedUsers = usersWithAssignmentTime.map(user => ({
+      ...user,
+      points: user.points || 0,
+      wallet: {
+        total_withdrawn: user.wallet?.total_withdrawn || 0,
+        alipay_account: user.wallet?.alipay_account || null,
+        real_name: user.wallet?.real_name || null
+      }
+    }));
+
     res.json({
       success: true,
-      users: usersWithAssignmentTime,
+      users: standardizedUsers,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -342,6 +355,80 @@ router.put('/:id/training-status', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('更新培训状态错误:', error);
     res.status(500).json({ success: false, message: '更新培训状态失败' });
+  }
+});
+
+// 积分兑换余额
+router.post('/:id/exchange-points', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { pointsToExchange } = req.body;
+
+    // 严格验证输入参数
+    const pointsNum = parseFloat(pointsToExchange);
+    if (isNaN(pointsNum) || !isFinite(pointsNum) || pointsNum <= 0) {
+      return res.status(400).json({ success: false, message: '兑换积分数量必须是有效的正数' });
+    }
+
+    // 检查是否为整数（积分应该是整数）
+    if (pointsNum !== Math.floor(pointsNum)) {
+      return res.status(400).json({ success: false, message: '兑换积分数量必须是整数' });
+    }
+
+    // 查找用户
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    // 检查用户积分是否足够
+    if (user.points < pointsNum) {
+      return res.status(400).json({ success: false, message: '用户积分不足' });
+    }
+
+    // 兑换比例：1积分 = 1元人民币
+    const exchangeRate = 1;
+    const amountToAdd = pointsNum * exchangeRate;
+
+    // 检查已提现金额上限（防止兑换后打款时超出限制）
+    const currentWithdrawn = user.wallet?.total_withdrawn || 0;
+    if (currentWithdrawn + amountToAdd > 999999.99) {
+      return res.status(400).json({ success: false, message: '兑换后已提现金额将超过上限' });
+    }
+
+    // 更新用户积分（直接兑换成待打款）
+    await User.findByIdAndUpdate(id, {
+      $inc: {
+        points: -pointsNum
+      }
+    });
+
+    // 创建待打款交易记录
+    const Transaction = require('../models/Transaction');
+    await Transaction.create({
+      user_id: id,
+      type: 'point_exchange',
+      amount: amountToAdd,
+      status: 'pending',  // 待打款状态
+      description: `积分兑换：${pointsNum}积分 → ${amountToAdd}元`,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: `积分兑换成功：${pointsNum}积分兑换为${amountToAdd}元，已进入待打款队列`,
+      data: {
+        exchangedPoints: pointsNum,
+        addedAmount: amountToAdd,
+        remainingPoints: user.points - pointsNum,
+        pendingAmount: amountToAdd  // 待打款金额
+      }
+    });
+
+  } catch (error) {
+    console.error('积分兑换失败:', error);
+    res.status(500).json({ success: false, message: '积分兑换失败' });
   }
 });
 

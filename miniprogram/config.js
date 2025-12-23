@@ -41,13 +41,56 @@ const CONFIG = {
   ENV: currentConfig.env,
 
   // 调试信息
-  DEBUG: CURRENT_ENV === 'development'
+  DEBUG: CURRENT_ENV === 'development',
+
+  // 测试配置（仅开发环境使用）
+  TEST_TOKENS: {
+    // boss用户token - 所有权限
+    BOSS_TOKEN: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI',
+
+    // 普通用户token（如果需要）
+    // USER_TOKEN: 'your_user_token_here'
+  },
+
+  // 功能开关
+  FEATURES: {
+    ENABLE_CONSOLE_LOG: CURRENT_ENV === 'development', // 只在开发环境显示日志
+    ENABLE_CACHE_DEBUG: false, // 缓存调试日志
+    ENABLE_API_MOCK: false // API模拟数据
+  },
+
+  // 缓存配置
+  CACHE: {
+    DEFAULT_DURATION: 5 * 60 * 1000, // 5分钟
+    USER_DEVICES_DURATION: 5 * 60 * 1000, // 用户设备缓存5分钟
+    USER_TASKS_DURATION: 2 * 60 * 1000, // 用户任务缓存2分钟
+    ANNOUNCEMENTS_DURATION: 30 * 60 * 1000, // 公告缓存30分钟
+  },
+
+  // API端点配置（统一管理）
+  API_ENDPOINTS: {
+    AUTH: {
+      WECHAT_LOGIN: '/xiaohongshu/api/auth/wechat-login',
+      PHONE_LOGIN: '/xiaohongshu/api/auth/phone-login'
+    },
+    CLIENT: {
+      ANNOUNCEMENTS: '/xiaohongshu/api/client/announcements',
+      USER_TASKS: '/xiaohongshu/api/client/user/tasks',
+      DEVICE_MY_LIST: '/xiaohongshu/api/client/device/my-list'
+    },
+    USER: {
+      PROFILE: '/xiaohongshu/api/user/me'
+    }
+  }
 };
 
 // 开发环境提示
 if (CURRENT_ENV === 'development') {
-  console.log('🚀 小程序开发环境配置已加载');
-  console.log('📡 API地址:', currentConfig.baseUrl);
+  // 开发环境下才显示配置信息
+  setTimeout(() => {
+    console.log('🚀 小程序开发环境配置已加载');
+    console.log('📡 API地址:', currentConfig.baseUrl);
+  }, 100);
 }
 
 // 导出配置（小程序方式）

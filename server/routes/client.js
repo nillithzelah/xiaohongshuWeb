@@ -714,24 +714,27 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
         }
       }
 
-      // 如果AI审核通过且信心度足够高，直接设置为完成状态
+      // 如果AI审核通过且信心度足够高，设置为manager_approved状态，等待财务确认
       if (aiReviewResult && aiReviewResult.aiReview && aiReviewResult.aiReview.passed && aiReviewResult.aiReview.confidence >= 0.9) {
-        console.log('🎉 AI审核通过，自动完成审核');
+        console.log('🎉 AI审核通过，提交给财务确认');
 
-        // 更新审核记录为完成状态
-        reviewData.status = 'completed';
-        reviewData.financeProcess = {
-          amount: taskConfig.price,
-          commission: 0,
-          processedAt: new Date()
-        };
+        // 更新审核记录为manager_approved状态，等待财务确认
+        reviewData.status = 'manager_approved';
+
+        // 审核通过时立即给用户增加积分奖励
+        const pointsReward = Math.floor(taskConfig.price); // 任务金额等于积分
+        const User = require('../models/User');
+        await User.findByIdAndUpdate(req.user._id, {
+          $inc: { points: pointsReward }
+        });
+        console.log(`💰 审核通过奖励: ${pointsReward}积分 (任务金额: ${taskConfig.price}元)`);
 
         // 添加AI审核历史
         reviewData.auditHistory.push({
           operator: null, // AI审核
           operatorName: 'AI审核系统',
           action: 'ai_auto_approved',
-          comment: `AI自动审核通过 (信心度: ${(aiReviewResult.aiReview.confidence * 100).toFixed(1)}%)`,
+          comment: `AI自动审核通过 (信心度: ${(aiReviewResult.aiReview.confidence * 100).toFixed(1)}%)，奖励${pointsReward}积分，等待财务确认`,
           timestamp: new Date()
         });
 
@@ -750,16 +753,6 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
 
       const review = await new ImageReview(reviewData).save();
 
-      // 如果是AI自动审核通过的，需要更新用户积分
-      if (reviewData.status === 'completed') {
-        const user = await require('../models/User').findById(req.user._id);
-        if (user) {
-          user.points += taskConfig.price;
-          user.totalEarnings += taskConfig.price;
-          await user.save();
-          console.log(`💰 用户 ${user.username} 获得 ${taskConfig.price} 积分`);
-        }
-      }
 
       return review;
     }));

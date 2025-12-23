@@ -147,10 +147,11 @@ class ContinuousCheckService {
         // 更新用户积分
         const user = await User.findById(review.userId);
         if (user) {
-          user.continuousCheckPoints += rewardPoints;
-          await user.save();
+          await User.findByIdAndUpdate(review.userId, {
+            $inc: { points: rewardPoints }
+          });
 
-          console.log(`✅ [持续检查] 笔记存在，奖励用户 ${review.userId} ${rewardPoints} 积分 (总积分: ${user.continuousCheckPoints})，检查耗时: ${checkDuration}ms`);
+          console.log(`✅ [持续检查] 笔记存在，奖励用户 ${review.userId} ${rewardPoints} 积分，检查耗时: ${checkDuration}ms`);
 
           // 计算并发放上级佣金（按比例）
           // 一级佣金：直接上级
@@ -158,8 +159,9 @@ class ContinuousCheckService {
             const parentUser = await User.findById(user.parent_id);
             if (parentUser) {
               const parentCommission = rewardPoints * (review.snapshotCommission1 / review.snapshotPrice); // 按比例计算佣金
-              parentUser.continuousCheckPoints += parentCommission;
-              await parentUser.save();
+              await User.findByIdAndUpdate(user.parent_id, {
+                $inc: { points: parentCommission }
+              });
 
               console.log(`💰 [持续检查] 发放一级佣金: ${parentUser._id} 获得 ${parentCommission} 积分`);
 
@@ -182,8 +184,9 @@ class ContinuousCheckService {
               const grandParentUser = await User.findById(parentUser.parent_id);
               if (grandParentUser) {
                 const grandParentCommission = rewardPoints * (review.snapshotCommission2 / review.snapshotPrice); // 按比例计算佣金
-                grandParentUser.continuousCheckPoints += grandParentCommission;
-                await grandParentUser.save();
+                await User.findByIdAndUpdate(parentUser.parent_id, {
+                  $inc: { points: grandParentCommission }
+                });
 
                 console.log(`💰 [持续检查] 发放二级佣金: ${grandParentUser._id} 获得 ${grandParentCommission} 积分`);
 

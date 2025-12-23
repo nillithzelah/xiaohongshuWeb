@@ -1,7 +1,15 @@
 <!-- pages/index/index.wxml -->
 <view class="container">
 
-  <!-- 👤 简化的用户信息头图 -->
+  <!-- 🔒 内部员工使用说明 -->
+  <view class="internal-notice">
+    <view class="notice-content">
+      <text class="notice-icon">🔒</text>
+      <text class="notice-text">本小程序仅限内部员工使用，已进行账号鉴权验证</text>
+    </view>
+  </view>
+
+  <!--  简化的用户信息头图 -->
   <view class="header-card">
     <view class="user-info">
       <view class="avatar-container">
@@ -11,17 +19,6 @@
         <view class="greeting">你好，{{userInfo.nickName || '奋斗者'}}</view>
         <view class="subtitle">{{userInfo.phone ? '今天也是努力搞积分的一天！💪' : '请先完成手机号授权'}}</view>
 
-        <!-- 📱 手机号授权按钮 -->
-        <view class="phone-auth-section" wx:if="{{!userInfo.phone}}">
-          <button
-            class="auth-button"
-            open-type="getPhoneNumber"
-            bindgetphonenumber="onGetPhoneNumber"
-          >
-            📱 授权获取手机号
-          </button>
-          <view class="auth-tip">授权后即可开始使用完整功能</view>
-        </view>
       </view>
     </view>
   </view>
@@ -73,21 +70,23 @@
       <view class="review-card">
         <view class="card-thumb-container">
           <image class="card-thumb" src="{{item.imageUrl}}" mode="aspectFill"></image>
-          <view class="completion-icon" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">✓</view>
+          <view class="completion-icon" wx:if="{{item.status === 'manager_approved' || item.status === 'completed'}}">✓</view>
         </view>
         <view class="card-content">
           <view class="card-row">
             <text class="task-type">{{item.imageType === 'customer_resource' ? '客资' : (item.imageType === 'note' ? '笔记' : '评论')}}</text>
             <view class="status-tag {{item.status}}">
               {{
-                item.status === 'completed' || item.status === 'finance_done' ? '已到账' :
-                (item.status === 'rejected' ? '已驳回' : '审核中')
+                item.status === 'completed' ? '已到账' :
+                (item.status === 'rejected' || item.status === 'manager_rejected' ? '已驳回' :
+                (item.status === 'manager_approved' ? '审核通过' :
+                (item.status === 'mentor_approved' ? '主管审核中' : '审核中')))
               }}
             </view>
           </view>
           <view class="card-row time-row">
             <text class="submit-time">{{item.deviceName}} · {{item.formattedTime}}</text>
-            <text class="amount" wx:if="{{item.status === 'completed' || item.status === 'finance_done'}}">+ {{item.snapshotPrice}}</text>
+            <text class="amount" wx:if="{{item.status === 'manager_approved' || item.status === 'completed'}}">+ {{item.snapshotPrice}}</text>
           </view>
 
           <!-- 驳回原因 -->
@@ -111,15 +110,15 @@
     <view class="modal-content">
       <view class="modal-header">
         <text class="modal-title">📱 手机号授权</text>
+        <view class="close-btn" bindtap="closePhoneAuthModal">✕</view>
       </view>
       <view class="modal-body">
         <view class="auth-icon">📞</view>
         <view class="auth-text">
-          <text wx:if="{{!forceAuth}}">为了更好地为您服务，需要获取您的手机号信息，账号仅限特定人群登录并进行登录账号鉴权</text>
-          <text wx:if="{{forceAuth}}">为了您的账户安全和完整功能使用，必须获取您的手机号信息</text>
+          <text wx:if="{{forceAuth}}">本小程序仅限内部员工使用，为完成身份验证，需要获取您的手机号信息。</text>
         </view>
         <view class="auth-tips">
-          <text>授权后即可享受完整功能，包括任务提交、审核进度查看等</text>
+          <text>手机号仅用于账号安全验证，不会用于其他用途</text>
         </view>
       </view>
       <view class="modal-footer">

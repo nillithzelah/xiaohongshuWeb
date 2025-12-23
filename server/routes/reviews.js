@@ -215,6 +215,19 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
     const { id } = req.params;
     const { amount, commission } = req.body;
 
+    // 验证输入参数
+    if (typeof amount !== 'number' || amount < 0) {
+      return res.status(400).json({ success: false, message: '金额必须是有效的非负数' });
+    }
+
+    if (amount > 10000) {
+      return res.status(400).json({ success: false, message: '单笔金额不能超过10000元' });
+    }
+
+    if (commission !== undefined && (typeof commission !== 'number' || commission < 0)) {
+      return res.status(400).json({ success: false, message: '佣金必须是有效的非负数' });
+    }
+
     const review = await ImageReview.findById(id).populate('userId');
     if (!review) {
       return res.status(404).json({ success: false, message: '审核记录不存在' });
@@ -224,67 +237,138 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
       return res.status(400).json({ success: false, message: '该记录状态不正确' });
     }
 
+    // 验证金额是否与快照价格一致（防止前端篡改）
+    const expectedAmount = review.snapshotPrice;
+    if (Math.abs(amount - expectedAmount) > 0.01) { // 允许0.01元的误差
+      return res.status(400).json({
+        success: false,
+        message: `金额验证失败，期望金额: ${expectedAmount}元，实际金额: ${amount}元`
+      });
+    }
+
+    // 验证佣金是否合理
+    const expectedCommission1 = review.snapshotCommission1 || 0;
+    const expectedCommission2 = review.snapshotCommission2 || 0;
+    const maxExpectedCommission = expectedCommission1 + expectedCommission2;
+
+    if (commission > maxExpectedCommission * 1.1) { // 允许10%的误差
+      return res.status(400).json({
+        success: false,
+        message: `佣金金额异常，期望最大佣金: ${maxExpectedCommission}元，实际佣金: ${commission}元`
+      });
+    }
+
+    // 验证用户钱包信息完整性
+    if (!review.userId) {
+      return res.status(400).json({ success: false, message: '用户关联信息缺失' });
+    }
+
     const oldStatus = review.status;
 
     // 更新审核记录
     review.financeProcess = {
       amount,
       commission: commission || 0,
-      processedAt: new Date()
+      processedAt: new Date(),
+      processedBy: req.user._id,
+      processedByName: req.user.username
     };
     review.status = 'completed';
 
-    // 更新用户积分和总收益
-    const user = review.userId;
-    user.points += amount;
-    user.totalEarnings += amount;
+    // 积分奖励已在审核通过时发放，这里不再重复发放
 
-    // 计算两级上级佣金
+    // 添加财务处理历史记录
+    review.auditHistory.push({
+      operator: req.user._id,
+      operatorName: req.user.username,
+      action: 'finance_process',
+      comment: `财务处理完成 - 金额: ${amount}元, 佣金: ${commission || 0}元`,
+      timestamp: new Date()
+    });
+
+    // 创建任务奖励的Transaction记录（等待管理员确认打款）
+    const Transaction = require('../models/Transaction');
+    await new Transaction({
+      imageReview_id: review._id,
+      user_id: review.userId._id,
+      amount: amount,
+      type: 'task_reward',
+      description: `任务奖励 - ${review.imageType}审核通过`,
+      operator: req.user._id,
+      operatorName: req.user.username
+    }).save();
+
+    // 计算两级上级佣金（带边界检查）
+    let totalCommission = 0;
+
     // 一级佣金：直接上级
-    if (user.parent_id && review.snapshotCommission1 > 0) {
-      const parentUser = await User.findById(user.parent_id);
-      if (parentUser) {
-        parentUser.points += review.snapshotCommission1;
-        parentUser.totalEarnings += review.snapshotCommission1;
-        await parentUser.save();
+    if (review.userId.parent_id && review.snapshotCommission1 > 0) {
+      try {
+        const parentUser = await User.findById(review.userId.parent_id);
+        if (parentUser && !parentUser.is_deleted) {
+          // 验证上级用户状态
+          if (!parentUser.wallet) {
+            parentUser.wallet = { balance: 0, total_earned: 0 };
+          }
 
-        // 记录一级佣金发放事务
-        const Transaction = require('../models/Transaction');
-        await new Transaction({
-          imageReview_id: review._id,
-          user_id: parentUser._id,
-          amount: review.snapshotCommission1,
-          type: 'referral_bonus_1',
-          description: `一级推荐佣金 - 来自用户 ${user.username || user.nickname}`
-        }).save();
+          // 直接发放一级佣金（进入待打款状态）
+          await new Transaction({
+            imageReview_id: review._id,
+            user_id: parentUser._id,
+            amount: review.snapshotCommission1,
+            type: 'referral_bonus_1',
+            description: `一级推荐佣金 - 来自用户 ${review.userId.username || review.userId.nickname}`,
+            operator: req.user._id,
+            operatorName: req.user.username
+          }).save();
+
+          totalCommission += review.snapshotCommission1;
+        } else {
+          console.warn(`上级用户 ${review.userId.parent_id} 不存在或已删除，跳过一级佣金发放`);
+        }
+      } catch (error) {
+        console.error('处理一级佣金时出错:', error);
+        // 继续处理，不影响主流程
       }
     }
 
     // 二级佣金：上级的上级
-    if (user.parent_id && review.snapshotCommission2 > 0) {
-      const parentUser = await User.findById(user.parent_id);
-      if (parentUser && parentUser.parent_id) {
-        const grandParentUser = await User.findById(parentUser.parent_id);
-        if (grandParentUser) {
-          grandParentUser.points += review.snapshotCommission2;
-          grandParentUser.totalEarnings += review.snapshotCommission2;
-          await grandParentUser.save();
+    if (review.userId.parent_id && review.snapshotCommission2 > 0) {
+      try {
+        const parentUser = await User.findById(review.userId.parent_id);
+        if (parentUser && parentUser.parent_id && !parentUser.is_deleted) {
+          const grandParentUser = await User.findById(parentUser.parent_id);
+          if (grandParentUser && !grandParentUser.is_deleted) {
+            // 验证二级上级用户状态
+            if (!grandParentUser.wallet) {
+              grandParentUser.wallet = { balance: 0, total_earned: 0 };
+            }
 
-          // 记录二级佣金发放事务
-          const Transaction = require('../models/Transaction');
-          await new Transaction({
-            imageReview_id: review._id,
-            user_id: grandParentUser._id,
-            amount: review.snapshotCommission2,
-            type: 'referral_bonus_2',
-            description: `二级推荐佣金 - 来自用户 ${user.username || user.nickname}`
-          }).save();
+            // 直接发放二级佣金（进入待打款状态）
+            await new Transaction({
+              imageReview_id: review._id,
+              user_id: grandParentUser._id,
+              amount: review.snapshotCommission2,
+              type: 'referral_bonus_2',
+              description: `二级推荐佣金 - 来自用户 ${review.userId.username || review.userId.nickname}`,
+              operator: req.user._id,
+              operatorName: req.user.username
+            }).save();
+
+            totalCommission += review.snapshotCommission2;
+          } else {
+            console.warn(`二级上级用户 ${parentUser.parent_id} 不存在或已删除，跳过二级佣金发放`);
+          }
         }
+      } catch (error) {
+        console.error('处理二级佣金时出错:', error);
+        // 继续处理，不影响主流程
       }
     }
 
+    console.log(`💰 财务处理完成 - 任务奖励: ${amount}元, 佣金总额: ${totalCommission}元`);
+
     await review.save();
-    await user.save();
 
     // 发送通知
     await notificationService.sendReviewStatusNotification(review, oldStatus, review.status);
@@ -296,7 +380,33 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
     });
   } catch (error) {
     console.error('财务处理错误:', error);
-    res.status(500).json({ success: false, message: '处理失败' });
+
+    // 记录错误到系统日志
+    try {
+      const AuditLog = require('../models/AuditLog') || {
+        create: (log) => console.log('审计日志:', log)
+      };
+
+      await AuditLog.create({
+        operation: 'finance_process',
+        operator: req.user._id,
+        operatorName: req.user.username,
+        targetId: req.params.id,
+        action: 'error',
+        details: {
+          error: error.message,
+          stack: error.stack,
+          input: { amount, commission }
+        },
+        ip: req.ip,
+        userAgent: req.get('User-Agent'),
+        timestamp: new Date()
+      });
+    } catch (auditError) {
+      console.error('审计日志记录失败:', auditError);
+    }
+
+    res.status(500).json({ success: false, message: '处理失败，请联系管理员' });
   }
 });
 

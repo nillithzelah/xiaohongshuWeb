@@ -10,6 +10,34 @@ page {
   position: relative;
 }
 
+/* 🔒 内部员工使用说明 */
+.internal-notice {
+  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+  border: 1rpx solid #f39c12;
+  border-radius: 12rpx;
+  margin: 20rpx 30rpx;
+  padding: 20rpx;
+  position: relative;
+}
+
+.notice-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notice-icon {
+  font-size: 32rpx;
+  margin-right: 12rpx;
+}
+
+.notice-text {
+  font-size: 26rpx;
+  color: #856404;
+  font-weight: 500;
+  text-align: center;
+}
+
 /* 添加背景装饰 */
 .container::before {
   content: '';
@@ -284,15 +312,23 @@ page {
   border-radius: 8rpx;
   font-weight: 500;
 }
-.status-tag.pending, .status-tag.cs_review, .status-tag.boss_approved {
+.status-tag.pending {
   background: #e6f7ff;
   color: #1890ff;
 }
-.status-tag.completed, .status-tag.finance_done {
+.status-tag.mentor_approved {
+  background: #fff7e6;
+  color: #fa8c16;
+}
+.status-tag.manager_approved {
+  background: #f6ffed;
+  color: #52c41a;
+}
+.status-tag.completed {
   background: #f0f9ff;
   color: #52c41a;
 }
-.status-tag.rejected {
+.status-tag.rejected, .status-tag.manager_rejected {
   background: #fff2f0;
   color: #f5222d;
 }
@@ -395,6 +431,29 @@ page {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   padding: 40rpx 30rpx 30rpx;
   text-align: center;
+  position: relative;
+}
+
+.close-btn {
+  position: absolute;
+  top: 20rpx;
+  right: 20rpx;
+  width: 60rpx;
+  height: 60rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 32rpx;
+  font-weight: bold;
+  transition: all 0.3s ease;
+}
+
+.close-btn:active {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(0.95);
 }
 
 .modal-title {

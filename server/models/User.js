@@ -67,28 +67,20 @@ const userSchema = new mongoose.Schema({
     real_name: {
       type: String
     },
-    total_income: {
+    total_withdrawn: {
       type: Number,
-      default: 0
+      default: 0,
+      min: 0
     }
   },
 
-  // 兼容旧字段（后续可移除）
+  // 积分系统（用于兑换余额）
   points: {
     type: Number,
-    default: 0
-  },
-  totalEarnings: {
-    type: Number,
-    default: 0
-  },
-
-  // 持续检查积分（笔记存在性奖励）
-  continuousCheckPoints: {
-    type: Number,
-    default: 0, // 累计获得的持续检查积分
+    default: 0,
     min: 0
   },
+
 
   createdAt: {
     type: Date,
@@ -151,19 +143,44 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// 密码加密中间件 (上帝模式下暂时移除)
+// 密码加密中间件
+userSchema.pre('save', async function(next) {
+  // 只有在密码被修改时才加密
+  if (!this.isModified('password')) return next();
+
+  // 如果密码已经是bcrypt哈希，跳过加密
+  if (this.password && (this.password.startsWith('$2a$') || this.password.startsWith('$2b$') || this.password.startsWith('$2y$'))) {
+    return next();
+  }
+
+  try {
+    // 生成盐并加密密码
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 // 索引
-userSchema.index({ continuousCheckPoints: 1 });
 
 // 验证密码方法
 userSchema.methods.comparePassword = async function(candidatePassword) {
-  // 开发环境下，如果密码看起来是明文的（不是bcrypt哈希），直接比较
-  if (this.password && !this.password.startsWith('$2a$') && !this.password.startsWith('$2b$') && !this.password.startsWith('$2y$')) {
-    return candidatePassword === this.password;
+  // 检查密码是否存在
+  if (!this.password) {
+    return false;
   }
-  // 生产环境下，使用bcrypt比较
-  return await bcrypt.compare(candidatePassword, this.password);
+
+  // 如果密码是bcrypt哈希格式，使用bcrypt比较
+  if (this.password.startsWith('$2a$') || this.password.startsWith('$2b$') || this.password.startsWith('$2y$')) {
+    return await bcrypt.compare(candidatePassword, this.password);
+  }
+
+  // 如果密码不是哈希格式（兼容旧数据），直接比较
+  // 但这种情况应该很少见，新注册的用户都会被哈希
+  console.warn('警告：发现未哈希的密码，请检查数据迁移');
+  return candidatePassword === this.password;
 };
 
 module.exports = mongoose.model('User', userSchema);

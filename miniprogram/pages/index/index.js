@@ -2,18 +2,16 @@
 const app = getApp();
 const CONFIG = require('../../config.js');
 
+// 使用配置文件中的API端点（已统一管理）
 const API_CONFIG = {
-  ANNOUNCEMENTS: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/announcements`,
-  USER_TASKS: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/user/tasks`
+  ANNOUNCEMENTS: CONFIG.API_BASE_URL + CONFIG.API_ENDPOINTS.CLIENT.ANNOUNCEMENTS,
+  USER_TASKS: CONFIG.API_BASE_URL + CONFIG.API_ENDPOINTS.CLIENT.USER_TASKS
 };
 
-// 默认测试Token（仅开发环境使用，boss用户token）
-// 用户信息：boss001 (boss) - ID: 693d29b5cbc188007ecc5848
-// 权限：所有权限，可以查看所有数据
-// 生成时间：2025-12-13，使用xiaohongshu_prod_jwt密钥签名
-const DEFAULT_TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI';
+// 从配置文件获取测试token（已移至config.js统一管理）
+const DEFAULT_TEST_TOKEN = CONFIG.TEST_TOKENS?.BOSS_TOKEN;
 
-console.log(`🏠 首页环境: ${CONFIG.ENV}`);
+console.info(`首页环境: ${CONFIG.ENV}`);
 
 Page({
   data: {
@@ -42,12 +40,29 @@ Page({
   },
 
   onShow() {
-    // 每次显示页面时，刷新列表（确保看到最新状态）
-    this.fetchReviews(true);
+   console.debug('首页 onShow 被调用');
+
+    // 检查用户登录状态是否发生变化
+    const app = getApp();
+    const currentUserInfo = app.globalData.userInfo || wx.getStorageSync('userInfo');
+    const previousUserInfo = this.data.userInfo;
+
+   console.debug('当前用户信息:', currentUserInfo ? '已设置' : '未设置');
+
+    // 如果用户信息发生变化（登录/登出/手机号授权），清除相关缓存
+    const userChanged = this.hasUserInfoChanged(previousUserInfo, currentUserInfo);
+    if (userChanged) {
+     console.info('用户信息发生变化，清除相关缓存');
+      this.clearUserRelatedCache();
+    }
+
     // 更新用户信息
     this.updateUserInfo();
 
-    // 检查是否需要手机号授权
+    // 每次显示页面时，刷新列表（确保看到最新状态）
+    this.fetchReviews(true);
+
+    // 检查是否需要手机号授权（根据登录类型）
     this.checkPhoneAuth();
   },
 
@@ -58,23 +73,52 @@ Page({
     });
   },
 
+  // 检查用户信息是否发生变化（使用公共方法）
+  hasUserInfoChanged(oldInfo, newInfo) {
+    return getApp().utils.hasUserInfoChanged(oldInfo, newInfo);
+  },
+
+  // 清除用户相关的缓存数据
+  clearUserRelatedCache() {
+    const app = getApp();
+   console.debug('清除用户相关缓存');
+
+    // 清除全局数据管理器中的用户相关缓存
+    app.globalDataManager.clear('announcements');
+    app.globalDataManager.clear('userTasks');
+    app.globalDataManager.clear('userDevices');
+
+    // 清除网络请求缓存
+    app.requestCache.cache.clear();
+    app.requestCache.pendingRequests.clear();
+
+   console.debug('用户相关缓存已清除');
+  },
+
   // 更新用户信息
   updateUserInfo() {
+   console.debug('updateUserInfo 被调用');
+
     // 优先使用全局用户信息
     const globalUserInfo = getApp().globalData.userInfo;
+
     if (globalUserInfo) {
+     console.debug('使用全局用户信息更新页面');
       this.setData({ userInfo: globalUserInfo });
       return;
     }
 
     // 从本地存储获取
     const storedUserInfo = wx.getStorageSync('userInfo');
+
     if (storedUserInfo) {
+     console.debug('使用本地存储用户信息更新页面');
       this.setData({ userInfo: storedUserInfo });
       return;
     }
 
     // 默认用户信息
+   console.debug('使用默认用户信息');
     this.setData({
       userInfo: { nickName: '奋斗者' }
     });
@@ -84,8 +128,17 @@ Page({
   checkPhoneAuth() {
     // 延迟一点时间，确保用户信息已更新
     setTimeout(() => {
-      if (!this.data.userInfo.phone) {
-        // 没有手机号，显示授权模态框
+      const loginType = wx.getStorageSync('loginType');
+
+      // 如果是账号密码登录，用户已经有手机号了，不需要授权
+      if (loginType === 'account') {
+        console.debug('账号密码登录用户，跳过手机号授权检查');
+        return;
+      }
+
+      // 如果是手机号一键登录但没有手机号，才需要授权
+      if (loginType === 'phone' && !this.data.userInfo.phone) {
+        console.debug('手机号一键登录用户缺少手机号，显示授权弹窗');
         this.setData({ showPhoneAuthModal: true });
       }
     }, 500);
@@ -98,7 +151,7 @@ Page({
     // 检查全局共享数据
     const sharedData = app.globalDataManager.get('announcements');
     if (sharedData) {
-      console.log('📦 使用共享公告数据');
+     console.debug('使用共享公告数据');
       this.setData({ announcements: sharedData });
       return;
     }
@@ -112,8 +165,9 @@ Page({
       useCache: true
     }).then(res => {
       if (res.data.success && res.data.announcements && res.data.announcements.length > 0) {
-        app.globalDataManager.set('announcements', res.data.announcements);
-        this.setData({ announcements: res.data.announcements });
+        const announcements = getApp().utils.ensureArray(res.data.announcements);
+        app.globalDataManager.set('announcements', announcements);
+        this.setData({ announcements: announcements });
       } else {
         // 如果后端没数据，显示默认假数据演示效果
         const defaultAnnouncements = [
@@ -149,14 +203,15 @@ Page({
         header: token ? { 'Authorization': `Bearer ${token}` } : {},
         success: (res) => {
           if (res.data && res.data.success) {
-            const newReviews = res.data.reviews.map(item => ({
+            const reviews = getApp().utils.ensureArray(res.data.reviews);
+            const newReviews = reviews.map(item => ({
               ...item,
-              // 支持多图：显示第一张图片
-              imageUrl: item.imageUrls && item.imageUrls.length > 0 ? item.imageUrls[0] : item.imageUrl,
+              // 支持多图：显示第一张图片（类型安全）
+              imageUrl: getApp().utils.safeGet(item, 'imageUrls.0', item.imageUrl),
               // 简单格式化时间 MM-DD HH:mm
               formattedTime: item.createdAt ? item.createdAt.substring(5, 16).replace('T', ' ') : '刚刚',
-              // 添加设备信息显示
-              deviceName: item.deviceInfo ? item.deviceInfo.accountName : '未知设备'
+              // 添加设备信息显示（类型安全）
+              deviceName: getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备')
             }));
 
             this.setData({
@@ -168,7 +223,7 @@ Page({
           }
         },
         fail: (err) => {
-          console.error('获取审核记录失败:', err);
+         console.error('获取审核记录失败:', err.message);
           this.setData({ loading: false });
         },
         complete: () => {
@@ -189,38 +244,46 @@ Page({
 
   // 处理手机号授权
   onGetPhoneNumber(e) {
-    console.log('📱 开始获取手机号:', e);
+   console.debug('开始获取手机号');
 
     getApp().getPhoneNumber(e, (userInfo) => {
-      console.log('✅ 手机号获取成功:', userInfo);
+     console.info('手机号获取成功');
+
+      // 手机号授权成功后，清除所有用户相关缓存
+      this.clearUserRelatedCache();
+
+      // 强制更新页面数据
       this.setData({
-        userInfo,
-        showPhoneAuthModal: false, // 关闭模态框
-        forceAuth: false // 清除强制授权标记
+        userInfo: null, // 先清空，触发页面重新渲染
+        showPhoneAuthModal: false,
+        forceAuth: false
       });
 
-      wx.showToast({
-        title: '手机号获取成功',
-        icon: 'success',
-        duration: 2000
-      });
+      // 短暂延迟后重新设置数据，确保页面完全重新渲染
+      setTimeout(() => {
+        this.setData({
+          userInfo,
+          showPhoneAuthModal: false,
+          forceAuth: false
+        });
 
-      // 重新获取审核记录（现在有手机号了）
-      this.fetchReviews(true);
+       console.debug('页面数据已更新');
+
+        wx.showToast({
+          title: '手机号获取成功',
+          icon: 'success',
+          duration: 2000
+        });
+
+        // 重新获取所有数据（公告、审核记录等）
+        this.fetchAnnouncements();
+        this.fetchReviews(true);
+      }, 200);
     });
   },
 
   // 关闭手机号授权模态框
   closePhoneAuthModal() {
-    // 在强制授权模式下，不允许关闭模态框
-    if (this.data.forceAuth) {
-      wx.showToast({
-        title: '必须授权手机号才能使用，账号仅限特定人群登录并进行登录账号鉴权',
-        icon: 'none',
-        duration: 2000
-      });
-      return;
-    }
     this.setData({ showPhoneAuthModal: false });
   },
 

@@ -1,0 +1,167 @@
+<!-- pages/login/login.wxml -->
+<view class="login-container">
+  <!-- 顶部Logo区域 -->
+  <view class="logo-section">
+    <view class="logo">
+      <text class="logo-text">📱</text>
+    </view>
+    <view class="app-name">审核系统</view>
+    <view class="app-desc">本小程序仅限内部员工使用</view>
+  </view>
+
+  <!-- 主要内容区域 -->
+    <!-- 登录选项卡 -->
+    <view class="tab-section" wx:if="{{!showRegister}}">
+      <view class="tab-item {{currentTab === 'wechat' ? 'active' : ''}}" bindtap="switchTab" data-tab="wechat">
+        <text>手机号登录</text>
+      </view>
+      <view class="tab-item {{currentTab === 'account' ? 'active' : ''}}" bindtap="switchTab" data-tab="account">
+        <text>账号登录</text>
+      </view>
+    </view>
+
+    <!-- 手机号登录区域 -->
+    <view class="login-section {{currentTab === 'wechat' && !showRegister ? 'show' : ''}}">
+      <button
+        class="login-btn wechat-btn {{loading ? 'loading' : ''}}"
+        open-type="getPhoneNumber"
+        bindgetphonenumber="onGetPhoneNumber"
+        disabled="{{loading}}"
+      >
+        <text class="btn-icon">📞</text>
+        <text class="btn-text">{{loading ? '登录中...' : '手机号一键登录'}}</text>
+      </button>
+
+      <view class="switch-hint">
+        <text>还没有账号？</text>
+        <text class="link" bindtap="switchToRegister">立即注册</text>
+      </view>
+    </view>
+
+    <!-- 账号密码登录区域 -->
+    <view class="login-section {{currentTab === 'account' && !showRegister ? 'show' : ''}}">
+      <view class="form-group">
+        <input
+          class="form-input"
+          type="number"
+          placeholder="请输入手机号"
+          value="{{loginForm.phoneNumber}}"
+          bindinput="onLoginInput"
+          data-field="phoneNumber"
+        />
+      </view>
+
+      <view class="form-group">
+        <input
+          class="form-input"
+          password="{{!showPassword}}"
+          placeholder="请输入密码"
+          value="{{loginForm.password}}"
+          bindinput="onLoginInput"
+          data-field="password"
+        />
+        <view class="password-toggle" bindtap="togglePassword">
+          <text>{{showPassword ? '🙈' : '👁️'}}</text>
+        </view>
+      </view>
+
+      <button
+        class="login-btn account-btn {{loginLoading ? 'loading' : ''}}"
+        bindtap="onAccountLogin"
+        disabled="{{loginLoading}}"
+      >
+        <text>{{loginLoading ? '登录中...' : '登录'}}</text>
+      </button>
+
+      <view class="switch-hint">
+        <text>还没有账号？</text>
+        <text class="link" bindtap="switchToRegister">立即注册</text>
+      </view>
+    </view>
+
+    <!-- 注册区域 -->
+    <view class="register-section" wx:if="{{showRegister}}">
+      <view class="register-header">
+      <view class="back-btn" bindtap="backToLogin">←</view>
+      <text class="register-title">注册账号</text>
+    </view>
+
+    <view class="form-group">
+      <input
+        class="form-input"
+        type="number"
+        placeholder="手机号（必须已在系统中存在）"
+        value="{{registerForm.phoneNumber}}"
+        bindinput="onRegisterInput"
+        data-field="phoneNumber"
+      />
+    </view>
+
+    <view class="form-group">
+      <input
+        class="form-input"
+        placeholder="用户名（4-20位字母数字下划线）"
+        value="{{registerForm.username}}"
+        bindinput="onRegisterInput"
+        data-field="username"
+      />
+    </view>
+
+    <view class="form-group">
+      <input
+        class="form-input"
+        placeholder="昵称（可选）"
+        value="{{registerForm.nickname}}"
+        bindinput="onRegisterInput"
+        data-field="nickname"
+      />
+    </view>
+
+    <view class="form-group">
+      <input
+        class="form-input"
+        password="{{!showRegPassword}}"
+        placeholder="密码（至少6位）"
+        value="{{registerForm.password}}"
+        bindinput="onRegisterInput"
+        data-field="password"
+      />
+      <view class="password-toggle" bindtap="toggleRegPassword">
+        <text>{{showRegPassword ? '🙈' : '👁️'}}</text>
+      </view>
+    </view>
+
+    <view class="form-group">
+      <input
+        class="form-input"
+        password="{{!showRegConfirmPassword}}"
+        placeholder="确认密码"
+        value="{{registerForm.confirmPassword}}"
+        bindinput="onRegisterInput"
+        data-field="confirmPassword"
+      />
+      <view class="password-toggle" bindtap="toggleRegConfirmPassword">
+        <text>{{showRegConfirmPassword ? '🙈' : '👁️'}}</text>
+      </view>
+    </view>
+
+    <button
+      class="login-btn register-btn {{registerLoading ? 'loading' : ''}}"
+      bindtap="onRegister"
+      disabled="{{registerLoading}}"
+    >
+      <text>{{registerLoading ? '注册中...' : '注册'}}</text>
+    </button>
+    </view>
+
+
+  <!-- 加载遮罩 -->
+  <view class="loading-overlay {{loading ? 'show' : ''}}">
+    <view class="loading-content">
+      <view class="loading-spinner"></view>
+      <text class="loading-text">登录中...</text>
+    </view>
+  </view>
+
+  <!-- 服务条款提示 - 已删除 -->
+</view>

@@ -50,33 +50,160 @@ router.post('/wechat-login', async (req, res) => {
     // 如果提供了加密的手机号数据，尝试解密
     if (encryptedData && iv) {
       try {
-        // 首先尝试从请求参数获取手机号（开发环境）
+        // 开发环境：优先使用直接传递的手机号参数
         if (req.body.phoneNumber) {
           phoneNumber = req.body.phoneNumber;
           console.log('📱 使用请求参数手机号:', phoneNumber);
         } else {
-          // 尝试真实解密（生产环境）
-          // 注意：需要先获取session_key，这里暂时模拟
+          // 生产环境：需要先通过code获取session_key，然后解密
+          console.log('📱 开始解密手机号数据...');
+
+          // 1. 通过code获取session_key（这里需要调用微信API）
+          // 注意：小程序端已经通过wx.login获取了code，这里需要服务端调用微信API
+          const https = require('https');
+          const appId = process.env.WX_APP_ID || process.env.WECHAT_APP_ID || 'your_app_id';
+          const appSecret = process.env.WX_APP_SECRET || process.env.WECHAT_APP_SECRET || 'your_app_secret';
+          const wechatApiUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${appId}&secret=${appSecret}&js_code=${code}&grant_type=authorization_code`;
+
+          console.log('📱 调用微信API获取session_key...');
+          console.log('📱 环境变量状态:', {
+            WX_APP_ID: process.env.WX_APP_ID ? '已配置' : '未配置',
+            WECHAT_APP_ID: process.env.WECHAT_APP_ID ? '已配置' : '未配置',
+            WX_APP_SECRET: process.env.WX_APP_SECRET ? '已配置' : '未配置',
+            WECHAT_APP_SECRET: process.env.WECHAT_APP_SECRET ? '已配置' : '未配置',
+            using_appId: appId,
+            using_appSecret: appSecret ? '已配置' : '未配置',
+            actual_appId_value: appId,
+            actual_appSecret_length: appSecret ? appSecret.length : 0
+          });
+
+          console.log('📱 微信API完整URL:', wechatApiUrl);
+
+          const wechatData = await new Promise((resolve, reject) => {
+            https.get(wechatApiUrl, (res) => {
+              let data = '';
+              res.on('data', (chunk) => data += chunk);
+              res.on('end', () => {
+                console.log('📱 微信API原始响应:', data);
+                try {
+                  resolve(JSON.parse(data));
+                } catch (e) {
+                  reject(new Error('解析微信API响应失败'));
+                }
+              });
+            }).on('error', reject);
+          });
+
+          if (wechatData.errcode) {
+            throw new Error(`微信API错误: ${wechatData.errmsg}`);
+          }
+
+          const sessionKey = wechatData.session_key;
+          console.log('📱 获取到session_key:', sessionKey);
+
+          // 验证session_key格式
+          if (!sessionKey || typeof sessionKey !== 'string') {
+            throw new Error('无效的session_key格式');
+          }
+
+          // 解码session_key并验证长度（应为24字符base64，解码后16字节）
+          let sessionKeyBuffer;
+          try {
+            sessionKeyBuffer = Buffer.from(sessionKey, 'base64');
+            if (sessionKeyBuffer.length !== 16) {
+              throw new Error(`session_key长度无效: 期望16字节，实际${sessionKeyBuffer.length}字节`);
+            }
+          } catch (bufferError) {
+            throw new Error(`session_key base64解码失败: ${bufferError.message}`);
+          }
+
+          // 验证iv格式
+          if (!iv || typeof iv !== 'string') {
+            throw new Error('无效的iv格式');
+          }
+
+          let ivBuffer;
+          try {
+            ivBuffer = Buffer.from(iv, 'base64');
+            if (ivBuffer.length !== 16) {
+              throw new Error(`iv长度无效: 期望16字节，实际${ivBuffer.length}字节`);
+            }
+          } catch (ivError) {
+            throw new Error(`iv base64解码失败: ${ivError.message}`);
+          }
+
+          // 2. 使用session_key解密手机号数据
+          console.log('🔐 开始AES解密过程...');
+          console.log('🔐 session_key (base64):', sessionKey.substring(0, 10) + '...');
+          console.log('🔐 iv (base64):', iv.substring(0, 10) + '...');
+          console.log('🔐 encryptedData长度:', encryptedData.length);
+
           const crypto = require('crypto');
+          const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKeyBuffer, ivBuffer);
+          decipher.setAutoPadding(true);
 
-          // 模拟session_key（生产环境需要从微信API获取）
-          const sessionKey = Buffer.from('session_' + Date.now(), 'utf8');
+          console.log('🔐 创建decipher对象成功');
 
-          // 解密算法
-          const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKey, Buffer.from(iv, 'base64'));
-          let decrypted = decipher.update(Buffer.from(encryptedData, 'base64'));
-          decrypted = Buffer.concat([decrypted, decipher.final()]);
+          // 记录解密步骤
+          let encryptedBuffer;
+          try {
+            encryptedBuffer = Buffer.from(encryptedData, 'base64');
+            console.log('🔐 encryptedData base64解码成功，长度:', encryptedBuffer.length);
+          } catch (bufferError) {
+            throw new Error(`encryptedData base64解码失败: ${bufferError.message}`);
+          }
 
-          const phoneData = JSON.parse(decrypted.toString());
+          let decrypted;
+          try {
+            decrypted = decipher.update(encryptedBuffer);
+            console.log('🔐 decipher.update成功，中间结果长度:', decrypted.length);
+          } catch (updateError) {
+            throw new Error(`decipher.update失败: ${updateError.message}`);
+          }
+
+          let finalPart;
+          try {
+            finalPart = decipher.final();
+            console.log('🔐 decipher.final成功，最终部分长度:', finalPart.length);
+          } catch (finalError) {
+            throw new Error(`decipher.final失败: ${finalError.message}`);
+          }
+
+          decrypted = Buffer.concat([decrypted, finalPart]);
+          console.log('🔐 完整解密结果长度:', decrypted.length);
+
+          let decryptedString;
+          try {
+            decryptedString = decrypted.toString('utf8');
+            console.log('🔐 UTF8解码成功，字符串长度:', decryptedString.length);
+            console.log('🔐 解密字符串预览:', decryptedString.substring(0, 100) + (decryptedString.length > 100 ? '...' : ''));
+          } catch (stringError) {
+            throw new Error(`UTF8解码失败: ${stringError.message}`);
+          }
+
+          let phoneData;
+          try {
+            phoneData = JSON.parse(decryptedString);
+            console.log('🔐 JSON解析成功:', JSON.stringify(phoneData, null, 2));
+          } catch (jsonError) {
+            console.error('🔐 JSON解析失败，原始字符串:', decryptedString);
+            throw new Error(`JSON解析失败: ${jsonError.message}`);
+          }
+
+          if (!phoneData.phoneNumber) {
+            throw new Error('解密结果中没有phoneNumber字段');
+          }
+
           phoneNumber = phoneData.phoneNumber;
-
-          console.log('📱 真实解密得到手机号:', phoneNumber);
+          console.log('📱 成功解密手机号:', phoneNumber);
         }
       } catch (decryptError) {
-        console.error('手机号解密失败:', decryptError);
-        // 解密失败时，使用默认测试手机号
-        phoneNumber = '13594226812';
-        console.log('📱 使用默认测试手机号:', phoneNumber);
+        console.error('📱 手机号解密失败:', decryptError.message);
+        console.error('📱 解密错误详情:', decryptError);
+
+        // 解密失败不设置手机号，让用户重新授权
+        console.log('📱 解密失败，不设置手机号');
+        phoneNumber = null;
       }
     }
 
@@ -106,8 +233,7 @@ router.post('/wechat-login', async (req, res) => {
           openid,
           role: 'part_time',
           phone: phoneNumber,
-          points: 0,
-          totalEarnings: 0
+          points: 0
         });
         await user.save();
         console.log('👤 创建手机号用户:', user.username, phoneNumber);
@@ -123,8 +249,7 @@ router.post('/wechat-login', async (req, res) => {
           openid,
           role: 'part_time',
           phone: null,
-          points: 0,
-          totalEarnings: 0
+          points: 0
         });
         await user.save();
         console.log('👤 创建微信用户:', user.username);
@@ -144,7 +269,7 @@ router.post('/wechat-login', async (req, res) => {
         role: user.role,
         phone: user.phone,
         points: user.points,
-        totalEarnings: user.totalEarnings
+        totalWithdrawn: user.wallet?.total_withdrawn || 0
       }
     });
 
@@ -196,19 +321,19 @@ router.post('/wechat-login', async (req, res) => {
 //   }
 // });
 
-// 临时简单登录路由
-router.post('/login', (req, res) => {
-  console.log('🎯 收到登录请求:', req.body);
-  res.json({
-    success: true,
-    token: 'test_token',
-    user: {
-      id: 'test_id',
-      username: req.body.username || 'test',
-      role: 'cs'
-    }
-  });
-});
+// 临时简单登录路由 - 已禁用，避免与正式登录路由冲突
+// router.post('/login', (req, res) => {
+//   console.log('🎯 收到登录请求:', req.body);
+//   res.json({
+//     success: true,
+//     token: 'test_token',
+//     user: {
+//       id: 'test_id',
+//       username: req.body.username || 'test',
+//       role: 'cs'
+//     }
+//   });
+// });
 
 // 管理员登录路由
 router.post('/admin-login', async (req, res) => {
@@ -452,7 +577,6 @@ router.post('/phone-login', async (req, res) => {
         phone: phoneNumber,
         role: 'part_time',
         points: 0,
-        totalEarnings: 0,
         nickname: `用户${phoneNumber.slice(-4)}` // 默认昵称
       });
       await user.save();
@@ -471,13 +595,181 @@ router.post('/phone-login', async (req, res) => {
         phone: user.phone,
         nickname: user.nickname,
         points: user.points,
-        totalEarnings: user.totalEarnings
+        totalWithdrawn: user.wallet?.total_withdrawn || 0
       }
     });
 
   } catch (error) {
     console.error('手机号登录错误:', error);
     res.status(500).json({ success: false, message: '登录失败' });
+  }
+});
+
+// 用户注册（需要手机号验证）
+router.post('/user-register', async (req, res) => {
+  try {
+    const { phoneNumber, username, password, nickname } = req.body;
+
+    console.log('📝 用户注册请求:', { phoneNumber, username, nickname });
+
+    // 参数验证
+    if (!phoneNumber || !username || !password) {
+      return res.status(400).json({ success: false, message: '手机号、用户名和密码不能为空' });
+    }
+
+    // 检查手机号格式
+    const phoneRegex = /^1[3-9]\d{9}$/;
+    if (!phoneRegex.test(phoneNumber)) {
+      return res.status(400).json({ success: false, message: '手机号格式不正确' });
+    }
+
+    // 检查用户名格式（字母数字下划线，4-20字符）
+    const usernameRegex = /^[a-zA-Z0-9_]{4,20}$/;
+    if (!usernameRegex.test(username)) {
+      return res.status(400).json({ success: false, message: '用户名格式不正确（4-20位字母数字下划线）' });
+    }
+
+    // 检查密码强度（至少6位）
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: '密码至少需要6位字符' });
+    }
+
+    // 检查手机号是否已在后端存在
+    const existingPhoneUser = await User.findOne({
+      phone: phoneNumber,
+      is_deleted: { $ne: true }
+    });
+
+    if (!existingPhoneUser) {
+      return res.status(400).json({
+        success: false,
+        message: '该手机号尚未在系统中注册，请先通过手机号一键登录创建账号'
+      });
+    }
+
+    // 检查手机号是否已被其他账号绑定（防止重复注册）
+    if (existingPhoneUser.username && existingPhoneUser.password) {
+      return res.status(400).json({
+        success: false,
+        message: '该手机号已被注册账号，请直接登录'
+      });
+    }
+
+    // 检查用户名是否已被使用
+    const existingUsernameUser = await User.findOne({
+      username,
+      is_deleted: { $ne: true }
+    });
+
+    if (existingUsernameUser) {
+      return res.status(400).json({ success: false, message: '用户名已被使用' });
+    }
+
+    console.log('✅ 手机号验证通过，更新用户账号信息');
+
+    // 检查用户是否已被分配给带教老师
+    const isAssignedToMentor = existingPhoneUser.mentor_id !== null && existingPhoneUser.mentor_id !== undefined;
+
+    if (isAssignedToMentor) {
+      console.log('📋 用户已被分配给带教老师，更新账号信息并保留系统设置');
+
+      // 对于已分配用户，只更新用户主动设置的信息
+      // 保留HR和主管设置的系统信息（如微信、小红书账号等）
+      existingPhoneUser.username = username;
+      existingPhoneUser.password = password; // 会通过pre save中间件自动加密
+
+      // 如果用户提供了昵称，则更新；否则保持原有昵称
+      if (nickname && nickname.trim()) {
+        existingPhoneUser.nickname = nickname.trim();
+      }
+
+      console.log('🔄 已分配用户账号信息更新完成，保留系统配置');
+    } else {
+      console.log('🆕 新线索用户，设置完整账号信息');
+
+      // 对于新线索用户，设置完整的账号信息
+      existingPhoneUser.username = username;
+      existingPhoneUser.password = password; // 会通过pre save中间件自动加密
+      existingPhoneUser.nickname = nickname || username;
+    }
+
+    await existingPhoneUser.save();
+    console.log('👤 用户注册成功:', username, phoneNumber, isAssignedToMentor ? '(已分配)' : '(新用户)');
+
+    // 自动登录，返回token
+    const token = generateToken(existingPhoneUser._id);
+
+    res.json({
+      success: true,
+      message: '注册成功',
+      token,
+      user: {
+        id: existingPhoneUser.username,
+        username: existingPhoneUser.username,
+        role: existingPhoneUser.role,
+        phone: existingPhoneUser.phone,
+        nickname: existingPhoneUser.nickname,
+        points: existingPhoneUser.points,
+        totalWithdrawn: existingPhoneUser.wallet?.total_withdrawn || 0
+      }
+    });
+
+  } catch (error) {
+    console.error('用户注册错误:', error);
+    res.status(500).json({ success: false, message: '注册失败，请稍后重试' });
+  }
+});
+
+// 账号密码登录
+router.post('/login', async (req, res) => {
+  try {
+    const { phoneNumber, password } = req.body;
+
+    console.log('🔐 账号密码登录请求:', phoneNumber);
+
+    // 参数验证
+    if (!phoneNumber || !password) {
+      return res.status(400).json({ success: false, message: '手机号和密码不能为空' });
+    }
+
+    // 查找用户
+    const user = await User.findOne({
+      phone: phoneNumber,
+      is_deleted: { $ne: true }
+    });
+
+    if (!user) {
+      return res.status(401).json({ success: false, message: '手机号或密码错误' });
+    }
+
+    // 验证密码
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, message: '手机号或密码错误' });
+    }
+
+    console.log('✅ 密码验证通过:', user.username);
+
+    // 生成token
+    const token = generateToken(user._id);
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.username,
+        username: user.username,
+        role: user.role,
+        phone: user.phone,
+        nickname: user.nickname,
+        points: user.points,
+        totalWithdrawn: user.wallet?.total_withdrawn || 0
+      }
+    });
+
+  } catch (error) {
+    console.error('账号密码登录错误:', error);
+    res.status(500).json({ success: false, message: '登录失败，请稍后重试' });
   }
 });
 

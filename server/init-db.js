@@ -56,11 +56,11 @@ async function initTestData() {
     // 创建测试用户
     const users = [
       // 兼职用户
-      { username: 'user001', nickname: '张三', role: 'part_time', points: 100, totalEarnings: 150 },
-      { username: 'user002', nickname: '李四', role: 'part_time', points: 200, totalEarnings: 300 },
-      { username: 'user003', nickname: '王五', role: 'part_time', points: 50, totalEarnings: 80 },
-      { username: 'user004', nickname: '赵六', role: 'part_time', points: 150, totalEarnings: 200 },
-      { username: 'user005', nickname: '孙七', role: 'part_time', points: 300, totalEarnings: 450 },
+      { username: 'user001', nickname: '张三', role: 'part_time', points: 100 },
+      { username: 'user002', nickname: '李四', role: 'part_time', points: 200 },
+      { username: 'user003', nickname: '王五', role: 'part_time', points: 50 },
+      { username: 'user004', nickname: '赵六', role: 'part_time', points: 150 },
+      { username: 'user005', nickname: '孙七', role: 'part_time', points: 300 },
 
       // 带教老师
       { username: 'cs001', nickname: '带教老师小王', role: 'mentor', password: '123456' },

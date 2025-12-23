@@ -9,7 +9,7 @@ async function migrateServerDB() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ 数据库连接成功');
 
-    const ImageReview = require('./models/ImageReview');
+    const ImageReview = require('./server/models/ImageReview');
 
     // 1. 获取所有记录（因为旧记录都没有新字段）
     const records = await ImageReview.find({});

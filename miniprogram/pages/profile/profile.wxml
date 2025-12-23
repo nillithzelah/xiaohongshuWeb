@@ -16,16 +16,16 @@
     <view class="asset-item">
       <view class="asset-icon">⭐</view>
       <view class="asset-info">
-        <text class="asset-value">{{balance}}</text>
-        <text class="asset-label">积分余额</text>
+        <text class="asset-value">{{points}}</text>
+        <text class="asset-label">当前积分</text>
       </view>
     </view>
     <view class="asset-divider"></view>
     <view class="asset-item">
-      <view class="asset-icon">📈</view>
+      <view class="asset-icon">💰</view>
       <view class="asset-info">
-        <text class="asset-value">{{totalEarnings}}</text>
-        <text class="asset-label">累计收益</text>
+        <text class="asset-value">¥{{totalEarned}}</text>
+        <text class="asset-label">总获得</text>
       </view>
     </view>
     <view class="asset-vertical-divider"></view>
