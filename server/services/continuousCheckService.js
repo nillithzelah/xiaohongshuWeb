@@ -1,4 +1,4 @@
-// 持续检查服务：每天9点检查笔记存在性并奖励积分
+// 持续检查服务：每天检查笔记存在性并奖励积分（持续7天，与昵称提交限制一致）
 const schedule = require('node-schedule');
 const ImageReview = require('../models/ImageReview');
 const User = require('../models/User');
@@ -49,36 +49,59 @@ class ContinuousCheckService {
   /**
    * 执行定期检查 - 每分钟检查是否有到期的笔记
    */
-  async performPeriodicChecks() {
-    const checkStartTime = Date.now();
-    try {
-      const now = new Date();
+   async performPeriodicChecks() {
+     const checkStartTime = Date.now();
+     try {
+       const now = new Date();
 
-      console.log(`⏰ [持续检查] 开始执行定期检查 - ${now.toLocaleString()}`);
+       console.log(`⏰ [持续检查] 开始执行定期检查 - ${now.toLocaleString()}`);
 
-      // 查找所有启用持续检查且下次检查时间已到的笔记审核记录（评论不需要定时检查）
-      const reviewsToCheck = await ImageReview.find({
-        'continuousCheck.enabled': true,
-        'continuousCheck.status': 'active',
-        'continuousCheck.nextCheckTime': { $lte: now },
-        imageType: 'note', // 只检查笔记类型
-        noteUrl: { $ne: null }, // 必须有笔记链接
-        status: 'completed' // 只检查已完成的审核
-      });
+       // 查找所有启用持续检查且下次检查时间已到的笔记审核记录（评论不需要定时检查）
+       const reviewsToCheck = await ImageReview.find({
+         'continuousCheck.enabled': true,
+         'continuousCheck.status': 'active',
+         'continuousCheck.nextCheckTime': { $lte: now },
+         imageType: 'note', // 只检查笔记类型
+         noteUrl: { $ne: null }, // 必须有笔记链接
+         status: 'completed' // 只检查已完成的审核
+       });
 
-      if (reviewsToCheck.length === 0) {
+       // 获取持续检查天数配置
+       const TaskConfig = require('../models/TaskConfig');
+       const noteConfig = await TaskConfig.findOne({ type_key: 'note' });
+       const maxCheckDays = noteConfig ? noteConfig.continuous_check_days : 7;
+
+       // 过滤掉超过检查期限的笔记
+       const validReviewsToCheck = [];
+       for (const review of reviewsToCheck) {
+         const createdAt = new Date(review.createdAt);
+         const daysSinceCreation = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+
+         if (daysSinceCreation <= maxCheckDays) {
+           validReviewsToCheck.push(review);
+         } else {
+           // 超过检查期限，停止持续检查
+           console.log(`⏰ [持续检查] 笔记 ${review._id} 已超过${maxCheckDays}天检查期限 (${daysSinceCreation}天)，停止检查`);
+           await ImageReview.findByIdAndUpdate(review._id, {
+             'continuousCheck.status': 'expired',
+             'continuousCheck.endReason': `超过${maxCheckDays}天检查期限`
+           });
+         }
+       }
+
+      if (validReviewsToCheck.length === 0) {
         console.log(`📭 [持续检查] 没有需要检查的笔记，跳过本次检查`);
         return; // 没有需要检查的笔记
       }
 
-      console.log(`🔍 [持续检查] 找到 ${reviewsToCheck.length} 条到期需要检查的笔记`);
+      console.log(`🔍 [持续检查] 找到 ${validReviewsToCheck.length} 条到期需要检查的笔记`);
 
       let successCount = 0;
       let failCount = 0;
       let errorCount = 0;
       let totalRewardPoints = 0;
 
-      for (let i = 0; i < reviewsToCheck.length; i++) {
+      for (let i = 0; i < validReviewsToCheck.length; i++) {
         const review = reviewsToCheck[i];
         const noteStartTime = Date.now();
 
@@ -141,14 +164,22 @@ class ContinuousCheckService {
       let rewardPoints = 0;
 
       if (noteExists) {
-        // 笔记存在，奖励0.3积分
-        rewardPoints = 0.3;
+        // 从笔记任务配置中获取每日奖励积分
+        const TaskConfig = require('../models/TaskConfig');
+        const noteConfig = await TaskConfig.findOne({ type_key: 'note' });
+        rewardPoints = noteConfig ? noteConfig.daily_reward_points : 0;
+
+        console.log(`✅ [持续检查] 笔记存在，奖励用户 ${review.userId} ${rewardPoints} 积分，检查耗时: ${checkDuration}ms`);
 
         // 更新用户积分
         const user = await User.findById(review.userId);
         if (user) {
+          // 确保用户有有效的积分字段
+          const currentPoints = user.points || 0;
+          const newPoints = currentPoints + rewardPoints;
+
           await User.findByIdAndUpdate(review.userId, {
-            $inc: { points: rewardPoints }
+            $set: { points: newPoints }
           });
 
           console.log(`✅ [持续检查] 笔记存在，奖励用户 ${review.userId} ${rewardPoints} 积分，检查耗时: ${checkDuration}ms`);
@@ -288,11 +319,11 @@ class ContinuousCheckService {
   }
 
   /**
-   * 获取下次检查时间（明天同一时间）
+   * 获取下次检查时间（24小时后，每天检查一次）
    */
   getNextCheckTime(lastCheckTime) {
     const nextCheck = new Date(lastCheckTime);
-    nextCheck.setDate(nextCheck.getDate() + 1); // 加一天
+    nextCheck.setDate(nextCheck.getDate() + 1); // 加1天，每天检查一次
     return nextCheck;
   }
 

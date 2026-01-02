@@ -2,7 +2,8 @@
 
 ## 2026-01-02 15:40:00
 - **server/services/asyncAiReviewService.js**: 修复 CommentLimit 数据无法创建的问题：当 `userNoteInfo.author` 是字符串格式时，代码没有将其赋值给 `authorToRecord`，导致评论限制无法记录。修复方案：添加对字符串格式 author 的支持，同时支持逗号分隔的多个昵称（取第一个）
-- **部署到服务器**: 将修复后的 asyncAiReviewService.js 同步到服务器并重启 xiaohongshu-api 服务
+- **server/services/continuousCheckService.js**: 修复持续检查服务中积分更新错误：当用户points字段为undefined时，MongoDB的$inc操作会失败。修复方案：改为使用$set操作，确保积分字段有效后再更新
+- **部署到服务器**: 将修复后的 asyncAiReviewService.js 和 continuousCheckService.js 同步到服务器并重启 xiaohongshu-api 服务
 
 ## 2026-01-02 14:06:00
 - **server/models/*.js**: 修改所有模型中的 createdAt 和 updatedAt 默认值为北京时间函数，确保数据库中存储的创建和更新时间使用北京时间而非UTC时间
