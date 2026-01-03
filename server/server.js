@@ -3,6 +3,9 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
+// 设置服务器时区为北京时间
+process.env.TZ = 'Asia/Shanghai';
+
 // 加载环境变量
 dotenv.config();
 
@@ -78,6 +81,9 @@ function registerRoutes() {
   apiRouter.use('/devices', require('./routes/devices'));
   console.log('✅ /xiaohongshu/api/devices 路由已注册');
 
+  apiRouter.use('/complaints', require('./routes/complaints'));
+  console.log('✅ /xiaohongshu/api/complaints 路由已注册');
+
   // 测试设备路由是否正确加载
   const devicesRouter = require('./routes/devices');
   console.log('📋 设备路由对象:', typeof devicesRouter);
@@ -115,6 +121,13 @@ function startServer() {
     // 启动持续检查服务
     const continuousCheckService = require('./services/continuousCheckService');
     continuousCheckService.start();
+    console.log('✅ 持续检查服务启动成功');
+
+    // 启动异步AI审核服务
+    const asyncAiReviewService = require('./services/asyncAiReviewService');
+    console.log('⏰ 启动异步AI审核服务...');
+    // AI审核服务会自动处理队列，无需显式启动
+    console.log('✅ 异步AI审核服务已加载');
   });
 
   // 处理服务器错误

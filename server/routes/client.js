@@ -3,8 +3,11 @@ const crypto = require('crypto');
 const ImageReview = require('../models/ImageReview');
 const TaskConfig = require('../models/TaskConfig');
 const Device = require('../models/Device');
+const CommentLimit = require('../models/CommentLimit');
 const { authenticateToken } = require('../middleware/auth');
 const xiaohongshuService = require('../services/xiaohongshuService');
+const deviceNoteService = require('../services/deviceNoteService');
+const asyncAiReviewService = require('../services/asyncAiReviewService');
 const router = express.Router();
 
 console.log('📋 client路由已加载');
@@ -65,12 +68,27 @@ function levenshteinDistance(str1, str2) {
 router.get('/task-configs', async (req, res) => {
   try {
     const configs = await TaskConfig.find({ is_active: true })
-      .select('type_key name price')
+      .select('type_key name price commission_1 commission_2 daily_reward_points continuous_check_days')
       .sort({ type_key: 1 });
+
+    // 确保所有字段都被正确返回
+    const processedConfigs = configs.map(config => {
+      const configObj = config.toObject(); // 转换为普通对象确保所有字段都被访问
+      return {
+        _id: configObj._id,
+        type_key: configObj.type_key,
+        name: configObj.name,
+        price: configObj.price,
+        commission_1: configObj.commission_1,
+        commission_2: configObj.commission_2,
+        daily_reward_points: configObj.daily_reward_points,
+        continuous_check_days: configObj.continuous_check_days
+      };
+    });
 
     res.json({
       success: true,
-      configs
+      configs: processedConfigs
     });
   } catch (error) {
     console.error('获取任务配置错误:', error);
@@ -313,14 +331,51 @@ router.get('/device/my-list', authenticateToken, async (req, res) => {
   try {
     const devices = await Device.find({
       assignedUser: req.user._id,
-      is_deleted: { $ne: true }
+      is_deleted: { $ne: true },
+      reviewStatus: { $in: ['ai_approved', 'approved'] } // 只返回审核通过的设备
     })
-    .select('accountName status influence onlineDuration points')
+    .select('accountName status influence onlineDuration points reviewStatus reviewReason reviewedAt')
     .sort({ createdAt: -1 });
+
+    // 为每个设备添加昵称限制状态检查
+    const devicesWithNicknameStatus = await Promise.all(devices.map(async (device) => {
+      const deviceObj = device.toObject();
+
+      // 检查该设备的昵称是否在7天内被使用过
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const recentReview = await ImageReview.findOne({
+        'aiParsedNoteInfo.author': device.accountName,
+        userId: req.user._id,
+        status: { $in: ['manager_approved', 'completed'] },
+        createdAt: { $gte: sevenDaysAgo }
+      });
+
+      if (recentReview) {
+        // 计算还有多少天不能使用
+        const daysSinceLastUse = Math.floor((Date.now() - recentReview.createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const remainingDays = 7 - daysSinceLastUse;
+
+        deviceObj.nicknameLimitStatus = {
+          canUse: false,
+          reason: 'id限制中',
+          remainingDays: Math.max(0, remainingDays),
+          lastUsed: recentReview.createdAt
+        };
+      } else {
+        deviceObj.nicknameLimitStatus = {
+          canUse: true,
+          reason: '可正常使用'
+        };
+      }
+
+      return deviceObj;
+    }));
 
     res.json({
       success: true,
-      devices
+      devices: devicesWithNicknameStatus
     });
   } catch (error) {
     console.error('获取用户设备列表错误:', error);
@@ -353,11 +408,11 @@ router.get('/announcements', async (req, res) => {
 // 批量提交多图任务
 router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
   try {
-    const { deviceId, imageType, imageUrls, imageMd5s, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = req.body;
+    const { deviceId = null, imageType, imageUrls, imageMd5s, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = req.body;
 
     // 验证参数
-    if (!deviceId || !imageType) {
-      return res.status(400).json({ success: false, message: '参数不完整：缺少设备或任务类型' });
+    if (!imageType) {
+      return res.status(400).json({ success: false, message: '参数不完整：缺少任务类型' });
     }
 
     // 图片现在是可选的，只有当提供了图片时才验证
@@ -375,26 +430,37 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       if (!noteUrl || noteUrl.trim() === '') {
         return res.status(400).json({ success: false, message: '笔记类型必须填写笔记链接' });
       }
-      if (!noteAuthor || noteAuthor.trim() === '') {
+      if (!noteAuthor || (Array.isArray(noteAuthor) && noteAuthor.length === 0) || (!Array.isArray(noteAuthor) && noteAuthor.trim() === '')) {
         return res.status(400).json({ success: false, message: '笔记类型必须填写作者昵称' });
       }
       if (!noteTitle || noteTitle.trim() === '') {
         return res.status(400).json({ success: false, message: '笔记类型必须填写笔记标题' });
       }
+
+      // 注释掉提交时的设备检查，因为提交时无法确定具体设备
+      // 检查逻辑将在审核通过时执行，当确定具体设备后
+      // const deviceNoteCheck = await deviceNoteService.checkDeviceNoteSubmission(deviceId);
+      // if (!deviceNoteCheck.canSubmit) {
+      //   return res.status(400).json({
+      //     success: false,
+      //     message: deviceNoteCheck.message,
+      //     lastNoteDate: deviceNoteCheck.lastNoteDate
+      //   });
+      // }
     } else if (imageType === 'comment') {
       if (!noteUrl || noteUrl.trim() === '') {
         return res.status(400).json({ success: false, message: '评论类型必须填写链接' });
       }
-      if (!noteAuthor || noteAuthor.trim() === '') {
+      if (!noteAuthor || (Array.isArray(noteAuthor) && noteAuthor.length === 0) || (!Array.isArray(noteAuthor) && noteAuthor.trim() === '')) {
         return res.status(400).json({ success: false, message: '评论类型必须填写作者昵称' });
       }
       if (!commentContent || commentContent.trim() === '') {
         return res.status(400).json({ success: false, message: '评论类型必须填写评论内容' });
       }
-      // 评论类型也需要提供图片作为证据
-      if (!imageUrls || imageUrls.length === 0) {
-        return res.status(400).json({ success: false, message: '评论类型必须上传评论截图作为证据' });
-      }
+      // 评论类型图片为可选项
+      // if (!imageUrls || imageUrls.length === 0) {
+      //   return res.status(400).json({ success: false, message: '评论类型必须上传评论截图作为证据' });
+      // }
     } else if (imageType === 'customer_resource') {
       // 客资类型：电话和微信至少填写一项
       const hasPhone = customerPhone && customerPhone.trim() !== '';
@@ -407,7 +473,7 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
 
     // 如果提供了链接，验证格式
     if (noteUrl && noteUrl.trim() !== '') {
-      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a)\/[a-zA-Z0-9]+/i;
+      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/[a-zA-Z0-9]+(?:\/[a-zA-Z0-9]+)*/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
         return res.status(400).json({ success: false, message: '笔记链接格式不正确' });
       }
@@ -421,35 +487,48 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
     // 验证设备是否属于当前用户
     let device = null;
 
-    // 首先尝试查找真实设备（如果是有效的ObjectId）
-    try {
-      if (deviceId.match(/^[0-9a-fA-F]{24}$/)) { // 检查是否是有效的ObjectId格式
-        device = await Device.findOne({
-          _id: deviceId,
-          assignedUser: req.user._id,
-          is_deleted: { $ne: true }
-        });
+    // 如果提供了deviceId，尝试查找真实设备
+    if (deviceId) {
+      // 首先尝试查找真实设备（如果是有效的ObjectId）
+      try {
+        if (deviceId.match(/^[0-9a-fA-F]{24}$/)) { // 检查是否是有效的ObjectId格式
+          device = await Device.findOne({
+            _id: deviceId,
+            assignedUser: req.user._id,
+            is_deleted: { $ne: true }
+          });
+        }
+      } catch (error) {
+        console.log('真实设备查找失败:', error.message);
       }
-    } catch (error) {
-      console.log('真实设备查找失败:', error.message);
-    }
 
-    // 如果找不到真实设备，且是开发环境，允许使用模拟设备
-    if (!device && process.env.NODE_ENV !== 'production' && deviceId.startsWith('device_')) {
-      // 根据设备ID生成对应的模拟设备信息，与小程序保持一致
-      const deviceNumber = deviceId.split('_')[1] || '001';
+      // 如果找不到真实设备，且是开发环境，允许使用模拟设备
+      if (!device && process.env.NODE_ENV !== 'production' && deviceId.startsWith('device_')) {
+        // 根据设备ID生成对应的模拟设备信息，与小程序保持一致
+        const deviceNumber = deviceId.split('_')[1] || '001';
+        device = {
+          _id: deviceId,
+          accountName: `xiaohongshu_user_${deviceNumber}`,
+          status: 'online',
+          influence: ['new'],
+          assignedUser: req.user._id
+        };
+        console.log('🧪 使用模拟设备进行测试:', device);
+      }
+
+      if (!device) {
+        return res.status(400).json({ success: false, message: '无效的设备选择' });
+      }
+    } else {
+      // 如果没有提供deviceId（批量提交使用昵称），创建一个虚拟设备对象
       device = {
-        _id: deviceId,
-        accountName: `xiaohongshu_user_${deviceNumber}`,
+        _id: 'virtual_device_' + Date.now(),
+        accountName: 'virtual_device', // 将在后续通过昵称匹配真实设备
         status: 'online',
         influence: ['new'],
         assignedUser: req.user._id
       };
-      console.log('🧪 使用模拟设备进行测试:', device);
-    }
-
-    if (!device) {
-      return res.status(400).json({ success: false, message: '无效的设备选择' });
+      console.log('📱 使用虚拟设备进行批量提交，实际设备将通过昵称匹配');
     }
 
     // 检查任务类型是否存在且激活
@@ -485,176 +564,66 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       }
     }
 
-    // AI审核逻辑（仅对笔记和评论类型）
+    // 防作弊检查：检查昵称在链接下的审核通过次数和内容重复限制（仅对评论类型）
+    if (imageType === 'comment' && noteUrl && noteAuthor && commentContent) {
+      console.log('🛡️ 开始防作弊检查：评论昵称审核通过次数和内容重复限制');
+
+      // 处理昵称数组或字符串
+      const nicknames = Array.isArray(noteAuthor) ? noteAuthor : [noteAuthor];
+      const validNicknames = nicknames.filter(n => n && typeof n === 'string' && n.trim());
+      const normalizedCommentContent = commentContent.trim();
+
+      for (const nickname of validNicknames) {
+        const approvalCheck = await CommentLimit.checkCommentApproval(
+          noteUrl.trim(),
+          nickname.trim(),
+          normalizedCommentContent
+        );
+
+        if (!approvalCheck.canApprove) {
+          return res.status(403).json({
+            success: false,
+            message: `违规提示：${approvalCheck.reason}`
+          });
+        }
+      }
+
+      console.log('✅ 评论防作弊检查通过');
+    }
+
+    // AI审核逻辑改为异步处理（仅对笔记和评论类型）
     let aiReviewResult = null;
     if (imageType === 'note' || imageType === 'comment') {
       if (!noteUrl || noteUrl.trim() === '') {
         return res.status(400).json({ success: false, message: '笔记和评论类型必须提供小红书链接' });
       }
-      console.log('🤖 开始AI审核笔记链接和内容...');
 
-      // 首先验证链接有效性
-      aiReviewResult = await xiaohongshuService.validateNoteUrl(noteUrl);
+      // 基础链接验证（快速验证）
+      console.log('🔗 开始基础链接验证...');
+      const basicValidation = await xiaohongshuService.validateNoteUrl(noteUrl);
 
-      if (!aiReviewResult.valid) {
+      if (!basicValidation.valid) {
         return res.status(400).json({
           success: false,
-          message: `AI审核失败：${aiReviewResult.reason}`,
-          aiReview: aiReviewResult
+          message: `链接验证失败：${basicValidation.reason}`,
+          aiReview: basicValidation
         });
       }
 
-      // 如果是笔记类型，进行内容比对
-      if (imageType === 'note' && noteAuthor && noteTitle) {
-        console.log('🔍 开始解析笔记内容并比对...');
-
-        const contentResult = await xiaohongshuService.parseNoteContent(noteUrl);
-
-        if (contentResult.success && (contentResult.author || contentResult.title)) {
-          console.log('📄 解析到的笔记内容:', {
-            title: contentResult.title,
-            author: contentResult.author
-          });
-
-          // 进行内容比对
-          const authorMatch = contentResult.author ? compareStrings(noteAuthor, contentResult.author) : 0;
-          const titleMatch = contentResult.title ? compareStrings(noteTitle, contentResult.title) : 0;
-
-          console.log('🔍 比对结果:', {
-            authorMatch: `${authorMatch}%`,
-            titleMatch: `${titleMatch}%`,
-            userAuthor: noteAuthor,
-            pageAuthor: contentResult.author,
-            userTitle: noteTitle,
-            pageTitle: contentResult.title
-          });
-
-          // 更新AI审核结果
-          aiReviewResult.contentMatch = {
-            authorMatch,
-            titleMatch,
-            pageAuthor: contentResult.author,
-            pageTitle: contentResult.title
-          };
-
-          // 严格的审核逻辑：如果无法解析内容或匹配度过低，则不通过
-          if (!contentResult.author && !contentResult.title) {
-            // 完全无法解析内容
-            aiReviewResult.aiReview.passed = false;
-            aiReviewResult.aiReview.confidence = 0.1;
-            aiReviewResult.aiReview.reasons.push('无法解析笔记内容，疑似无效链接');
-            aiReviewResult.aiReview.riskLevel = 'high';
-          } else if ((contentResult.author && authorMatch < 30) || (contentResult.title && titleMatch < 30)) {
-            // 内容匹配度过低
-            aiReviewResult.aiReview.passed = false;
-            aiReviewResult.aiReview.confidence = 0.2;
-            aiReviewResult.aiReview.reasons.push('内容匹配度过低，可能为虚假信息');
-            aiReviewResult.aiReview.riskLevel = 'high';
-          } else if (authorMatch >= 80 && titleMatch >= 80) {
-            // 内容匹配度很高
-            aiReviewResult.aiReview.confidence += 0.3;
-            aiReviewResult.aiReview.reasons.push('内容匹配度很高，信息一致');
-          } else if (authorMatch >= 60 || titleMatch >= 60) {
-            // 内容匹配度中等
-            aiReviewResult.aiReview.confidence += 0.1;
-            aiReviewResult.aiReview.reasons.push('内容匹配度中等，需要人工复核');
-            aiReviewResult.aiReview.riskLevel = 'medium';
-          } else {
-            // 内容匹配度较低
-            aiReviewResult.aiReview.passed = false;
-            aiReviewResult.aiReview.confidence *= 0.3;
-            aiReviewResult.aiReview.reasons.push('内容匹配度较低，疑似刷单行为');
-            aiReviewResult.aiReview.riskLevel = 'high';
-          }
-        } else {
-          console.log('⚠️ 内容解析失败或无内容:', contentResult.reason);
-          // 无法解析内容，严格审核
-          aiReviewResult.aiReview.passed = false;
-          aiReviewResult.aiReview.confidence = 0.1;
-          aiReviewResult.aiReview.reasons.push('无法验证笔记内容，疑似无效链接');
-          aiReviewResult.aiReview.riskLevel = 'high';
+      // 设置基础AI审核结果，后续异步处理
+      aiReviewResult = {
+        valid: true,
+        noteId: basicValidation.noteId,
+        noteStatus: basicValidation.noteStatus,
+        aiReview: {
+          passed: true, // 基础验证通过，后续异步审核
+          confidence: 0.5,
+          reasons: ['基础验证通过，等待后台AI审核'],
+          riskLevel: 'low'
         }
-      } else if (imageType === 'comment' && commentContent) {
-        // 评论类型：使用浏览器自动化验证评论真实性
-        console.log('🔍 开始验证评论内容和真实性...');
+      };
 
-        // 评论内容长度检查
-        if (commentContent.length < 5) {
-          aiReviewResult.aiReview.passed = false;
-          aiReviewResult.aiReview.confidence = 0.3;
-          aiReviewResult.aiReview.reasons.push('评论内容过短，疑似无效评论');
-          aiReviewResult.aiReview.riskLevel = 'high';
-        } else if (commentContent.length > 200) {
-          aiReviewResult.aiReview.confidence += 0.1;
-          aiReviewResult.aiReview.reasons.push('评论内容详细，质量较高');
-        } else {
-          aiReviewResult.aiReview.confidence += 0.05;
-          aiReviewResult.aiReview.reasons.push('评论内容长度适中');
-        }
-
-        // 检查是否包含关键词（可选的额外验证）
-        const positiveKeywords = ['好', '不错', '喜欢', '支持', '棒'];
-        const hasPositiveWords = positiveKeywords.some(word => commentContent.includes(word));
-
-        if (hasPositiveWords) {
-          aiReviewResult.aiReview.confidence += 0.1;
-          aiReviewResult.aiReview.reasons.push('评论包含正面评价');
-        }
-
-        // 检查是否重复内容（简单的重复检测）
-        const words = commentContent.split('');
-        const uniqueWords = new Set(words);
-        const repetitionRatio = uniqueWords.size / words.length;
-
-        if (repetitionRatio < 0.3) {
-          aiReviewResult.aiReview.passed = false;
-          aiReviewResult.aiReview.confidence *= 0.5;
-          aiReviewResult.aiReview.reasons.push('评论内容重复度过高，疑似刷单');
-          aiReviewResult.aiReview.riskLevel = 'high';
-        }
-
-        // **新增**: 浏览器自动化评论验证
-        console.log('🔍 开始验证评论是否真实存在...');
-        try {
-          // 从环境变量获取Cookie
-          const cookieString = process.env.XIAOHONGSHU_COOKIE;
-          console.log('🍪 Cookie配置状态:', {
-            exists: !!cookieString,
-            length: cookieString ? cookieString.length : 0
-          });
-
-          const commentVerification = await xiaohongshuService.performCommentAIReview(
-            noteUrl,
-            commentContent,
-            null, // 评论验证不需要作者信息，因为我们只验证评论内容是否存在
-            cookieString // 传递Cookie用于登录状态
-          );
-
-          if (commentVerification.error) {
-            // 验证服务出错，不直接影响审核结果，但降低信心度
-            aiReviewResult.aiReview.confidence *= 0.8;
-            aiReviewResult.aiReview.reasons.push('评论验证服务暂时不可用，使用基础审核');
-          } else if (commentVerification.passed) {
-            aiReviewResult.aiReview.confidence += 0.15;
-            aiReviewResult.aiReview.reasons.push('评论验证通过，确认真实存在');
-          } else {
-            aiReviewResult.aiReview.passed = false;
-            aiReviewResult.aiReview.confidence = Math.min(aiReviewResult.aiReview.confidence, 0.3);
-            aiReviewResult.aiReview.reasons.push(`评论验证失败: ${commentVerification.reasons.join(', ')}`);
-            aiReviewResult.aiReview.riskLevel = 'high';
-          }
-
-          // 评论验证结果已经包含在aiReviewResult中
-
-        } catch (verificationError) {
-          console.error('评论验证过程出错:', verificationError);
-          // 验证失败不影响整体审核，但记录错误
-          aiReviewResult.aiReview.confidence *= 0.9;
-          aiReviewResult.aiReview.reasons.push('评论验证过程出错，使用基础审核');
-        }
-      }
-
-      console.log('🤖 最终AI审核结果:', aiReviewResult);
+      console.log('✅ 基础验证通过，任务将进入后台AI审核队列');
     }
 
     // 获取用户的mentor信息
@@ -675,13 +644,13 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
         imageMd5s: (imageMd5s && imageMd5s[index]) ? [imageMd5s[index]] : [], // 多图MD5格式：单MD5也存储为数组
         noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
         // 用户提供的笔记信息
-        userNoteInfo: ((imageType === 'note' && noteAuthor && noteTitle) || (imageType === 'comment' && commentContent) || (imageType === 'customer_resource' && (customerPhone || customerWechat))) ? {
-          author: noteAuthor && noteAuthor.trim() ? noteAuthor.trim() : null,
+        userNoteInfo: {
+          author: noteAuthor ? (Array.isArray(noteAuthor) ? noteAuthor.join(', ') : (typeof noteAuthor === 'string' && noteAuthor.trim() ? noteAuthor.trim() : null)) : null,
           title: noteTitle && noteTitle.trim() ? noteTitle.trim() : null,
           comment: commentContent && commentContent.trim() ? commentContent.trim() : null,
           customerPhone: customerPhone && customerPhone.trim() ? customerPhone.trim() : null,
           customerWechat: customerWechat && customerWechat.trim() ? customerWechat.trim() : null
-        } : null,
+        },
         snapshotPrice: taskConfig.price,
         snapshotCommission1: taskConfig.commission_1,
         snapshotCommission2: taskConfig.commission_2,
@@ -711,48 +680,61 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
         // 保存评论验证结果
         if (aiReviewResult.commentVerification) {
           reviewData.aiReviewResult.commentVerification = aiReviewResult.commentVerification;
+
+          // 对于评论类型，尝试多种方式获取昵称信息
+          if (imageType === 'comment') {
+            let authorToSet = null;
+
+            // 1. 优先从评论验证结果的foundComments获取
+            if (aiReviewResult.commentVerification?.foundComments?.length > 0) {
+              authorToSet = aiReviewResult.commentVerification.foundComments[0].author;
+              console.log(`📝 从foundComments获取昵称: ${authorToSet}`);
+            }
+
+            // 2. 如果foundComments为空，尝试从pageComments中找到匹配的评论
+            if (!authorToSet && aiReviewResult.commentVerification?.pageComments?.length > 0 && commentContent) {
+              const matchedComment = aiReviewResult.commentVerification.pageComments.find(c =>
+                c.content && c.content.trim() === commentContent.trim()
+              );
+              if (matchedComment?.author) {
+                authorToSet = matchedComment.author;
+                console.log(`📝 从pageComments匹配获取昵称: ${authorToSet}`);
+              }
+            }
+
+            // 3. 如果评论验证完全失败，不使用用户提交的昵称，只用匹配到的昵称
+            if (!authorToSet) {
+              console.log(`📝 评论验证失败，无法获取匹配的昵称`);
+            }
+
+            // 设置昵称信息
+            if (authorToSet) {
+              reviewData.aiParsedNoteInfo = reviewData.aiParsedNoteInfo || {};
+              reviewData.aiParsedNoteInfo.author = authorToSet;
+              console.log(`✅ 评论昵称设置成功: ${authorToSet}`);
+            } else {
+              console.log(`❌ 无法获取评论昵称信息`);
+            }
+          }
         }
       }
 
-      // 如果AI审核通过且信心度足够高，设置为manager_approved状态，等待财务确认
-      if (aiReviewResult && aiReviewResult.aiReview && aiReviewResult.aiReview.passed && aiReviewResult.aiReview.confidence >= 0.9) {
-        console.log('🎉 AI审核通过，提交给财务确认');
-
-        // 更新审核记录为manager_approved状态，等待财务确认
-        reviewData.status = 'manager_approved';
-
-        // 审核通过时立即给用户增加积分奖励
-        const pointsReward = Math.floor(taskConfig.price); // 任务金额等于积分
-        const User = require('../models/User');
-        await User.findByIdAndUpdate(req.user._id, {
-          $inc: { points: pointsReward }
-        });
-        console.log(`💰 审核通过奖励: ${pointsReward}积分 (任务金额: ${taskConfig.price}元)`);
-
-        // 添加AI审核历史
-        reviewData.auditHistory.push({
-          operator: null, // AI审核
-          operatorName: 'AI审核系统',
-          action: 'ai_auto_approved',
-          comment: `AI自动审核通过 (信心度: ${(aiReviewResult.aiReview.confidence * 100).toFixed(1)}%)，奖励${pointsReward}积分，等待财务确认`,
-          timestamp: new Date()
-        });
-
-        // 如果是笔记类型，启用持续存在性检查（评论不需要定时检查）
-        if (imageType === 'note') {
-          // 计算第一次检查时间：创建时间 + 24小时
-          const firstCheckTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
-          reviewData.continuousCheck = {
-            enabled: true,
-            status: 'active',
-            nextCheckTime: firstCheckTime
-          };
-          console.log(`⏰ 已为笔记启用持续存在性检查，首次检查时间: ${firstCheckTime.toLocaleString()}`);
-        }
-      }
+      // AI审核改为异步处理，所有任务初始状态为 'pending'
 
       const review = await new ImageReview(reviewData).save();
 
+      // 评论类型的计数和内容记录将在审核通过后进行（通过CommentLimit.recordCommentApproval）
+
+      // 如果是笔记或评论类型，将任务加入异步AI审核队列
+      if ((imageType === 'note' || imageType === 'comment') && review.status === 'pending') {
+        try {
+          asyncAiReviewService.addToQueue(review._id);
+          console.log(`📋 任务 ${review._id} 已加入AI审核队列`);
+        } catch (queueError) {
+          console.error('加入AI审核队列失败:', queueError);
+          // 不影响主流程，继续执行
+        }
+      }
 
       return review;
     }));
@@ -770,6 +752,48 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('批量提交失败:', error);
     res.status(500).json({ success: false, message: '提交失败' });
+  }
+});
+
+// 获取用户设备审核状态
+router.get('/devices/my-review-status', authenticateToken, async (req, res) => {
+  try {
+    // 获取用户最新提交的设备审核记录
+    const latestDevice = await Device.findOne({
+      assignedUser: req.user._id,
+      reviewStatus: { $in: ['pending', 'ai_approved', 'rejected'] }
+    })
+    .select('accountName reviewStatus reviewReason createdAt reviewedAt')
+    .sort({ createdAt: -1 }); // 获取最新的审核记录
+
+    if (!latestDevice) {
+      return res.json({
+        success: true,
+        reviewStatus: null,
+        message: '暂无设备审核记录'
+      });
+    }
+
+    // 格式化时间为北京时间
+    const TimeUtils = require('../utils/timeUtils');
+    const formattedDevice = {
+      ...latestDevice.toObject(),
+      accountName: latestDevice.accountName || '未知设备', // 确保accountName不为空
+      createdAt: TimeUtils.formatBeijingTime(latestDevice.createdAt),
+      reviewedAt: latestDevice.reviewedAt ? TimeUtils.formatBeijingTime(latestDevice.reviewedAt) : null
+    };
+
+    res.json({
+      success: true,
+      reviewStatus: formattedDevice
+    });
+
+  } catch (error) {
+    console.error('获取用户设备审核状态失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取设备审核状态失败'
+    });
   }
 });
 

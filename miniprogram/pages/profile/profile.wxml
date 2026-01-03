@@ -3,7 +3,7 @@
   <!-- 头部区域 -->
   <view class="profile-header">
     <view class="avatar-section">
-      <image class="avatar" src="{{userInfo.avatar || '/images/default-avatar.png'}}" mode="cover"></image>
+      <image class="avatar" src="{{userInfo.avatar}}" mode="cover" bindtap="chooseAvatar"></image>
       <view class="user-info">
         <text class="nickname">{{userInfo.nickname || '未设置昵称'}}</text>
         <text class="username">{{userInfo.username}}</text>
@@ -24,23 +24,59 @@
     <view class="asset-item">
       <view class="asset-icon">💰</view>
       <view class="asset-info">
-        <text class="asset-value">¥{{totalEarned}}</text>
+        <text class="asset-value">{{totalEarned}}</text>
         <text class="asset-label">总获得</text>
       </view>
     </view>
-    <view class="asset-vertical-divider"></view>
+    <view class="asset-divider"></view>
+    <view class="asset-item">
+      <view class="asset-icon">⏳</view>
+      <view class="asset-info">
+        <text class="asset-value">{{pendingAmount}}</text>
+        <text class="asset-label">待审核</text>
+      </view>
+    </view>
   </view>
 
   <!-- 菜单列表 -->
   <view class="menu-section">
-    <navigator url="/pages/device-list/device-list" class="menu-item">
-      <view class="menu-icon">📱</view>
-      <text class="menu-text">我的设备管理</text>
+    <navigator url="/pages/account-detail/account-detail" class="menu-item">
+      <view class="menu-icon">ℹ️</view>
+      <text class="menu-text">账号信息</text>
       <view class="menu-arrow">›</view>
     </navigator>
 
+    <navigator url="/pages/device-list/device-list" class="menu-item">
+      <view class="menu-icon">📱</view>
+      <text class="menu-text">我的账号管理</text>
+      <view class="menu-arrow">›</view>
+    </navigator>
 
+    <navigator url="/pages/distribution/distribution" class="menu-item">
+      <view class="menu-icon">🌟</view>
+      <text class="menu-text">我的分销</text>
+      <view class="menu-arrow">›</view>
+    </navigator>
 
+    <navigator url="/pages/points-exchange/points-exchange" class="menu-item">
+      <view class="menu-icon">🔄</view>
+      <text class="menu-text">积分兑换</text>
+      <view class="menu-arrow">›</view>
+    </navigator>
+
+    <!-- 投诉建议功能已隐藏 -->
+    <!-- <navigator url="/pages/complaint/complaint" class="menu-item">
+      <view class="menu-icon">💬</view>
+      <text class="menu-text">投诉建议</text>
+      <view class="menu-arrow">›</view>
+    </navigator> -->
+
+    <view class="menu-item" bindtap="logout">
+      <view class="menu-icon">🚪</view>
+      <text class="menu-text">退出登录</text>
+      <view class="menu-arrow">›</view>
+    </view>
   </view>
+
 
 </view>

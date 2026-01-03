@@ -45,6 +45,7 @@
           class="form-input"
           type="number"
           placeholder="请输入手机号"
+          placeholder-style="color: rgba(255, 255, 255, 0.8);"
           value="{{loginForm.phoneNumber}}"
           bindinput="onLoginInput"
           data-field="phoneNumber"
@@ -56,6 +57,7 @@
           class="form-input"
           password="{{!showPassword}}"
           placeholder="请输入密码"
+          placeholder-style="color: rgba(255, 255, 255, 0.8);"
           value="{{loginForm.password}}"
           bindinput="onLoginInput"
           data-field="password"
@@ -91,6 +93,7 @@
         class="form-input"
         type="number"
         placeholder="手机号（必须已在系统中存在）"
+        placeholder-style="color: rgba(255, 255, 255, 0.8);"
         value="{{registerForm.phoneNumber}}"
         bindinput="onRegisterInput"
         data-field="phoneNumber"
@@ -101,6 +104,7 @@
       <input
         class="form-input"
         placeholder="用户名（4-20位字母数字下划线）"
+        placeholder-style="color: rgba(255, 255, 255, 0.8);"
         value="{{registerForm.username}}"
         bindinput="onRegisterInput"
         data-field="username"
@@ -111,6 +115,7 @@
       <input
         class="form-input"
         placeholder="昵称（可选）"
+        placeholder-style="color: rgba(255, 255, 255, 0.8);"
         value="{{registerForm.nickname}}"
         bindinput="onRegisterInput"
         data-field="nickname"
@@ -122,6 +127,7 @@
         class="form-input"
         password="{{!showRegPassword}}"
         placeholder="密码（至少6位）"
+        placeholder-style="color: rgba(255, 255, 255, 0.8);"
         value="{{registerForm.password}}"
         bindinput="onRegisterInput"
         data-field="password"
@@ -136,6 +142,7 @@
         class="form-input"
         password="{{!showRegConfirmPassword}}"
         placeholder="确认密码"
+        placeholder-style="color: rgba(255, 255, 255, 0.8);"
         value="{{registerForm.confirmPassword}}"
         bindinput="onRegisterInput"
         data-field="confirmPassword"
@@ -143,6 +150,17 @@
       <view class="password-toggle" bindtap="toggleRegConfirmPassword">
         <text>{{showRegConfirmPassword ? '🙈' : '👁️'}}</text>
       </view>
+    </view>
+
+    <view class="form-group">
+      <input
+        class="form-input"
+        placeholder="邀请码（可选）"
+        placeholder-style="color: rgba(255, 255, 255, 0.8);"
+        value="{{registerForm.invitationCode}}"
+        bindinput="onRegisterInput"
+        data-field="invitationCode"
+      />
     </view>
 
     <button

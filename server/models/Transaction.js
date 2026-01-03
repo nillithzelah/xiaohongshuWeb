@@ -18,7 +18,8 @@ const transactionSchema = new mongoose.Schema({
   amount: {
     type: Number,
     required: true,
-    min: 0
+    min: 0,
+    set: value => Math.round(value * 100) / 100 // 自动四舍五入到分
   },
   type: {
     type: String,
@@ -64,7 +65,11 @@ const transactionSchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: Date.now,
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    },
     index: true
   }
 });

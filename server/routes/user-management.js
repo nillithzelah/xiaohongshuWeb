@@ -386,9 +386,9 @@ router.post('/:id/exchange-points', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: '用户积分不足' });
     }
 
-    // 兑换比例：1积分 = 1元人民币
-    const exchangeRate = 1;
-    const amountToAdd = pointsNum * exchangeRate;
+    // 兑换比例：100积分 = 1元人民币（使用分单位进行计算，避免浮点数精度问题）
+    const exchangeRate = 1; // 1积分 = 1分
+    const amountToAdd = pointsNum * exchangeRate / 100; // 转换为元
 
     // 检查已提现金额上限（防止兑换后打款时超出限制）
     const currentWithdrawn = user.wallet?.total_withdrawn || 0;

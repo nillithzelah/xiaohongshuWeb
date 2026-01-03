@@ -29,7 +29,9 @@
   padding: 40rpx 30rpx;
   margin-bottom: 20rpx;
   box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.15);
+  position: relative;
 }
+
 
 .avatar-section {
   display: flex;
@@ -90,38 +92,46 @@
 .asset-item {
   flex: 1;
   display: flex;
+  flex-direction: column; /* 改为垂直排列，节省横向空间 */
   align-items: center;
   justify-content: center;
+  min-width: 0; /* 关键：防止 flex 子元素溢出 */
 }
 
 .asset-icon {
-  font-size: 48rpx;
-  margin-right: 16rpx;
+  font-size: 40rpx; /* 稍微缩小图标 */
+  margin-right: 0; /* 垂直排列不再需要右边距 */
+  margin-bottom: 8rpx; /* 改为下边距 */
 }
 
 .asset-info {
   text-align: center;
+  width: 100%; /* 占满宽度 */
 }
 
 .asset-value {
-  font-size: 48rpx;
+  /* 调整字体大小，如果数字真的很长，建议降到 32rpx */
+  font-size: 32rpx;
   font-weight: bold;
   color: #333;
   display: block;
   margin-bottom: 4rpx;
+  text-align: center; /* 改为居中 */
+
+  /* 防止溢出的保险设置 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120rpx; /* 限制最大宽度 */
+  margin: 0 auto; /* 居中显示 */
 }
 
-.asset-label {
-  font-size: 20rpx;
-  color: #999;
-  display: block;
-}
-
+/* 调整分割线，防止挤压 */
 .asset-divider {
   width: 2rpx;
-  height: 60rpx;
+  height: 40rpx; /* 稍微缩短一点 */
   background: #f0f0f0;
-  margin: 0 30rpx;
+  margin: 0 10rpx; /* 缩小间距 */
 }
 
 .asset-vertical-divider {
@@ -132,6 +142,40 @@
   width: 2rpx;
   background: #f0f0f0;
   transform: translateX(-50%);
+}
+
+/* 信息卡片 */
+.info-card {
+  background: linear-gradient(135deg, #ffffff 0%, #fefefe 100%);
+  border-radius: 20rpx;
+  padding: 32rpx;
+  margin-bottom: 24rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0,0,0,0.1);
+  border: 1rpx solid rgba(0,0,0,0.04);
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid rgba(0,0,0,0.04);
+}
+
+.info-item:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  font-size: 28rpx;
+  color: #666;
+  font-weight: 500;
+}
+
+.info-value {
+  font-size: 28rpx;
+  color: #333;
+  font-weight: bold;
 }
 
 /* 菜单列表 */
@@ -213,6 +257,7 @@
   text-align: center;
 }
 
+
 /* 响应式设计 */
 @media (max-width: 750rpx) {
   .assets-card {
@@ -232,4 +277,77 @@
   .asset-item:last-child {
     margin-bottom: 0;
   }
+}
+
+/* 账号信息按钮 - 与菜单项保持一致样式 */
+.account-info-section {
+  margin: 0 20rpx 24rpx 20rpx;
+}
+
+.account-info-btn {
+  display: block;
+  background: linear-gradient(135deg, #ffffff 0%, #fefefe 100%);
+  border-radius: 20rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0,0,0,0.1);
+  border: 1rpx solid rgba(0,0,0,0.04);
+  text-decoration: none;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.account-info-btn:active {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  transform: translateX(4rpx);
+}
+
+.account-info-btn::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.3s ease;
+}
+
+.account-info-btn:active::before {
+  width: 4rpx;
+}
+
+.btn-content {
+  display: flex;
+  align-items: center;
+  padding: 32rpx 30rpx;
+}
+
+.btn-icon {
+  font-size: 40rpx;
+  margin-right: 20rpx;
+  width: 50rpx;
+  text-align: center;
+}
+
+.btn-text {
+  flex: 1;
+}
+
+.btn-title {
+  font-size: 32rpx;
+  color: #333;
+  display: block;
+  margin-bottom: 4rpx;
+}
+
+.btn-desc {
+  font-size: 26rpx;
+  color: #666;
+  display: block;
+}
+
+.btn-arrow {
+  font-size: 32rpx;
+  color: #ccc;
+  font-weight: bold;
 }

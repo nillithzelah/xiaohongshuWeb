@@ -1,0 +1,77 @@
+<!--pages/distribution/distribution.wxml-->
+<view class="container">
+  <!-- 标题 -->
+  <view class="page-header">
+    <text class="page-title">我的分销</text>
+  </view>
+
+  <!-- 分销积分卡片 -->
+  <view class="points-card">
+    <view class="points-icon">💰</view>
+    <view class="points-info">
+      <text class="points-value">{{distributionPoints}}</text>
+      <text class="points-label">分销积分</text>
+    </view>
+  </view>
+
+  <!-- 上下级关系 -->
+  <view class="relationship-section">
+    <!-- 上级 -->
+    <view class="relationship-card" wx:if="{{referralTree.parent}}">
+      <view class="card-header">
+        <text class="card-title">我的上级</text>
+      </view>
+      <view class="user-item">
+        <view class="user-avatar">👤</view>
+        <view class="user-info">
+          <text class="user-name">{{referralTree.parent.nickname || referralTree.parent.username}}</text>
+          <text class="user-role">上级用户</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 下级 -->
+    <view class="relationship-card" wx:if="{{referralTree.children && referralTree.children.length > 0}}">
+      <view class="card-header">
+        <text class="card-title">我的下级 ({{referralTree.children.length}}人)</text>
+      </view>
+      <view class="user-list">
+        <view class="user-item" wx:for="{{referralTree.children}}" wx:key="username">
+          <view class="user-avatar">👤</view>
+          <view class="user-info">
+            <text class="user-name">{{item.nickname || item.username}}</text>
+            <text class="user-role">加入时间: {{item.joinedAt.substring(0,10)}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 下级的下级 -->
+    <view class="relationship-card" wx:if="{{referralTree.grandchildren && referralTree.grandchildren.length > 0}}">
+      <view class="card-header">
+        <text class="card-title">下级的好友 ({{referralTree.grandchildren.length}}人)</text>
+      </view>
+      <view class="user-list">
+        <view class="user-item" wx:for="{{referralTree.grandchildren}}" wx:key="username">
+          <view class="user-avatar">👤</view>
+          <view class="user-info">
+            <text class="user-name">{{item.nickname || item.username}}</text>
+            <text class="user-role">加入时间: {{item.joinedAt.substring(0,10)}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 空状态 -->
+    <view class="empty-state" wx:if="{{!referralTree || (!referralTree.parent && (!referralTree.children || referralTree.children.length === 0) && (!referralTree.grandchildren || referralTree.grandchildren.length === 0))}}">
+      <view class="empty-icon">🌟</view>
+      <text class="empty-text">暂无分销关系</text>
+      <text class="empty-hint">邀请好友加入即可建立分销关系</text>
+    </view>
+  </view>
+
+  <!-- 加载状态 -->
+  <view class="loading" wx:if="{{loading}}">
+    <text>加载中...</text>
+  </view>
+</view>

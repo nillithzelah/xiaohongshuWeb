@@ -9,6 +9,8 @@ Page({
     // 选项卡
     currentTab: 'wechat', // wechat | account
     showRegister: false,
+    // 是否从首页跳转过来需要手机号授权
+    fromIndexForPhoneAuth: false,
     // 登录表单
     loginForm: {
       phoneNumber: '',
@@ -22,7 +24,8 @@ Page({
       username: '',
       nickname: '',
       password: '',
-      confirmPassword: ''
+      confirmPassword: '',
+      invitationCode: '' // 可选的邀请码
     },
     registerLoading: false,
     showRegPassword: false,
@@ -40,6 +43,23 @@ Page({
         url: '/pages/index/index'
       });
       return;
+    }
+
+    // 检查是否是从首页跳转过来需要手机号授权
+    if (options.needPhoneAuth === 'true') {
+      console.info('从首页跳转过来需要手机号授权');
+      this.setData({
+        currentTab: 'wechat', // 切换到手机号登录标签
+        showRegister: false,
+        fromIndexForPhoneAuth: true // 标记是从首页跳转过来的
+      });
+
+      // 显示提示信息
+      wx.showToast({
+        title: '请完成手机号授权',
+        icon: 'none',
+        duration: 2000
+      });
     }
 
   },
@@ -154,7 +174,7 @@ Page({
 
   // 用户注册
   onRegister: function() {
-    const { phoneNumber, username, nickname, password, confirmPassword } = this.data.registerForm;
+    const { phoneNumber, username, nickname, password, confirmPassword, invitationCode } = this.data.registerForm;
 
     // 表单验证
     if (!phoneNumber || !username || !password) {
@@ -192,7 +212,8 @@ Page({
         phoneNumber,
         username,
         password,
-        nickname: nickname || username
+        nickname: nickname || username,
+        invitationCode: invitationCode || undefined // 可选的邀请码
       },
       success: (res) => {
         if (res.data.success) {
@@ -208,7 +229,13 @@ Page({
           }, 1500);
         } else {
           console.error('用户注册失败:', res.data.message);
-          this.showError(res.data.message || '注册失败');
+
+          // 检查是否是没有手机号的错误
+          if (res.data.message && res.data.message.includes('尚未在系统中注册')) {
+            this.showError('手机号为注册，请联系带教老师');
+          } else {
+            this.showError(res.data.message || '注册失败');
+          }
         }
       },
       fail: (err) => {
@@ -292,7 +319,27 @@ Page({
           this.loginSuccess();
         } else {
           console.error('手机号授权失败:', res.data.message);
-          this.showError(res.data.message || '手机号授权失败');
+
+          // 检查是否是没有手机号，如果是则跳转到注册页面
+          if (res.data.message && res.data.message.includes('手机号未注册')) {
+            wx.showModal({
+              title: '需要注册',
+              content: '该手机号尚未注册，请先完成注册',
+              showCancel: false,
+              confirmText: '去注册',
+              success: (modalRes) => {
+                if (modalRes.confirm) {
+                  this.setData({
+                    showRegister: true,
+                    currentTab: 'account', // 切换到账号标签页显示注册表单
+                    'registerForm.phoneNumber': this.data.loginForm.phoneNumber || '' // 如果有手机号则预填
+                  });
+                }
+              }
+            });
+          } else {
+            this.showError(res.data.message || '手机号授权失败');
+          }
         }
       },
       fail: (err) => {
@@ -325,9 +372,28 @@ Page({
 
     // 延迟跳转，让用户看到成功提示
     setTimeout(() => {
-      wx.switchTab({
-        url: '/pages/index/index'
-      });
+      if (this.data.fromIndexForPhoneAuth) {
+        // 从首页跳转过来进行手机号授权，完成授权后返回首页
+        console.info('手机号授权完成，返回首页');
+        wx.navigateBack({
+          delta: 1, // 返回上一页（首页）
+          success: () => {
+            console.info('成功返回首页');
+          },
+          fail: (err) => {
+            console.error('返回首页失败，使用switchTab:', err);
+            // 如果navigateBack失败，使用switchTab作为fallback
+            wx.switchTab({
+              url: '/pages/index/index'
+            });
+          }
+        });
+      } else {
+        // 正常登录流程，跳转到首页
+        wx.switchTab({
+          url: '/pages/index/index'
+        });
+      }
     }, 1500);
   },
 

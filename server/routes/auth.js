@@ -80,7 +80,7 @@ router.post('/wechat-login', async (req, res) => {
           console.log('📱 微信API完整URL:', wechatApiUrl);
 
           const wechatData = await new Promise((resolve, reject) => {
-            https.get(wechatApiUrl, (res) => {
+            const request = https.get(wechatApiUrl, (res) => {
               let data = '';
               res.on('data', (chunk) => data += chunk);
               res.on('end', () => {
@@ -92,6 +92,12 @@ router.post('/wechat-login', async (req, res) => {
                 }
               });
             }).on('error', reject);
+
+            // 设置30秒超时
+            request.setTimeout(30000, () => {
+              request.destroy();
+              reject(new Error('微信API请求超时'));
+            });
           });
 
           if (wechatData.errcode) {
@@ -606,7 +612,7 @@ router.post('/phone-login', async (req, res) => {
 // 用户注册（需要手机号验证）
 router.post('/user-register', async (req, res) => {
   try {
-    const { phoneNumber, username, password, nickname } = req.body;
+    const { phoneNumber, username, password, nickname, invitationCode } = req.body;
 
     console.log('📝 用户注册请求:', { phoneNumber, username, nickname });
 
@@ -665,6 +671,21 @@ router.post('/user-register', async (req, res) => {
 
     console.log('✅ 手机号验证通过，更新用户账号信息');
 
+    // 处理邀请码（如果提供）
+    let parentUser = null;
+    if (invitationCode && invitationCode.trim()) {
+      console.log('🔍 验证邀请码:', invitationCode);
+      parentUser = await User.findOne({
+        username: invitationCode.trim(),
+        is_deleted: { $ne: true }
+      });
+
+      if (!parentUser) {
+        return res.status(400).json({ success: false, message: '邀请码无效，请检查后重新输入' });
+      }
+      console.log('✅ 邀请码验证通过，上级用户:', parentUser.username);
+    }
+
     // 检查用户是否已被分配给带教老师
     const isAssignedToMentor = existingPhoneUser.mentor_id !== null && existingPhoneUser.mentor_id !== undefined;
 
@@ -681,6 +702,12 @@ router.post('/user-register', async (req, res) => {
         existingPhoneUser.nickname = nickname.trim();
       }
 
+      // 如果提供了邀请码，设置上级用户（但不覆盖已有的mentor分配）
+      if (parentUser && !existingPhoneUser.parent_id) {
+        existingPhoneUser.parent_id = parentUser._id;
+        console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
+      }
+
       console.log('🔄 已分配用户账号信息更新完成，保留系统配置');
     } else {
       console.log('🆕 新线索用户，设置完整账号信息');
@@ -689,6 +716,12 @@ router.post('/user-register', async (req, res) => {
       existingPhoneUser.username = username;
       existingPhoneUser.password = password; // 会通过pre save中间件自动加密
       existingPhoneUser.nickname = nickname || username;
+
+      // 设置上级用户（通过邀请码）
+      if (parentUser) {
+        existingPhoneUser.parent_id = parentUser._id;
+        console.log('👨‍👩‍👧‍👦 新用户通过邀请码设置上级用户:', parentUser.username);
+      }
     }
 
     await existingPhoneUser.save();
@@ -715,6 +748,39 @@ router.post('/user-register', async (req, res) => {
   } catch (error) {
     console.error('用户注册错误:', error);
     res.status(500).json({ success: false, message: '注册失败，请稍后重试' });
+  }
+});
+
+// 检查手机号是否已注册
+router.get('/check-phone', async (req, res) => {
+  try {
+    const { phoneNumber } = req.query;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, message: '手机号不能为空' });
+    }
+
+    // 检查手机号格式
+    const phoneRegex = /^1[3-9]\d{9}$/;
+    if (!phoneRegex.test(phoneNumber)) {
+      return res.status(400).json({ success: false, message: '手机号格式不正确' });
+    }
+
+    // 查找手机号是否已被注册
+    const existingUser = await User.findOne({
+      phone: phoneNumber,
+      is_deleted: { $ne: true }
+    });
+
+    res.json({
+      success: true,
+      isRegistered: !!existingUser,
+      message: existingUser ? '该手机号已被注册' : '该手机号可以注册'
+    });
+
+  } catch (error) {
+    console.error('检查手机号错误:', error);
+    res.status(500).json({ success: false, message: '检查失败，请稍后重试' });
   }
 });
 
@@ -768,6 +834,25 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('账号密码登录错误:', error);
     res.status(500).json({ success: false, message: '登录失败，请稍后重试' });
+  }
+});
+
+// 用户登出
+router.post('/logout', authenticateToken, async (req, res) => {
+  try {
+    // 登出逻辑可以在这里添加一些清理工作
+    // 比如记录登出日志、清理临时数据等
+
+    console.log(`用户 ${req.user.username} 登出`);
+
+    res.json({
+      success: true,
+      message: '登出成功'
+    });
+
+  } catch (error) {
+    console.error('登出错误:', error);
+    res.status(500).json({ success: false, message: '登出失败' });
   }
 });
 

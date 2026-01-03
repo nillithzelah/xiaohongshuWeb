@@ -1,5 +1,12 @@
 # UPDATE_LOG
 
+## 2026-01-02 17:07:00
+- **设备删除**: 额外删除了accountName为"浅f0t"的设备，该设备状态为online/approved，已分配给用户ObjectId("695786bd8d3afc51102ec6eb")
+- **设备删除**: 真实删除了accountName为"14757189744"的设备，该设备状态为online/pending，assignedUser为null
+- **用户状态恢复**: 将手机号14757189744的兼职用户状态从已删除恢复为正常状态，清除删除时间和删除者信息，用户现在可以正常使用系统
+- **数据库更新**: 将所有审核状态为null（空白）的设备更新为"approved"状态，共更新14个设备，现在所有设备都有有效的审核状态，可以在小程序中正常显示
+- **服务器执行**: 在服务器上执行数据库更新脚本，审核状态分布从 (null:14, approved:3, rejected:1, pending:1) 更新为 (approved:17, pending:2, rejected:1)，设备总数从18个减少到16个
+
 ## 2026-01-02 15:40:00
 - **server/services/asyncAiReviewService.js**: 修复 CommentLimit 数据无法创建的问题：当 `userNoteInfo.author` 是字符串格式时，代码没有将其赋值给 `authorToRecord`，导致评论限制无法记录。修复方案：添加对字符串格式 author 的支持，同时支持逗号分隔的多个昵称（取第一个）
 - **server/services/continuousCheckService.js**: 修复持续检查服务中积分更新错误：当用户points字段为undefined时，MongoDB的$inc操作会失败。修复方案：改为使用$set操作，确保积分字段有效后再更新

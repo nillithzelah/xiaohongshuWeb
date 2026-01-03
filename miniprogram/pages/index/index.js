@@ -8,8 +8,6 @@ const API_CONFIG = {
   USER_TASKS: CONFIG.API_BASE_URL + CONFIG.API_ENDPOINTS.CLIENT.USER_TASKS
 };
 
-// 从配置文件获取测试token（已移至config.js统一管理）
-const DEFAULT_TEST_TOKEN = CONFIG.TEST_TOKENS?.BOSS_TOKEN;
 
 console.info(`首页环境: ${CONFIG.ENV}`);
 
@@ -29,6 +27,8 @@ Page({
     ],
     showPhoneAuthModal: false, // 手机号授权模态框
     forceAuth: false, // 是否为强制授权模式
+    deviceReviewStatus: null, // 设备审核状态
+    showDeviceReviewCard: false, // 是否显示设备审核卡片
   },
 
   onLoad() {
@@ -37,6 +37,9 @@ Page({
 
     // 获取本地缓存的用户信息（如果没有则显示默认）
     this.updateUserInfo();
+
+    // 获取设备审核状态
+    this.fetchDeviceReviewStatus();
   },
 
   onShow() {
@@ -64,13 +67,43 @@ Page({
 
     // 检查是否需要手机号授权（根据登录类型）
     this.checkPhoneAuth();
+
+    // 获取设备审核状态
+    this.fetchDeviceReviewStatus();
   },
 
   onPullDownRefresh() {
+    console.log('🔄 用户触发下拉刷新');
+
+    // 重置页码并重新获取数据
+    this.setData({ page: 1, hasMore: true });
+
+    // 重新获取公告和审核列表
     this.fetchAnnouncements();
     this.fetchReviews(true).then(() => {
+      console.log('✅ 下拉刷新完成');
+      wx.stopPullDownRefresh();
+      wx.showToast({
+        title: '刷新成功',
+        icon: 'success',
+        duration: 1500
+      });
+    }).catch(() => {
+      console.log('❌ 下拉刷新失败');
       wx.stopPullDownRefresh();
     });
+  },
+
+  // 下拉刷新恢复（scroll-view 专用）
+  onPullDownRefreshRestore() {
+    console.log('🔄 下拉刷新恢复');
+    // 可以在这里添加一些恢复逻辑，如果需要的话
+  },
+
+  // 上拉加载更多 (scroll-view 的滚动到底部事件)
+  onScrollToLower() {
+    console.debug('触发上拉加载更多');
+    this.fetchReviews(false); // false 表示不重置，加载下一页
   },
 
   // 检查用户信息是否发生变化（使用公共方法）
@@ -148,6 +181,18 @@ Page({
   fetchAnnouncements() {
     const app = getApp();
 
+    // 优先使用预加载缓存
+    const preloadData = app.requestCache.getPreload(API_CONFIG.ANNOUNCEMENTS, {});
+    if (preloadData) {
+     console.debug('使用预加载公告数据');
+      if (preloadData.data.success && preloadData.data.announcements && preloadData.data.announcements.length > 0) {
+        const announcements = getApp().utils.ensureArray(preloadData.data.announcements);
+        app.globalDataManager.set('announcements', announcements);
+        this.setData({ announcements: announcements });
+      }
+      return;
+    }
+
     // 检查全局共享数据
     const sharedData = app.globalDataManager.get('announcements');
     if (sharedData) {
@@ -169,12 +214,8 @@ Page({
         app.globalDataManager.set('announcements', announcements);
         this.setData({ announcements: announcements });
       } else {
-        // 如果后端没数据，显示默认假数据演示效果
-        const defaultAnnouncements = [
-          // '🔥 今日笔记任务单价上调至 10 元！',
-          // '📢 提现功能维护通知，请周五再试。',
-          // '🎉 恭喜用户 138****8888 提现 500 元！'
-        ];
+        // 如果后端没数据，显示默认数据
+        const defaultAnnouncements = [];
         app.globalDataManager.set('announcements', defaultAnnouncements);
         this.setData({ announcements: defaultAnnouncements });
       }
@@ -211,7 +252,13 @@ Page({
               // 简单格式化时间 MM-DD HH:mm
               formattedTime: item.createdAt ? item.createdAt.substring(5, 16).replace('T', ' ') : '刚刚',
               // 添加设备信息显示（类型安全）
-              deviceName: getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备')
+              deviceName: getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备'),
+              // 添加评论昵称显示（优先使用AI解析的昵称）
+              commentAuthor: item.imageType === 'comment' ?
+                (getApp().utils.safeGet(item, 'aiParsedNoteInfo.author') ||
+                 getApp().utils.safeGet(item, 'userNoteInfo.author', '').split(',')[0] ||
+                 '未知昵称') :
+                getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备')
             }));
 
             this.setData({
@@ -242,49 +289,65 @@ Page({
   },
 
 
-  // 处理手机号授权
+  // 处理手机号授权 - 跳转到登录页面完成完整授权流程
   onGetPhoneNumber(e) {
-   console.debug('开始获取手机号');
+    console.info('用户点击立即授权，跳转到登录页面完成手机号授权');
 
-    getApp().getPhoneNumber(e, (userInfo) => {
-     console.info('手机号获取成功');
+    // 关闭当前模态框
+    this.setData({
+      showPhoneAuthModal: false,
+      forceAuth: false
+    });
 
-      // 手机号授权成功后，清除所有用户相关缓存
-      this.clearUserRelatedCache();
-
-      // 强制更新页面数据
-      this.setData({
-        userInfo: null, // 先清空，触发页面重新渲染
-        showPhoneAuthModal: false,
-        forceAuth: false
-      });
-
-      // 短暂延迟后重新设置数据，确保页面完全重新渲染
-      setTimeout(() => {
-        this.setData({
-          userInfo,
-          showPhoneAuthModal: false,
-          forceAuth: false
-        });
-
-       console.debug('页面数据已更新');
-
+    // 跳转到登录页面，传递参数表示需要手机号授权
+    wx.navigateTo({
+      url: '/pages/login/login?needPhoneAuth=true',
+      success: () => {
+        console.info('成功跳转到登录页面进行手机号授权');
+      },
+      fail: (err) => {
+        console.error('跳转到登录页面失败:', err);
         wx.showToast({
-          title: '手机号获取成功',
-          icon: 'success',
+          title: '跳转失败，请重试',
+          icon: 'none',
           duration: 2000
         });
-
-        // 重新获取所有数据（公告、审核记录等）
-        this.fetchAnnouncements();
-        this.fetchReviews(true);
-      }, 200);
+      }
     });
   },
 
   // 关闭手机号授权模态框
   closePhoneAuthModal() {
     this.setData({ showPhoneAuthModal: false });
+  },
+
+  // 获取设备审核状态
+  fetchDeviceReviewStatus: function() {
+    const token = app.getCurrentToken();
+    if (!token) return;
+
+    app.request({
+      url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/devices/my-review-status`,
+      method: 'GET',
+      header: { 'Authorization': `Bearer ${token}` }
+    }).then(res => {
+      if (res.data && res.data.success) {
+        const reviewStatus = res.data.reviewStatus;
+        this.setData({
+          deviceReviewStatus: reviewStatus,
+          showDeviceReviewCard: reviewStatus && reviewStatus.status !== 'approved'
+        });
+      }
+    }).catch(err => {
+      console.error('获取设备审核状态失败:', err);
+    });
+  },
+
+  // 跳转到设备列表页面
+  goToDeviceList: function() {
+    wx.navigateTo({
+      url: '/pages/device-list/device-list?showAddModal=true'
+    });
   },
 
   goToUpload() {

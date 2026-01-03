@@ -17,6 +17,11 @@ const deviceSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  accountUrl: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   assignedUser: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -24,8 +29,8 @@ const deviceSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['online', 'offline', 'protected', 'frozen'],
-    default: 'online'
+    enum: ['online', 'offline', 'protected', 'frozen', 'reviewing'],
+    default: 'offline'
   },
   influence: {
     type: [String],
@@ -57,6 +62,37 @@ const deviceSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  // 审核相关字段
+  reviewStatus: {
+    type: String,
+    enum: ['pending', 'ai_approved', 'approved', 'rejected'],
+    default: 'pending',
+    comment: '审核状态：pending-待审核，ai_approved-AI审核通过，approved-人工审核通过，rejected-审核拒绝'
+  },
+  reviewImage: {
+    type: String,
+    trim: true,
+    default: '',
+    comment: '审核图片URL，小红薯个人页面截图'
+  },
+  reviewReason: {
+    type: String,
+    trim: true,
+    default: '',
+    maxlength: 500,
+    comment: '审核拒绝原因'
+  },
+  reviewedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    comment: '审核人ID'
+  },
+  reviewedAt: {
+    type: Date,
+    default: null,
+    comment: '审核时间'
+  },
   isLocked: {
     type: Boolean,
     default: false
@@ -65,9 +101,31 @@ const deviceSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  createdAt: {
+    type: Date,
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
+  },
+  updatedAt: {
+    type: Date,
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
   }
-}, {
-  timestamps: true
+});
+
+// 更新时间中间件
+deviceSchema.pre('save', function(next) {
+  if (this.isModified()) {
+    this.updatedAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  }
+  next();
 });
 
 // 索引

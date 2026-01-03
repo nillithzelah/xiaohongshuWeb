@@ -43,14 +43,6 @@ const CONFIG = {
   // 调试信息
   DEBUG: CURRENT_ENV === 'development',
 
-  // 测试配置（仅开发环境使用）
-  TEST_TOKENS: {
-    // boss用户token - 所有权限
-    BOSS_TOKEN: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMjliNWNiYzE4ODAwN2VjYzU4NDgiLCJpYXQiOjE3NjU2MTYxMTksImV4cCI6MTc2NjIyMDkxOX0.AIKlOeO2hqp-tJpI9hVmtSqlAPMnKIkyFAK86Ma4swI',
-
-    // 普通用户token（如果需要）
-    // USER_TOKEN: 'your_user_token_here'
-  },
 
   // 功能开关
   FEATURES: {

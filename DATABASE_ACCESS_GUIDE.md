@@ -2,7 +2,7 @@
 
 ## 📍 数据库位置
 
-服务器数据库位于：`112.74.163.102`（阿里云服务器）
+服务器数据库位于：`wubug`（服务器别名，对应112.74.163.102）
 
 ## 🗃️ 数据库信息
 
@@ -13,21 +13,64 @@
 
 ## 🔑 访问方法
 
-### 1. 通过SSH隧道访问（推荐）
+### 1. 通过MCP服务器访问（推荐用于AI助手）
+
+MCP（Model Context Protocol）允许AI助手直接访问数据库，无需手动查询。
+
+#### 配置步骤：
+
+1. **安装MCP服务器**：
+   ```bash
+   npm install -g @modelcontextprotocol/server-mongodb
+   ```
+
+2. **配置MCP设置**：
+   编辑 Windsurf 编辑器的MCP配置文件：
+   ```
+   c:/Users/Administer/AppData/Roaming/Windsurf/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json
+   ```
+
+   添加以下配置：
+   ```json
+   {
+     "mcpServers": {
+       "mongodb-xiaohongshu": {
+         "command": "npx",
+         "args": [
+           "-y",
+           "@modelcontextprotocol/server-mongodb",
+           "mongodb://127.0.0.1:27017/xiaohongshu_audit"
+         ]
+       }
+     }
+   }
+   ```
+
+3. **使用方法**：
+   - 在Windsurf编辑器中，AI助手可以直接查询数据库
+   - 支持自然语言查询，如"查看所有用户"、"统计审核状态"等
+   - 无需手动编写MongoDB查询语句
+
+#### 注意事项：
+- 确保SSH隧道已建立（见方法2）
+- MCP配置需要重启Windsurf编辑器才能生效
+- 仅在开发环境使用，避免生产环境数据泄露
+
+### 2. 通过SSH隧道访问
 
 ```bash
 # 在本地终端执行以下命令创建SSH隧道
-ssh -i ~/.ssh/id_rsa_new_server -L 27017:127.0.0.1:27017 root@112.74.163.102
+ssh -i ~/.ssh/id_rsa_new_server -L 27017:127.0.0.1:27017 wubug
 
 # 然后在本地使用MongoDB客户端连接
 mongosh mongodb://127.0.0.1:27017/xiaohongshu_audit
 ```
 
-### 2. 直接在服务器上访问
+### 3. 直接在服务器上访问
 
 ```bash
 # SSH登录到服务器
-ssh -i ~/.ssh/id_rsa_new_server root@112.74.163.102
+ssh -i ~/.ssh/id_rsa_new_server wubug
 
 # 进入项目目录
 cd /var/www/xiaohongshu-web/server
@@ -36,9 +79,9 @@ cd /var/www/xiaohongshu-web/server
 mongosh mongodb://127.0.0.1:27017/xiaohongshu_audit
 ```
 
-### 3. 使用MongoDB Compass（图形界面）
+### 4. 使用MongoDB Compass（图形界面）
 
-1. 创建SSH隧道（如上所述）
+1. 创建SSH隧道（如方法2所述）
 2. 在MongoDB Compass中连接到：`mongodb://127.0.0.1:27017`
 3. 选择数据库：`xiaohongshu_audit`
 
@@ -82,7 +125,7 @@ db.imagereviews.aggregate([
 ## 🔍 查看实时数据
 
 可以通过管理后台查看数据：
-- 管理后台地址：`http://112.74.163.102/xiaohongshu`
+- 管理后台地址：`http://wubug/xiaohongshu`
 - 使用管理员账号登录后查看审核记录
 
 ## 📚 相关文档

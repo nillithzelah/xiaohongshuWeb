@@ -5,7 +5,7 @@
 echo "🚀 开始部署小红书Web前端..."
 
 # 服务器配置
-SERVER="root@112.74.163.102"
+SERVER="wubug"
 REMOTE_PATH="/var/www/xiaohongshu-web/admin/public"
 SSH_KEY="$HOME/.ssh/id_rsa_new_server"
 

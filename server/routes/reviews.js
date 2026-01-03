@@ -116,7 +116,7 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'boss
       };
       const oldTypeName = typeNameMap[oldImageType] || oldImageType;
       const newTypeName = typeNameMap[newType] || newType;
-      historyComment += ` (客服修正类型为 ${newTypeName}, 价格从 ¥${oldSnapshotPrice} 调整为 ¥${review.snapshotPrice})`;
+      historyComment += ` (客服修正类型为 ${newTypeName}, 价格从 ${oldSnapshotPrice} 调整为 ${review.snapshotPrice})`;
     }
 
     review.auditHistory.push({
@@ -369,6 +369,8 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
     console.log(`💰 财务处理完成 - 任务奖励: ${amount}元, 佣金总额: ${totalCommission}元`);
 
     await review.save();
+
+    // 评论类型的防作弊计数器更新已在asyncAiReviewService中处理（通过CommentLimit.recordCommentApproval）
 
     // 发送通知
     await notificationService.sendReviewStatusNotification(review, oldStatus, review.status);
@@ -1024,25 +1026,30 @@ router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manag
       const aiAuditTime = review.auditHistory.find(h => h.action === 'ai_auto_approved')?.timestamp;
       const survivalDays = aiAuditTime ? Math.floor((Date.now() - new Date(aiAuditTime).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 1;
 
-      // 计算总收益：第一天原价 + 后续每天0.3元
+      // 计算总收益：第一天原价 + 后续每天0.3元（使用整数运算避免精度问题）
       const initialPrice = review.snapshotPrice || 0; // 第一天收益（原笔记价格）
       const dailyReward = 0.3; // 后续每天奖励
       const additionalDays = Math.max(0, survivalDays - 1); // 除了第一天外的天数
-      const additionalEarnings = additionalDays * dailyReward; // 后续天数的收益
-      const totalEarnings = initialPrice + additionalEarnings; // 总收益
+      const additionalEarnings = Math.round(additionalDays * dailyReward * 100) / 100; // 后续天数的收益，保留2位小数
+      const totalEarnings = Math.round((initialPrice + additionalEarnings) * 100) / 100; // 总收益，保留2位小数
 
       // 计算上级用户佣金
       let parentCommission = 0;
       let grandParentCommission = 0;
 
       if (review.userId && review.userId.parent_id) {
-        // 一级佣金
-        parentCommission = additionalEarnings * (review.snapshotCommission1 / review.snapshotPrice);
+        // 一级佣金（使用整数运算避免精度问题）
+        // 将所有金额转换为分单位进行计算
+        const additionalEarningsCents = Math.round(additionalEarnings * 100);
+        const snapshotPriceCents = Math.round(review.snapshotPrice * 100);
+        const snapshotCommission1Cents = Math.round(review.snapshotCommission1 * 100);
+        parentCommission = Math.floor((additionalEarningsCents * snapshotCommission1Cents) / snapshotPriceCents) / 100;
 
         // 二级佣金
         const parentUser = await User.findById(review.userId.parent_id);
         if (parentUser && parentUser.parent_id) {
-          grandParentCommission = additionalEarnings * (review.snapshotCommission2 / review.snapshotPrice);
+          const snapshotCommission2Cents = Math.round(review.snapshotCommission2 * 100);
+          grandParentCommission = Math.floor((additionalEarningsCents * snapshotCommission2Cents) / snapshotPriceCents) / 100;
         }
       }
 

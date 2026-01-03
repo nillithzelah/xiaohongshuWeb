@@ -20,9 +20,9 @@ const testImages = [
 // 价格和佣金配置函数
 function getPriceByType(imageType) {
   const priceMap = {
-    'customer_resource': 10.00,
-    'note': 8.00,
-    'comment': 3.00
+    'customer_resource': 10,
+    'note': 8,
+    'comment': 3
   };
   return priceMap[imageType] || 0;
 }

@@ -1,0 +1,68 @@
+<!--pages/points-exchange/points-exchange.wxml-->
+<view class="container">
+  <!-- 页面标题 -->
+  <!--view class="page-header">
+    <text class="page-title">积分兑换</text>
+    <text class="page-desc">100积分 = 1元人民币</text>
+  </view>
+
+  <!-- 当前积分显示 -->
+  <view class="points-card">
+    <view class="points-icon">💰</view>
+    <view class="points-info">
+      <text class="points-value">{{userPoints}}</text>
+      <text class="points-label">当前积分</text>
+    </view>
+  </view>
+
+  <!-- 兑换表单 -->
+  <view class="exchange-form">
+    <view class="form-item">
+      <text class="form-label">兑换积分数量</text>
+      <input
+        class="form-input"
+        type="number"
+        placeholder="请输入积分数量"
+        value="{{exchangeAmount}}"
+        bindinput="onAmountInput"
+      />
+      <view class="input-actions">
+        <button class="all-btn" bindtap="exchangeAll">全部兑换</button>
+      </view>
+    </view>
+
+    <view class="exchange-preview" wx:if="{{exchangeAmount}}">
+      <view class="preview-item">
+        <text class="preview-label">兑换积分:</text>
+        <text class="preview-value">{{exchangeAmount}} 积分</text>
+      </view>
+      <view class="preview-item">
+        <text class="preview-label">获得金额:</text>
+        <text class="preview-value">{{expectedMoney}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 兑换说明 -->
+  <view class="exchange-tips">
+    <view class="tip-item">
+      <text class="tip-icon">💡</text>
+      <text class="tip-text">积分兑换后将进入待打款队列</text>
+    </view>
+    <!-- <view class="tip-item">
+      <text class="tip-icon">⏰</text>
+      <text class="tip-text">通常在1-2个工作日内到账</text>
+    </view> -->
+  </view>
+
+  <!-- 兑换按钮 -->
+  <view class="action-section">
+    <button
+      class="exchange-btn"
+      bindtap="confirmExchange"
+      loading="{{exchanging}}"
+    >
+      确认兑换
+    </button>
+  </view>
+</view>

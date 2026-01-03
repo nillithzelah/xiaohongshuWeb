@@ -4,11 +4,9 @@ const app = getApp();
 const CONFIG = require('../../config.js');
 
 const API_CONFIG = {
-  DEVICE_MY_LIST: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/device/my-list`,
+  DEVICE_MY_LIST: CONFIG.API_BASE_URL + CONFIG.API_ENDPOINTS.CLIENT.DEVICE_MY_LIST,
   UPLOAD_IMAGE: `${CONFIG.API_BASE_URL}/xiaohongshu/api/upload/image`,
   TASKS_BATCH_SUBMIT: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/tasks/batch-submit`,
-  USERS_LIST: `${CONFIG.API_BASE_URL}/xiaohongshu/api/users`,
-  GENERATE_USER_TOKEN: `${CONFIG.API_BASE_URL}/xiaohongshu/api/auth/generate-user-token`,
   TASK_CONFIGS: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/task-configs`
 };
 
@@ -20,8 +18,7 @@ Page({
   data: {
     // 任务类型配置 (从后端动态获取)
     taskTypes: [],
-    devices: [], // 用户的设备列表
-    selectedDevice: null, // 选中的设备
+    devices: [], // 用户的设备列表（用于展示）
     selectedType: null, // 当前选中的类型对象
     imageUrls: [], // 多张图片地址数组
     imageMd5s: [], // 多张图片的MD5数组
@@ -37,10 +34,6 @@ Page({
     uploadStatus: '', // 上传状态文本
     processingMd5: false, // MD5计算状态
     noDevicesMessage: null, // 无设备时的提示信息
-    // 测试模式相关
-    testMode: false, // 是否启用测试模式
-    users: [], // 用户列表（测试模式下使用）
-    selectedUser: null // 选中的测试用户
   },
 
   onLoad() {
@@ -48,8 +41,6 @@ Page({
     this.loadUserDevices();
     // 初始化显示列表
     this.updateDisplayList();
-    // 加载用户列表（用于测试模式）
-    this.loadUsers();
   },
 
   onShow() {
@@ -57,18 +48,43 @@ Page({
     if (!getApp().navigateGuard()) {
       return; // 如果未授权，会自动跳转到首页
     }
+    // 重新加载设备数据，确保使用最新数据
+    this.loadUserDevices();
+  },
+
+  // 下拉刷新
+  onPullDownRefresh: function () {
+    console.log('🔄 下拉刷新触发，强制重新加载数据');
+    this.loadTaskConfigs(true); // 强制刷新，跳过缓存
+    this.loadUserDevices(true); // 强制刷新，跳过预加载缓存
+    wx.stopPullDownRefresh()
   },
 
   // 加载任务配置
-  loadTaskConfigs() {
+  loadTaskConfigs(forceRefresh = false) {
     const app = getApp();
 
-    // 检查全局共享数据
-    const sharedData = app.globalDataManager.get('taskConfigs');
-    if (sharedData) {
-      console.log('📦 使用共享任务配置数据');
-      this.processTaskConfigs(sharedData);
-      return;
+    // 下拉刷新时跳过缓存，直接重新请求
+    if (!forceRefresh) {
+      // 优先使用预加载缓存
+      const preloadData = app.requestCache.getPreload(API_CONFIG.TASK_CONFIGS, {});
+      if (preloadData) {
+        console.log('🚀 使用预加载任务配置数据');
+        if (preloadData.data && preloadData.data.success && preloadData.data.configs && preloadData.data.configs.length > 0) {
+          // 保存到全局共享数据
+          app.globalDataManager.set('taskConfigs', preloadData.data.configs);
+          this.processTaskConfigs(preloadData.data.configs);
+        }
+        return;
+      }
+
+      // 检查全局共享数据
+      const sharedData = app.globalDataManager.get('taskConfigs');
+      if (sharedData) {
+        console.log('📦 使用共享任务配置数据');
+        this.processTaskConfigs(sharedData);
+        return;
+      }
     }
 
     // 使用优化的请求方法
@@ -82,12 +98,12 @@ Page({
         app.globalDataManager.set('taskConfigs', res.data.configs);
         this.processTaskConfigs(res.data.configs);
       } else {
-        // 使用模拟数据
-        this.loadMockTaskConfigs();
+        // 没有任务配置数据
+        console.log('没有任务配置数据');
       }
     }).catch(() => {
-      // 网络失败时使用模拟数据
-      this.loadMockTaskConfigs();
+      // 网络失败时不加载数据
+      console.log('加载任务配置失败');
     });
   },
 
@@ -102,6 +118,14 @@ Page({
       icon: this.getTaskIcon(config.type_key)
     }));
     this.setData({ taskTypes });
+
+    // 默认选择评论类型
+    const commentType = taskTypes.find(type => type.value === 'comment');
+    if (commentType) {
+      this.setData({
+        selectedType: commentType
+      });
+    }
   },
 
   // 获取任务描述
@@ -124,24 +148,31 @@ Page({
     return iconMap[typeKey] || '📄';
   },
 
-  // 加载模拟任务配置数据
-  loadMockTaskConfigs() {
-    const mockTaskTypes = [
-      { id: 1, value: 'customer_resource', name: '客资', price: '5.00', desc: '添加好友截图', icon: '👥' },
-      { id: 2, value: 'note', name: '笔记', price: '10.00', desc: '发布笔记截图', icon: '📝' },
-      { id: 3, value: 'comment', name: '评论', price: '3.00', desc: '评论截图', icon: '💬' }
-    ];
-    this.setData({ taskTypes: mockTaskTypes });
-  },
 
-  // 加载用户设备列表
-  loadUserDevices() {
+  // 加载用户设备列表（用于展示账号列表）
+  loadUserDevices(forceRefresh = true) {
+    console.log('🔍 开始加载用户设备列表（展示用）', forceRefresh ? '强制刷新' : '');
     const app = getApp();
+
+    // 下拉刷新时跳过预加载缓存，直接重新请求
+    if (!forceRefresh) {
+      // 优先使用预加载缓存
+      const preloadData = app.requestCache.getPreload(API_CONFIG.DEVICE_MY_LIST, {});
+      if (preloadData) {
+        console.log('🚀 使用预加载设备数据');
+        if (preloadData.data && preloadData.data.success && preloadData.data.devices && preloadData.data.devices.length > 0) {
+          // 保存到全局共享数据
+          app.globalDataManager.set('userDevices', preloadData.data.devices);
+          this.processUserDevices(preloadData.data.devices);
+        }
+        return;
+      }
+    }
 
     // 检查全局共享数据
     const sharedData = app.globalDataManager.get('userDevices');
     if (sharedData) {
-      console.log('📦 使用共享设备数据');
+      console.log('📦 使用共享设备数据，数量:', sharedData.length);
       this.processUserDevices(sharedData);
       return;
     }
@@ -155,14 +186,8 @@ Page({
       useCache: true
     }).then(res => {
       console.log('📡 设备列表API响应:', res.data);
-      console.log('📋 设备数据:', JSON.stringify(res.data?.devices, null, 2));
-      
+
       if (res.data && res.data.success && res.data.devices && res.data.devices.length > 0) {
-        // 检查第一个设备是否有accountName
-        const firstDevice = res.data.devices[0];
-        console.log('🔍 第一个设备完整数据:', firstDevice);
-        console.log('🔍 第一个设备accountName:', firstDevice?.accountName);
-        
         // 保存到全局共享数据
         app.globalDataManager.set('userDevices', res.data.devices);
         this.processUserDevices(res.data.devices);
@@ -170,7 +195,7 @@ Page({
         // 没有设备时显示提示信息
         this.setData({
           devices: [],
-          noDevicesMessage: '暂无可用设备，请联系带教老师分配设备'
+          noDevicesMessage: '暂无账号，请新增账号'
         });
       }
     }).catch(() => {
@@ -182,211 +207,31 @@ Page({
     });
   },
 
-  // 处理用户设备数据
+  // 处理用户设备数据（用于展示）
   processUserDevices(devices) {
-    const devicesWithSelection = devices.map(device => ({
-      ...device,
-      selectable: device.status === 'online' // 只有在线设备可以选择
-    }));
+    console.log('🔄 处理设备数据，数量:', devices.length);
     this.setData({
-      devices: devicesWithSelection,
+      devices: devices,
       noDevicesMessage: null // 有设备时清除提示信息
     });
   },
 
-  // 加载模拟设备数据
-  loadMockDevices() {
-    const mockDevices = [
-      {
-        _id: 'device_001',
-        accountName: 'xiaohongshu_user_001',
-        status: 'online',
-        influence: 'new',
-        onlineDuration: 24,
-        points: 150
-      },
-      {
-        _id: 'device_002',
-        accountName: 'xiaohongshu_user_002',
-        status: 'offline',
-        influence: 'old',
-        onlineDuration: 48,
-        points: 200
-      },
-      {
-        _id: 'device_003',
-        accountName: 'xiaohongshu_user_003',
-        status: 'protected',
-        influence: 'real_name',
-        onlineDuration: 72,
-        points: 300
-      }
-    ]
 
-    // 显示所有设备，但标记哪些是可选择的
-    const devicesWithSelection = mockDevices.map(device => ({
-      ...device,
-      selectable: device.status === 'online' // 只有在线设备可以选择
-    }));
 
-    this.setData({
-      devices: devicesWithSelection
-    })
-  },
 
-  // 加载用户列表（用于测试模式）
-  loadUsers() {
-    const token = app.getCurrentToken();
 
-    wx.request({
-      url: API_CONFIG.USERS_LIST,
-      method: 'GET',
-      header: token ? { 'Authorization': `Bearer ${token}` } : {},
-      success: (res) => {
-        if (res.data && res.data.success && res.data.users && res.data.users.length > 0) {
-          this.setData({
-            users: res.data.users,
-            selectedUser: res.data.users[0] // 默认选择第一个用户
-          });
-        } else {
-          // 使用模拟用户数据
-          this.loadMockUsers();
-        }
-      },
-      fail: () => {
-        // 网络失败时使用模拟数据
-        this.loadMockUsers();
-      }
+
+  // 跳转到账号管理页面并自动打开新增账号弹窗
+  goToDeviceList: function() {
+    wx.navigateTo({
+      url: '/pages/device-list/device-list?showAddModal=true'
     });
   },
 
-  // 加载模拟用户数据
-  loadMockUsers() {
-    const mockUsers = [
-      {
-        _id: '693d29b5cbc188007ecc5848',
-        username: 'boss001',
-        nickname: '管理员',
-        role: 'boss',
-        points: 1000
-      },
-      {
-        _id: '693d29b5cbc188007ecc5849',
-        username: 'mentor001',
-        nickname: '带教老师',
-        role: 'mentor',
-        points: 500
-      },
-      {
-        _id: '693d29b5cbc188007ecc5850',
-        username: 'parttime001',
-        nickname: '兼职用户',
-        role: 'part_time',
-        points: 100
-      }
-    ];
-
-    this.setData({
-      users: mockUsers,
-      selectedUser: mockUsers[0] // 默认选择第一个用户
-    });
-  },
-
-  // 选择设备
-  selectDevice(e) {
-    const device = e.currentTarget.dataset.device;
-    
-    console.log('📱 选择设备事件:', device);
-    console.log('📱 设备accountName:', device?.accountName);
-    console.log('📱 设备完整数据:', JSON.stringify(device, null, 2));
-
-    // 检查设备是否可选择
-    if (!device.selectable) {
-      wx.showToast({
-        title: '该设备当前不可用',
-        icon: 'none'
-      });
-      return;
-    }
-
-    this.setData({
-      selectedDevice: device,
-      noteAuthor: device.accountName // 自动设置昵称为设备账号名
-    });
-
-    console.log('📱 已选择设备:', device.accountName, '昵称设置为:', device.accountName);
-
-    wx.showToast({
-      title: `已选择设备: ${device.accountName}`,
-      icon: 'success'
-    });
-  },
-
-  // 切换测试模式
-  toggleTestMode(e) {
-    const testMode = e.detail.value;
-    this.setData({
-      testMode: testMode
-    });
-
-    if (testMode) {
-      wx.showToast({
-        title: '已启用测试模式',
-        icon: 'success'
-      });
-    } else {
-      wx.showToast({
-        title: '已关闭测试模式',
-        icon: 'none'
-      });
-    }
-  },
-
-  // 选择测试用户
-  selectUser(e) {
-    const user = e.currentTarget.dataset.user;
-    this.setData({
-      selectedUser: user
-    });
-
-    wx.showToast({
-      title: `已选择用户: ${user.username}`,
-      icon: 'success'
-    });
-  },
-
-  // 获取指定用户的token（测试模式使用）
-  getUserToken(userId) {
-    return new Promise((resolve, reject) => {
-      const token = app.getCurrentToken();
-
-      wx.request({
-        url: API_CONFIG.GENERATE_USER_TOKEN,
-        method: 'POST',
-        header: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        data: { userId },
-        success: (res) => {
-          if (res.data && res.data.success) {
-            resolve(res.data);
-          } else {
-            reject(new Error(res.data?.message || '获取用户token失败'));
-          }
-        },
-        fail: (err) => {
-          reject(err);
-        }
-      });
-    });
-  },
 
   // 选择任务类型
   selectType(e) {
     const type = e.currentTarget.dataset.type;
-    // 保存当前设备信息（如果已选择设备）
-    const currentDevice = this.data.selectedDevice;
 
     this.setData({
       selectedType: type,
@@ -395,15 +240,7 @@ Page({
       commentContent: '', // 清空评论内容
       customerPhone: '', // 清空客户电话
       customerWechat: '' // 清空客户微信
-      // 注意：不清空 noteAuthor，因为它应该来自设备选择
     });
-
-    // 如果已选择设备，重新设置昵称
-    if (currentDevice && currentDevice.accountName) {
-      this.setData({
-        noteAuthor: currentDevice.accountName
-      });
-    }
   },
 
   // 输入笔记链接
@@ -418,9 +255,9 @@ Page({
     const that = this;
     wx.showModal({
       title: '粘贴分享文本',
-      content: '请粘贴小红书分享的完整文本，系统将自动提取链接',
+      placeholderText: '请粘贴小红书分享的完整文本，系统将自动提取链接',
       editable: true,
-      placeholderText: '例如：玩ai聊天有哪些伤身体的行为 http://xhslink.com/o/2rV8kDR9MxK 复制后打开【小红书】查看笔记！',
+      // placeholderText: '例如：玩ai聊天有哪些伤身体的行为 http://xhslink.com/o/2rV8kDR9MxK 复制后打开【小红书】查看笔记！',
       success: function(res) {
         if (res.confirm && res.content) {
           const extractedUrl = that.extractXiaohongshuUrl(res.content);
@@ -471,13 +308,6 @@ Page({
     return null;
   },
 
-  // 输入笔记作者昵称
-  onNoteAuthorInput(e) {
-    this.setData({
-      noteAuthor: e.detail.value
-    });
-  },
-
   // 输入笔记标题
   onNoteTitleInput(e) {
     this.setData({
@@ -508,14 +338,6 @@ Page({
 
   // 选择图片（支持多选）
   chooseImage() {
-    if (!this.data.selectedDevice) {
-      wx.showToast({
-        title: '请先选择操作设备',
-        icon: 'none'
-      });
-      return;
-    }
-
     if (!this.data.selectedType) {
       wx.showToast({
         title: '请先选择任务类型',
@@ -589,7 +411,6 @@ Page({
       displayList: displayList
     });
   },
-
   // 上传图片到服务器（使用wx.uploadFile避免base64大小限制）
   uploadImage(filePath) {
     this.setData({ uploading: true });
@@ -694,31 +515,49 @@ Page({
     });
   },
 
-  // 异步MD5计算（分块处理，避免UI卡顿）
+  // 异步MD5计算（优化版：更高效的分块处理和更好的哈希算法）
   calculateMD5Async(dataArray, dataLength) {
     return new Promise((resolve) => {
-      // 使用改进的哈希算法，包含文件大小和内容特征
-      let hash = 0;
+      // 使用更高效的哈希算法：FNV-1a变体
+      let hash = 2166136261; // FNV offset basis
+      const prime = 16777619; // FNV prime
 
       // 包含文件大小作为种子
-      hash = ((hash << 5) - hash) + dataLength;
-      hash = hash & hash;
+      hash ^= dataLength;
+      hash *= prime;
 
-      // 分块处理文件内容，避免一次性处理大量数据
-      const chunkSize = 1024; // 每块1KB
-      const totalChunks = Math.min(10, Math.ceil(dataLength / chunkSize)); // 最多处理10块
+      // 动态分块大小：根据文件大小调整
+      let chunkSize;
+      if (dataLength <= 1024 * 1024) { // 1MB以内
+        chunkSize = 64 * 1024; // 64KB块
+      } else if (dataLength <= 10 * 1024 * 1024) { // 10MB以内
+        chunkSize = 256 * 1024; // 256KB块
+      } else {
+        chunkSize = 512 * 1024; // 512KB块
+      }
+
+      // 采样处理：对于大文件，只处理部分块以提高速度
+      const maxChunks = dataLength <= 5 * 1024 * 1024 ? 20 : 10; // 小文件处理更多块
+      const totalChunks = Math.min(maxChunks, Math.ceil(dataLength / chunkSize));
       let processedChunks = 0;
+
+      // 均匀采样：选择分布在文件各处的块
+      const chunkIndices = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const index = Math.floor((i * dataLength) / (totalChunks * chunkSize));
+        chunkIndices.push(index);
+      }
 
       const processChunk = (chunkIndex) => {
         const start = chunkIndex * chunkSize;
         const end = Math.min(start + chunkSize, dataLength);
         const chunk = dataArray.slice(start, end);
 
-        // 处理当前块
+        // 使用FNV-1a哈希算法
         for (let i = 0; i < chunk.length; i++) {
-          const char = chunk[i];
-          hash = ((hash << 5) - hash) + char;
-          hash = hash & hash; // 转换为32位整数
+          hash ^= chunk[i];
+          hash *= prime;
+          hash = hash >>> 0; // 确保32位无符号整数
         }
 
         processedChunks++;
@@ -726,19 +565,32 @@ Page({
         // 如果还有更多块，继续处理
         if (processedChunks < totalChunks) {
           // 使用setTimeout让出主线程，避免UI卡顿
-          setTimeout(() => processChunk(processedChunks), 0);
+          setTimeout(() => processChunk(chunkIndices[processedChunks]), 0);
         } else {
           // 所有块处理完成
-          // 转换为16进制字符串，确保32位
-          const hexHash = Math.abs(hash).toString(16).padStart(8, '0');
-          // 添加文件大小后缀确保唯一性
-          const finalMd5 = hexHash + '_' + dataLength.toString(16).padStart(6, '0');
-          resolve(finalMd5);
+          // 添加时间戳和随机因子确保唯一性
+          const timestamp = Date.now() % 1000000;
+          const randomFactor = Math.floor(Math.random() * 1000);
+
+          // 组合最终哈希
+          const finalHash = (hash >>> 0).toString(16).padStart(8, '0') +
+                           timestamp.toString(16).padStart(6, '0') +
+                           randomFactor.toString(16).padStart(3, '0');
+
+          resolve(finalHash);
         }
       };
 
       // 开始处理第一块
-      processChunk(0);
+      if (chunkIndices.length > 0) {
+        processChunk(chunkIndices[0]);
+      } else {
+        // 处理空文件的情况
+        const timestamp = Date.now() % 1000000;
+        const randomFactor = Math.floor(Math.random() * 1000);
+        const finalHash = '00000000' + timestamp.toString(16).padStart(6, '0') + randomFactor.toString(16).padStart(3, '0');
+        resolve(finalHash);
+      }
     });
   },
 
@@ -760,16 +612,10 @@ Page({
     this.updateDisplayList();
   },
 
-  // 上传所有图片到服务器（并行上传，带进度反馈）
+  // 上传所有图片到服务器（优化版：批量上传 + 并行MD5计算）
   uploadAllImages() {
-    // 所有类型图片都可选
-    // if (this.data.selectedType && this.data.selectedType.value === 'comment' && this.data.imageUrls.length === 0) {
-    //   wx.showToast({ title: '评论类型必须上传评论截图作为证据', icon: 'none' });
-    //   return Promise.reject(new Error('评论类型必须有图片'));
-    // }
-
     if (this.data.imageUrls.length === 0) {
-      // 没有图片，直接返回空数组（对于可选图片的情况）
+      // 没有图片，直接返回空数组
       return Promise.resolve([]);
     }
 
@@ -780,24 +626,36 @@ Page({
     });
 
     const totalImages = this.data.imageUrls.length;
-    let completedUploads = 0;
-    const uploadPromises = [];
-
-    // 优先使用从profile页面切换的测试用户token
     const testUserToken = wx.getStorageSync('testUserToken');
     const token = testUserToken || wx.getStorageSync('token');
 
-    // 并行上传每张图片到单图接口（保持兼容性）
-    for (let i = 0; i < this.data.imageUrls.length; i++) {
-      const filePath = this.data.imageUrls[i];
+    // 优先使用批量上传接口（如果图片数量 >= 2）
+    if (totalImages >= 2) {
+      return this.uploadBatchImages(token);
+    } else {
+      // 单张图片使用原有逻辑
+      return this.uploadSingleImage(token);
+    }
+  },
 
-      uploadPromises.push(new Promise((resolve) => {
-        this.setData({
-          uploadStatus: `正在上传第 ${i + 1}/${totalImages} 张图片...`
-        });
+  // 批量上传多张图片（优化版：并发控制 + 并行MD5计算 + 重试机制）
+  uploadBatchImages(token) {
+    const totalImages = this.data.imageUrls.length;
+    const CONCURRENT_UPLOADS = 3; // 最多3个并发上传
+    const MAX_RETRIES = 2; // 最大重试次数
+    let completedUploads = 0;
+    let failedUploads = 0;
+    const uploadPromises = [];
 
+    this.setData({
+      uploadStatus: '正在批量上传图片...'
+    });
+
+    // 创建上传任务队列（带重试机制）
+    const uploadWithRetry = (filePath, index, retryCount = 0) => {
+      return new Promise((resolve) => {
         wx.uploadFile({
-          url: API_CONFIG.UPLOAD_IMAGE, // 使用本地开发地址
+          url: API_CONFIG.UPLOAD_IMAGE,
           filePath: filePath,
           name: 'file',
           header: {
@@ -807,100 +665,251 @@ Page({
             try {
               const data = JSON.parse(res.data);
               if (data.success) {
-                // 更新进度
                 completedUploads++;
-                const progress = Math.round((completedUploads / totalImages) * 50); // 上传占50%进度
+                const progress = Math.round((completedUploads / totalImages) * 50);
                 this.setData({
                   uploadProgress: progress,
                   uploadStatus: `上传完成 ${completedUploads}/${totalImages}，正在处理...`
                 });
 
-                // 异步计算MD5，避免UI卡顿
-                this.setData({ processingMd5: true });
-                wx.getFileSystemManager().readFile({
+                resolve({
+                  url: data.data.url,
                   filePath: filePath,
-                  success: (fileRes) => {
-                    this.calculateMD5(fileRes.data).then(md5 => {
-                      // MD5计算完成，更新最终进度
-                      const finalProgress = Math.round(((completedUploads) / totalImages) * 100);
-                      this.setData({
-                        uploadProgress: finalProgress,
-                        processingMd5: false
-                      });
-
-                      resolve({
-                        url: data.data.url,
-                        md5: md5,
-                        index: i
-                      });
-                    }).catch(() => {
-                      resolve({
-                        url: data.data.url,
-                        md5: `error_${i}`,
-                        index: i
-                      });
-                    });
-                  },
-                  fail: () => {
-                    resolve({
-                      url: data.data.url,
-                      md5: `read_error_${i}`,
-                      index: i
-                    });
-                  }
+                  index: index,
+                  success: true
                 });
               } else {
-                console.error(`第${i+1}张图片上传失败:`, data.message);
-                completedUploads++;
-                resolve(null);
+                console.error(`第${index + 1}张图片上传失败 (尝试${retryCount + 1}):`, data.message);
+                if (retryCount < MAX_RETRIES) {
+                  // 重试
+                  console.log(`🔄 第${index + 1}张图片重试上传 (第${retryCount + 2}次)`);
+                  setTimeout(() => {
+                    uploadWithRetry(filePath, index, retryCount + 1).then(resolve);
+                  }, 1000 * (retryCount + 1)); // 递增延迟
+                } else {
+                  failedUploads++;
+                  completedUploads++;
+                  resolve({
+                    url: null,
+                    filePath: filePath,
+                    index: index,
+                    success: false,
+                    error: data.message
+                  });
+                }
               }
             } catch (e) {
-              console.error(`解析第${i+1}张图片响应失败:`, e);
-              completedUploads++;
-              resolve(null);
+              console.error(`解析第${index + 1}张图片响应失败:`, e);
+              if (retryCount < MAX_RETRIES) {
+                setTimeout(() => {
+                  uploadWithRetry(filePath, index, retryCount + 1).then(resolve);
+                }, 1000 * (retryCount + 1));
+              } else {
+                failedUploads++;
+                completedUploads++;
+                resolve({
+                  url: null,
+                  filePath: filePath,
+                  index: index,
+                  success: false,
+                  error: '解析响应失败'
+                });
+              }
             }
           },
           fail: (err) => {
-            console.error(`上传第${i+1}张图片失败:`, err);
-            completedUploads++;
-            resolve(null);
+            console.error(`上传第${index + 1}张图片失败 (尝试${retryCount + 1}):`, err);
+            if (retryCount < MAX_RETRIES) {
+              setTimeout(() => {
+                uploadWithRetry(filePath, index, retryCount + 1).then(resolve);
+              }, 1000 * (retryCount + 1));
+            } else {
+              failedUploads++;
+              completedUploads++;
+              resolve({
+                url: null,
+                filePath: filePath,
+                index: index,
+                success: false,
+                error: err.errMsg || '网络错误'
+              });
+            }
           }
         });
+      });
+    };
+
+    // 创建上传任务队列
+    for (let i = 0; i < totalImages; i++) {
+      const filePath = this.data.imageUrls[i];
+
+      uploadPromises.push(new Promise((resolve) => {
+        // 延迟启动，避免同时发起太多请求
+        setTimeout(() => {
+          uploadWithRetry(filePath, i).then(resolve);
+        }, (i % CONCURRENT_UPLOADS) * 200); // 错开启动时间，避免瞬间并发过多
       }));
     }
 
-    // 返回所有上传结果的 Promise
     return Promise.all(uploadPromises).then(results => {
       // 过滤掉失败的上传
-      const successfulUploads = results.filter(result => result !== null);
-
-      this.setData({
-        uploadProgress: 100,
-        uploadStatus: '上传完成'
-      });
+      const successfulUploads = results.filter(result => result.success);
 
       if (successfulUploads.length === 0) {
         wx.showToast({ title: '所有图片上传失败', icon: 'none' });
-        this.setData({ uploading: false });
         return Promise.reject(new Error('所有图片上传失败'));
       }
 
-      if (successfulUploads.length < results.length) {
+      // 显示上传结果统计
+      if (failedUploads > 0) {
         wx.showToast({
-          title: `上传完成 ${successfulUploads.length}/${results.length} 张图片`,
-          icon: 'none'
-        });
-      } else {
-        wx.showToast({
-          title: `成功上传 ${successfulUploads.length} 张图片`,
-          icon: 'success',
-          duration: 1500
+          title: `上传完成 ${successfulUploads.length}/${totalImages} 张图片 (${failedUploads}张失败)`,
+          icon: 'none',
+          duration: 2000
         });
       }
 
-      return successfulUploads;
+      this.setData({
+        uploadProgress: 50,
+        uploadStatus: '图片上传完成，正在计算MD5...'
+      });
+
+      // 并行计算所有成功的图片的MD5
+      const md5Promises = successfulUploads.map((uploadResult) => {
+        return new Promise((resolveMd5) => {
+          wx.getFileSystemManager().readFile({
+            filePath: uploadResult.filePath,
+            success: (fileRes) => {
+              this.calculateMD5(fileRes.data).then(md5 => {
+                resolveMd5({
+                  url: uploadResult.url,
+                  md5: md5,
+                  index: uploadResult.index
+                });
+              }).catch((error) => {
+                console.warn(`MD5计算失败 ${uploadResult.index}:`, error);
+                resolveMd5({
+                  url: uploadResult.url,
+                  md5: `md5_error_${uploadResult.index}`,
+                  index: uploadResult.index
+                });
+              });
+            },
+            fail: (error) => {
+              console.warn(`读取文件失败 ${uploadResult.index}:`, error);
+              resolveMd5({
+                url: uploadResult.url,
+                md5: `read_error_${uploadResult.index}`,
+                index: uploadResult.index
+              });
+            }
+          });
+        });
+      });
+
+      return Promise.all(md5Promises).then(md5Results => {
+        this.setData({
+          uploadProgress: 100,
+          uploadStatus: '上传完成'
+        });
+
+        // 最终成功提示
+        const finalSuccessful = md5Results.filter(r => r.url && r.md5 && !r.md5.startsWith('error_')).length;
+        if (finalSuccessful === totalImages) {
+          wx.showToast({
+            title: `成功上传 ${finalSuccessful} 张图片`,
+            icon: 'success',
+            duration: 1500
+          });
+        } else {
+          wx.showToast({
+            title: `上传完成 ${finalSuccessful}/${totalImages} 张图片`,
+            icon: 'none',
+            duration: 2000
+          });
+        }
+
+        return md5Results;
+      });
+    });
+  },
+
+  // 单张图片上传（兼容原有逻辑）
+  uploadSingleImage(token) {
+    const filePath = this.data.imageUrls[0];
+
+    this.setData({
+      uploadStatus: '正在上传图片...'
+    });
+
+    return new Promise((resolve, reject) => {
+      wx.uploadFile({
+        url: API_CONFIG.UPLOAD_IMAGE,
+        filePath: filePath,
+        name: 'file',
+        header: {
+          'Authorization': `Bearer ${token}`
+        },
+        success: (res) => {
+          try {
+            const data = JSON.parse(res.data);
+            if (data.success) {
+              this.setData({
+                uploadProgress: 50,
+                uploadStatus: '图片上传完成，正在计算MD5...'
+              });
+
+              wx.getFileSystemManager().readFile({
+                filePath: filePath,
+                success: (fileRes) => {
+                  this.calculateMD5(fileRes.data).then(md5 => {
+                    this.setData({
+                      uploadProgress: 100,
+                      uploadStatus: '上传完成'
+                    });
+
+                    wx.showToast({
+                      title: '成功上传图片',
+                      icon: 'success',
+                      duration: 1500
+                    });
+
+                    resolve([{
+                      url: data.data.url,
+                      md5: md5,
+                      index: 0
+                    }]);
+                  }).catch(() => {
+                    resolve([{
+                      url: data.data.url,
+                      md5: 'error_0',
+                      index: 0
+                    }]);
+                  });
+                },
+                fail: () => {
+                  resolve([{
+                    url: data.data.url,
+                    md5: 'read_error_0',
+                    index: 0
+                  }]);
+                }
+              });
+            } else {
+              wx.showToast({ title: data.message || '上传失败', icon: 'none' });
+              reject(new Error(data.message || '上传失败'));
+            }
+          } catch (e) {
+            wx.showToast({ title: '解析响应失败', icon: 'none' });
+            reject(e);
+          }
+        },
+        fail: (err) => {
+          wx.showToast({ title: '网络错误', icon: 'none' });
+          reject(err);
+        }
+      });
     }).finally(() => {
-      // 延迟清除状态，让用户看到完成状态
       setTimeout(() => {
         this.setData({
           uploading: false,
@@ -914,12 +923,9 @@ Page({
 
   // 提交任务（使用批量提交接口）
   async submitTask() {
-    const { selectedDevice, selectedType, imageUrls, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = this.data;
+    const { selectedType, imageUrls, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = this.data;
 
-    if (!selectedDevice) {
-      wx.showToast({ title: '请选择操作设备', icon: 'none' });
-      return;
-    }
+    // 设备选择已移除，审核时会自动对比账号昵称
 
     if (!selectedType) {
       wx.showToast({ title: '请选择任务类型', icon: 'none' });
@@ -932,14 +938,10 @@ Page({
     //   return;
     // }
 
-    // 验证笔记信息（笔记必填，评论必填链接和内容，客资必填电话或微信）
+    // 验证笔记信息（笔记必填链接和标题，评论必填链接和内容，客资必填电话或微信）
     if (selectedType.value === 'note') {
       if (!noteUrl || noteUrl.trim() === '') {
         wx.showToast({ title: '笔记类型必须填写笔记链接', icon: 'none' });
-        return;
-      }
-      if (!noteAuthor || noteAuthor.trim() === '') {
-        wx.showToast({ title: '笔记类型必须填写作者昵称', icon: 'none' });
         return;
       }
       if (!noteTitle || noteTitle.trim() === '') {
@@ -951,10 +953,7 @@ Page({
         wx.showToast({ title: '评论类型必须填写笔记链接', icon: 'none' });
         return;
       }
-      if (!noteAuthor || noteAuthor.trim() === '') {
-        wx.showToast({ title: '评论类型必须填写作者昵称', icon: 'none' });
-        return;
-      }
+      // 评论类型不再需要手动填写作者昵称，系统会自动比对设备账号
       if (!commentContent || commentContent.trim() === '') {
         wx.showToast({ title: '评论类型必须填写评论内容', icon: 'none' });
         return;
@@ -972,7 +971,7 @@ Page({
 
     // 如果填写了链接，验证格式
     if (noteUrl && noteUrl.trim() !== '') {
-      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a)\/[a-zA-Z0-9]+/i;
+      const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/[a-zA-Z0-9]+(?:\/[a-zA-Z0-9]+)+/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
         wx.showToast({ title: '笔记链接格式不正确', icon: 'none' });
         return;
@@ -996,14 +995,16 @@ Page({
       const urls = uploadResults.map(result => result.url);
       const md5s = uploadResults.map(result => result.md5);
 
-      // 准备提交数据
+      // 获取用户的设备昵称数组，作为noteAuthor传递
+      const deviceNicknames = this.data.devices.map(device => device.accountName);
+
+      // 准备提交数据（noteAuthor传递设备昵称数组，审核时遍历比对）
       const submitData = {
-        deviceId: selectedDevice._id,
         imageType: selectedType.value,
         imageUrls: urls,
         imageMd5s: md5s,
         noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
-        noteAuthor: noteAuthor && noteAuthor.trim() ? noteAuthor.trim() : null,
+        noteAuthor: deviceNicknames, // 传递设备昵称数组
         noteTitle: noteTitle && noteTitle.trim() ? noteTitle.trim() : null,
         commentContent: commentContent && commentContent.trim() ? commentContent.trim() : null,
         customerPhone: customerPhone && customerPhone.trim() ? customerPhone.trim() : null,
@@ -1013,7 +1014,7 @@ Page({
       // 添加调试日志
       console.log('📤 发送数据:', submitData);
 
-      // 使用新的批量提交接口
+      // 使用新的批量提交接口（增加超时时间）
       wx.request({
         url: API_CONFIG.TASKS_BATCH_SUBMIT,
         method: 'POST',
@@ -1022,6 +1023,7 @@ Page({
           'Content-Type': 'application/json'
         },
         data: submitData,
+        timeout: 60000, // 增加超时时间到60秒（评论验证需要时间）
         success: (res) => {
           console.log('批量提交响应:', res); // 添加调试日志
           if (res.data && res.data.success) {
@@ -1031,11 +1033,10 @@ Page({
               duration: 2000
             });
 
-            // 清空状态并返回首页
+            // 清空状态但保留任务类型选择，返回首页
             setTimeout(() => {
               this.setData({
-                selectedDevice: null,
-                selectedType: null,
+                // selectedType: null, // 保留任务类型选择
                 imageUrls: [],
                 imageMd5s: [],
                 noteUrl: '', // 清空笔记链接
