@@ -1,0 +1,46 @@
+<!--pages/complaint/complaint.wxml-->
+<view class="container">
+  <!-- 页面标题 -->
+  <view class="page-header">
+    <text class="page-title">投诉建议</text>
+    <text class="page-desc">请详细描述您遇到的问题或建议</text>
+  </view>
+
+  <!-- 投诉内容输入 -->
+  <view class="content-section">
+    <textarea
+      class="complaint-input"
+      placeholder="请输入投诉内容（至少10个字符）"
+      value="{{complaintContent}}"
+      bindinput="onContentInput"
+      maxlength="500"
+      auto-focus
+      show-count
+      cursor-spacing="20"
+    ></textarea>
+  </view>
+
+  <!-- 提示信息 -->
+  <view class="tips-section">
+    <view class="tip-item">
+      <text class="tip-icon">💡</text>
+      <text class="tip-text">投诉内容将发送给管理员处理</text>
+    </view>
+    <view class="tip-item">
+      <text class="tip-icon">⏰</text>
+      <text class="tip-text">我们会在1-2个工作日内回复您</text>
+    </view>
+  </view>
+
+  <!-- 提交按钮 -->
+  <view class="action-section">
+    <button
+      class="submit-btn"
+      bindtap="submitComplaint"
+      loading="{{submitting}}"
+      disabled="{{complaintContent.trim().length < 10}}"
+    >
+      提交投诉
+    </button>
+  </view>
+</view>

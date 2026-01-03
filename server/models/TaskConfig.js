@@ -32,9 +32,23 @@ const taskConfigSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  daily_reward_points: {
+    type: Number,
+    default: 30
+  },
+  continuous_check_days: {
+    type: Number,
+    default: 7,
+    min: 1,
+    max: 365
+  },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
   },
   updated_at: {
     type: Date,

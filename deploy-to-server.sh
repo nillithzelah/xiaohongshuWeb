@@ -5,7 +5,7 @@
 echo "🚀 开始部署小红书Web项目到服务器..."
 
 # 服务器配置
-SERVER="root@112.74.163.102"
+SERVER="wubug"
 REMOTE_PATH="/var/www/xiaohongshu-web"
 SERVER_DB="xiaohongshu_audit"
 

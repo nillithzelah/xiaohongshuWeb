@@ -64,15 +64,12 @@ class XiaohongshuService {
         };
       }
 
-      // 5. AI审核逻辑
-      const aiReviewResult = await this.performAIReview(noteUrl, noteStatus);
-
+      // 5. 基础审核通过
       return {
         valid: true,
         noteId,
         noteStatus,
-        aiReview: aiReviewResult,
-        reason: '验证通过'
+        reason: '链接验证通过'
       };
 
     } catch (error) {
@@ -88,11 +85,11 @@ class XiaohongshuService {
    * 执行评论AI审核（增强版）
    * @param {string} noteUrl - 小红书笔记链接
    * @param {string} commentContent - 用户提交的评论内容
-   * @param {string} commentAuthor - 评论者昵称
+   * @param {string[]} authorNicknames - 评论者昵称数组（支持多个账号比对）
    * @param {string} cookieString - 小红书登录Cookie字符串（可选）
    * @returns {Promise<Object>} 审核结果
    */
-  async performCommentAIReview(noteUrl, commentContent, commentAuthor, cookieString = null) {
+  async performCommentAIReview(noteUrl, commentContent, authorNicknames, cookieString = null) {
     try {
       console.log('🤖 开始评论AI审核...');
 
@@ -109,53 +106,48 @@ class XiaohongshuService {
         return {
           passed: false,
           confidence: 0.1,
-          reasons: ['笔记链接无效: ' + linkValidation.reason],
+          reasons: ['链接不对'],
           riskLevel: 'high'
         };
       }
 
-      // 2. 评论内容基本验证
-      if (!commentContent || commentContent.trim().length < 5) {
-        reviewResult.passed = false;
-        reviewResult.confidence = 0.2;
-        reviewResult.reasons.push('评论内容过短或为空');
-        reviewResult.riskLevel = 'high';
-      } else if (commentContent.length < 20) {
-        reviewResult.confidence += 0.02;
-        reviewResult.reasons.push('评论内容偏短');
-      } else if (commentContent.length > 300) {
-        reviewResult.confidence += 0.05;
-        reviewResult.reasons.push('评论内容详细');
-      } else {
-        reviewResult.confidence += 0.05;
-        reviewResult.reasons.push('评论内容长度适中');
-      }
 
-      // 3. **新增**: 真实评论验证（通过浏览器自动化）
-      console.log('🔍 开始验证评论是否真实存在...');
+      // 3. **新增**: 真实评论验证（通过浏览器自动化）- 要求内容完全一致才可以通过
+      console.log('🔍 开始验证评论是否真实存在（要求内容完全一致）...');
       const commentVerification = await this.commentVerifier.verifyCommentExists(
         noteUrl,
         commentContent,
-        commentAuthor,
+        authorNicknames,
         cookieString // 传递Cookie字符串用于登录状态
       );
 
       if (commentVerification.error) {
-        // 验证服务出错，不直接影响审核结果，但降低信心度
-        reviewResult.confidence *= 0.8;
-        reviewResult.reasons.push('评论验证服务暂时不可用，使用基础审核');
-      } else if (commentVerification.exists) {
-        reviewResult.confidence += 0.15;
-        reviewResult.reasons.push('评论验证通过，确认真实存在');
-      } else {
+        // 验证服务出错，由于要求内容完全一致，服务不可用时必须拒绝审核
         reviewResult.passed = false;
-        reviewResult.confidence = Math.min(reviewResult.confidence, 0.3);
-        reviewResult.reasons.push(`评论验证失败: ${commentVerification.reason}`);
+        reviewResult.confidence = 0.1;
+        reviewResult.reasons.push('当前帖子评论区无法检测到你的评论（请用其他号观察）');
+        reviewResult.riskLevel = 'high';
+      } else if (commentVerification.exists) {
+        // 评论验证通过，确认真实存在且内容完全一致
+        reviewResult.confidence += 0.2;
+        reviewResult.reasons.push('评论验证通过，确认真实存在且内容完全一致');
+      } else {
+        // 评论验证失败，由于要求内容完全一致，必须拒绝审核
+        reviewResult.passed = false;
+        reviewResult.confidence = 0.1;
+        // 根据验证失败的具体原因，设置标准化的审核失败原因
+        if (commentVerification.reason && commentVerification.reason.includes('当前帖子评论区无法检测到你的评论（请用其他号观察）')) {
+          reviewResult.reasons.push('当前帖子评论区无法检测到你的评论（请用其他号观察）');
+        } else if (commentVerification.reason && commentVerification.reason.includes('当前评论区无法匹配你的昵称')) {
+          reviewResult.reasons.push('当前评论区无法匹配你的昵称');
+        } else {
+          reviewResult.reasons.push('当前帖子评论区无法检测到你的评论（请用其他号观察）');
+        }
         reviewResult.riskLevel = 'high';
       }
 
       // 4. 其他质量检查
-      const qualityChecks = this.performQualityChecks(commentContent, commentAuthor);
+      const qualityChecks = this.performQualityChecks(commentContent, authorNicknames);
       reviewResult.confidence += qualityChecks.confidenceDelta;
       reviewResult.reasons.push(...qualityChecks.reasons);
 
@@ -198,10 +190,10 @@ class XiaohongshuService {
   /**
    * 质量检查
    * @param {string} commentContent - 评论内容
-   * @param {string} commentAuthor - 评论者昵称
+   * @param {string[]} authorNicknames - 评论者昵称数组
    * @returns {Object} 检查结果
    */
-  performQualityChecks(commentContent, commentAuthor) {
+  performQualityChecks(commentContent, authorNicknames) {
     let confidenceDelta = 0;
     const reasons = [];
 
@@ -211,25 +203,30 @@ class XiaohongshuService {
       reasons.push('评论长度适中');
     }
 
-    // 关键词检查
-    const positiveKeywords = ['好', '不错', '喜欢', '支持', '棒', '赞', '推荐', '优秀'];
-    const hasPositiveWords = positiveKeywords.some(word => commentContent.includes(word));
-    
-    if (hasPositiveWords) {
-      confidenceDelta += 0.05;
-      reasons.push('包含正面评价');
-    }
+    // 昵称数组合理性检查
+    if (authorNicknames && Array.isArray(authorNicknames) && authorNicknames.length > 0) {
+      const validNicknames = authorNicknames.filter(name =>
+        name && typeof name === 'string' && name.length >= 2 && name.length <= 20
+      );
 
-    // 昵称合理性检查
-    if (commentAuthor && commentAuthor.length >= 2 && commentAuthor.length <= 20) {
-      const validPattern = /^[\u4e00-\u9fa5a-zA-Z0-9_\-]+$/;
-      if (validPattern.test(commentAuthor)) {
-        confidenceDelta += 0.02;
-        reasons.push('昵称格式正常');
+      if (validNicknames.length > 0) {
+        const validPattern = /^[\u4e00-\u9fa5a-zA-Z0-9_\-]+$/;
+        const hasValidFormat = validNicknames.some(name => validPattern.test(name));
+
+        if (hasValidFormat) {
+          confidenceDelta += 0.02;
+          reasons.push(`绑定了${validNicknames.length}个有效昵称`);
+        } else {
+          confidenceDelta -= 0.05;
+          reasons.push('昵称格式异常');
+        }
       } else {
-        confidenceDelta -= 0.05;
-        reasons.push('昵称格式异常');
+        confidenceDelta -= 0.1;
+        reasons.push('未绑定有效昵称');
       }
+    } else {
+      confidenceDelta -= 0.1;
+      reasons.push('未提供昵称信息');
     }
 
     // 检查重复字符
@@ -255,7 +252,10 @@ class XiaohongshuService {
     // 3. https://xhslink.com/explore/xxxxx
     // 4. https://xhslink.com/o/xxxxx (新的短链接格式)
     // 5. https://xhslink.com/a/xxxxx (文章链接格式)
-    const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a)\/[a-zA-Z0-9]+/;
+    // 6. https://xhslink.com/m/xxxxx (移动端短链接格式)
+    // 7. https://www.xiaohongshu.com/discovery/item/xxxxx (发现页链接格式)
+    // 支持查询参数（如 ?xsec_token=...&xsec_source=...）
+    const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/(explore|o|a|m|discovery\/item)\/[a-zA-Z0-9]+(\?.*)?$/;
     return xiaohongshuUrlPattern.test(url);
   }
 
@@ -263,8 +263,8 @@ class XiaohongshuService {
    * 从URL中提取笔记ID
    */
   extractNoteId(url) {
-    // 支持多种路径格式：/explore/xxxxx, /o/xxxxx, /a/xxxxx
-    const match = url.match(/\/(explore|o|a)\/([a-zA-Z0-9]+)/);
+    // 支持多种路径格式：/explore/xxxxx, /o/xxxxx, /a/xxxxx, /m/xxxxx, /discovery/item/xxxxx
+    const match = url.match(/\/(explore|o|a|m|discovery\/item)\/([a-zA-Z0-9]+)/);
     return match ? match[2] : null;
   }
 
@@ -273,8 +273,14 @@ class XiaohongshuService {
    */
   async checkNotePage(url) {
     try {
+      // 构建请求头，如果有cookie则添加
+      const requestHeaders = { ...this.headers };
+      if (process.env.XIAOHONGSHU_COOKIE) {
+        requestHeaders.Cookie = process.env.XIAOHONGSHU_COOKIE;
+      }
+
       const response = await axios.get(url, {
-        headers: this.headers,
+        headers: requestHeaders,
         timeout: 10000,
         maxRedirects: 5
       });
@@ -327,14 +333,21 @@ class XiaohongshuService {
     try {
       console.log('📄 开始解析笔记内容:', url);
 
+      // 构建请求头，如果有cookie则添加
+      const requestHeaders = {
+        ...this.headers,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+      };
+
+      if (process.env.XIAOHONGSHU_COOKIE) {
+        requestHeaders.Cookie = process.env.XIAOHONGSHU_COOKIE;
+      }
+
       const response = await axios.get(url, {
-        headers: {
-          ...this.headers,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        },
+        headers: requestHeaders,
         timeout: 20000,
         maxRedirects: 5
       });
@@ -378,9 +391,14 @@ class XiaohongshuService {
         }
 
         if (titleParts.length >= 2) {
-          parsedData.title = titleParts[0].trim();
-          parsedData.author = titleParts[titleParts.length - 1].trim();
-        } else if (titleParts.length === 1) {
+  parsedData.title = titleParts[0].trim();
+  let author = titleParts[titleParts.length - 1].trim();
+  // 删除最后的"关注"两个字
+  if (author.endsWith('关注')) {
+    author = author.slice(0, -2).trim();
+  }
+  parsedData.author = author;
+} else if (titleParts.length === 1) {
           // 如果只有一个部分，可能是标题
           parsedData.title = titleParts[0].trim();
         }
@@ -511,12 +529,17 @@ class XiaohongshuService {
         }
       }
 
+      // 【新增】关键词检查 - 在返回结果前进行
+      const keywordCheck = this.checkContentKeywords($, pageTitle);
+      parsedData.keywordCheck = keywordCheck;
+
       console.log('📄 解析结果:', {
         title: parsedData.title,
         author: parsedData.author,
         hasTitle: !!parsedData.title,
         hasAuthor: !!parsedData.author,
-        pageTitle: pageTitle
+        pageTitle: pageTitle,
+        keywordCheck: keywordCheck
       });
 
       return parsedData;
@@ -554,68 +577,6 @@ class XiaohongshuService {
     }
   }
 
-  /**
-   * 执行AI审核
-   */
-  async performAIReview(noteUrl, noteStatus) {
-    try {
-      console.log('🤖 开始AI审核...');
-
-      // AI审核逻辑
-      const reviewResult = {
-        passed: true,
-        confidence: 0.95,
-        reasons: [],
-        riskLevel: 'low' // low, medium, high
-      };
-
-      // 1. 检查链接参数完整性
-      if (noteUrl.includes('xsec_token') && noteUrl.includes('note_flow_source')) {
-        reviewResult.reasons.push('链接参数完整，来源可信');
-        reviewResult.confidence += 0.1;
-      }
-
-      // 2. 检查笔记状态
-      if (noteStatus.status === 'public') {
-        reviewResult.reasons.push('笔记状态正常，为公开笔记');
-      }
-
-      // 3. 检查链接格式规范
-      if (this.isValidXiaohongshuUrl(noteUrl)) {
-        reviewResult.reasons.push('链接格式规范');
-      }
-
-      // 4. 风险评估
-      // 这里可以添加更多AI审核逻辑，比如：
-      // - 检查是否为近期发布的笔记
-      // - 检查用户行为模式
-      // - 检查设备信息一致性等
-
-      // 决定是否通过
-      reviewResult.passed = reviewResult.confidence >= 0.8;
-
-      if (reviewResult.passed) {
-        reviewResult.reasons.push('AI审核通过，建议自动批准');
-      } else {
-        reviewResult.reasons.push('AI审核未通过，需要人工审核');
-        reviewResult.riskLevel = 'medium';
-      }
-
-      console.log('🤖 AI审核完成:', reviewResult);
-
-      return reviewResult;
-
-    } catch (error) {
-      console.error('AI审核失败:', error);
-      return {
-        passed: false,
-        confidence: 0,
-        reasons: ['AI审核过程出错'],
-        riskLevel: 'high',
-        error: error.message
-      };
-    }
-  }
 
   /**
    * 获取评论验证服务状态
@@ -631,6 +592,158 @@ class XiaohongshuService {
     if (this.commentVerifier) {
       await this.commentVerifier.close();
     }
+  }
+
+  /**
+   * 增强版关键词检查算法
+   * @param {Object} $ - cheerio实例
+   * @param {string} pageTitle - 页面标题
+   * @returns {Object} 关键词检查结果
+   */
+  checkContentKeywords($, pageTitle) {
+    // 定义关键词配置，包含权重和变体
+    const keywordConfigs = [
+      {
+        keywords: ['减肥被骗', '减肥被骗经历', '减肥受骗', '减肥诈骗'],
+        weight: 1.0,
+        category: '减肥诈骗'
+      },
+      {
+        keywords: ['护肤被骗', '护肤受骗', '护肤诈骗', '护肤被骗经历'],
+        weight: 1.0,
+        category: '护肤诈骗'
+      },
+      {
+        keywords: ['祛斑被骗', '祛斑受骗', '祛斑诈骗', '祛斑被骗经历'],
+        weight: 1.0,
+        category: '祛斑诈骗'
+      },
+      {
+        keywords: ['丰胸被骗', '丰胸受骗', '丰胸诈骗', '丰胸被骗经历'],
+        weight: 1.0,
+        category: '丰胸诈骗'
+      },
+      {
+        keywords: ['医美被骗', '医美受骗', '医美诈骗', '医美被骗经历'],
+        weight: 1.0,
+        category: '医美诈骗'
+      },
+      {
+        keywords: ['白发转黑被骗', '白发转黑受骗', '白发转黑诈骗', '白发变黑被骗'],
+        weight: 1.0,
+        category: '白发转黑诈骗'
+      },
+      {
+        keywords: ['手镯定制被骗', '手镯定制受骗', '手镯定制诈骗', '定制手镯被骗'],
+        weight: 1.0,
+        category: '手镯定制诈骗'
+      }
+    ];
+
+    const sources = {
+      title: { text: pageTitle || '', weight: 3.0 }, // 标题权重最高
+      content: { text: $('body').text().substring(0, 2000), weight: 1.0 }, // 内容权重正常
+      meta: {
+        text: ($('meta[name="description"]').attr('content') ||
+               $('meta[property="og:description"]').attr('content') || ''),
+        weight: 2.0
+      } // meta描述权重较高
+    };
+
+    let bestMatch = {
+      score: 0,
+      matchedKeyword: null,
+      source: null,
+      category: null,
+      matches: []
+    };
+
+    // 检查每个来源
+    for (const [sourceName, sourceData] of Object.entries(sources)) {
+      if (!sourceData.text) continue;
+
+      const sourceText = sourceData.text.toLowerCase();
+
+      // 检查每个关键词配置
+      for (const config of keywordConfigs) {
+        for (const keyword of config.keywords) {
+          const keywordLower = keyword.toLowerCase();
+
+          // 精确匹配
+          if (sourceText.includes(keywordLower)) {
+            const score = config.weight * sourceData.weight * 1.0; // 精确匹配基础分数
+            if (score > bestMatch.score) {
+              bestMatch = {
+                score,
+                matchedKeyword: keyword,
+                source: sourceName,
+                category: config.category,
+                matches: [{ keyword, type: 'exact', source: sourceName, score }]
+              };
+            }
+            continue;
+          }
+
+          // 模糊匹配：关键词的部分匹配
+          const words = keywordLower.split('');
+          let matchCount = 0;
+          for (const word of words) {
+            if (sourceText.includes(word)) {
+              matchCount++;
+            }
+          }
+
+          if (matchCount >= Math.max(2, words.length * 0.6)) { // 至少匹配60%的词
+            const fuzzyScore = config.weight * sourceData.weight * (matchCount / words.length) * 0.7; // 模糊匹配分数较低
+            if (fuzzyScore > bestMatch.score) {
+              bestMatch = {
+                score: fuzzyScore,
+                matchedKeyword: keyword,
+                source: sourceName,
+                category: config.category,
+                matches: [{ keyword, type: 'fuzzy', source: sourceName, score: fuzzyScore, matchRatio: matchCount / words.length }]
+              };
+            }
+          }
+        }
+      }
+    }
+
+    // 根据匹配分数决定是否通过
+    const passThreshold = 1.5; // 通过阈值
+
+    if (bestMatch.score >= passThreshold) {
+      return {
+        passed: true,
+        matchedKeyword: bestMatch.matchedKeyword,
+        category: bestMatch.category,
+        source: bestMatch.source,
+        score: bestMatch.score,
+        confidence: Math.min(bestMatch.score / 3.0, 1.0), // 置信度基于分数
+        message: `在${this.getSourceDisplayName(bestMatch.source)}中找到匹配关键词"${bestMatch.matchedKeyword}" (分数: ${bestMatch.score.toFixed(2)})`,
+        matches: bestMatch.matches
+      };
+    }
+
+    return {
+      passed: false,
+      score: bestMatch.score,
+      reason: `未找到足够匹配的关键词 (最高分数: ${bestMatch.score.toFixed(2)}, 需要: ${passThreshold})`,
+      checkedSources: Object.keys(sources),
+      bestMatch: bestMatch.score > 0 ? bestMatch : null
+    };
+  }
+
+  /**
+   * 获取来源显示名称
+   */
+  getSourceDisplayName(source) {
+    const names = {
+      title: '页面标题',
+      content: '页面内容',
+      meta: '页面描述'
+    };
+    return names[source] || source;
   }
 
   /**

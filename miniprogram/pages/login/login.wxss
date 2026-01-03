@@ -345,9 +345,10 @@
   transition: all 0.3s ease;
 }
 
-/* 占位符颜色 */
-.form-input-placeholder {
-  color: rgba(255, 255, 255, 0.6);
+/* 占位符颜色 - 改为更深的颜色以提高可读性 */
+.form-input::placeholder {
+  color: rgba(255, 255, 255, 0.8);
+  opacity: 1;
 }
 
 .form-input:focus {

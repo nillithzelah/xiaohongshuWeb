@@ -4,8 +4,11 @@
   <!-- 页面标题 -->
   <view class="page-header">
     <view class="header-content">
-      <text class="page-title">我的设备管理</text>
-      <text class="page-subtitle">查看您被分配的设备状态</text>
+      <text class="page-title">我的账号管理</text>
+      <text class="page-subtitle">查看和管理您的账号</text>
+    </view>
+    <view class="header-actions">
+      <button class="add-btn" bindtap="showAddModal">+ 新增账号</button>
     </view>
   </view>
 
@@ -44,32 +47,71 @@
         <view class="device-header">
           <view class="device-info">
             <text class="device-name">{{item.accountName}}</text>
+            <text class="device-id" wx:if="{{item.accountId}}">ID: {{item.accountId}}</text>
             <text class="device-influence">影响力: {{item.influence}}</text>
           </view>
           <view class="device-status">
+            <!-- 审核状态 -->
             <text
-              class="status-badge"
-              wx:if="{{item.status === 'online'}}"
+              class="status-badge review-status"
+              wx:if="{{item.reviewStatus === 'pending'}}"
+              style="background: #fff7e6; color: #fa8c16; border-color: #ffd591;"
+            >
+              ● 审核中
+            </text>
+            <text
+              class="status-badge review-status"
+              wx:elif="{{item.reviewStatus === 'ai_approved'}}"
+              style="background: #e6f7ff; color: #1890ff; border-color: #91d5ff;"
+            >
+              ● AI审核通过
+            </text>
+            <text
+              class="status-badge review-status"
+              wx:elif="{{item.reviewStatus === 'approved'}}"
+              style="background: #f6ffed; color: #52c41a; border-color: #b7eb8f;"
+            >
+              ● 审核通过
+            </text>
+            <text
+              class="status-badge review-status"
+              wx:elif="{{item.reviewStatus === 'rejected'}}"
+              style="background: #fff2f0; color: #ff4d4f; border-color: #ffccc7;"
+            >
+              ● 审核拒绝
+            </text>
+
+            <!-- 设备状态 -->
+            <text
+              class="status-badge device-status"
+              wx:if="{{item.status === 'reviewing'}}"
+              style="background: #fff7e6; color: #fa8c16; border-color: #ffd591;"
+            >
+              ● 审核中
+            </text>
+            <text
+              class="status-badge device-status"
+              wx:elif="{{item.status === 'online'}}"
               style="background: #f6ffed; color: #52c41a; border-color: #b7eb8f;"
             >
               ● 在线
             </text>
             <text
-              class="status-badge"
+              class="status-badge device-status"
               wx:elif="{{item.status === 'offline'}}"
               style="background: #fff7e6; color: #fa8c16; border-color: #ffd591;"
             >
               ● 离线
             </text>
             <text
-              class="status-badge"
+              class="status-badge device-status"
               wx:elif="{{item.status === 'protected'}}"
               style="background: #e6f7ff; color: #1890ff; border-color: #91d5ff;"
             >
               ● 保护
             </text>
             <text
-              class="status-badge"
+              class="status-badge device-status"
               wx:elif="{{item.status === 'frozen'}}"
               style="background: #fff2f0; color: #ff4d4f; border-color: #ffccc7;"
             >
@@ -79,14 +121,34 @@
         </view>
 
         <view class="device-stats">
-          <view class="stat-item">
-            <text class="stat-label">在线时长</text>
-            <text class="stat-value">{{item.onlineDuration}} 小时</text>
-          </view>
-          <view class="stat-item">
-            <text class="stat-label">积分</text>
-            <text class="stat-value" style="color: #ff4d4f; font-weight: bold;">{{item.points}}</text>
-          </view>
+           <!-- 拒绝原因显示 -->
+           <view class="reject-reason" wx:if="{{item.reviewStatus === 'rejected' && item.reviewReason}}">
+             <text class="reason-label">拒绝原因：</text>
+             <text class="reason-text">{{item.reviewReason}}</text>
+           </view>
+
+           <!-- 昵称限制状态显示 -->
+           <view class="nickname-limit-status" wx:if="{{item.nicknameLimitStatus}}">
+             <text
+               class="status-text"
+               wx:if="{{item.nicknameLimitStatus.canUse}}"
+               style="color: #52c41a;"
+             >
+               ✅ {{item.nicknameLimitStatus.reason}}
+             </text>
+             <text
+               class="status-text"
+               wx:elif="{{!item.nicknameLimitStatus.canUse}}"
+               style="color: #fa8c16;"
+             >
+               ⏳ {{item.nicknameLimitStatus.reason}} - 还需{{item.nicknameLimitStatus.remainingDays}}天
+             </text>
+           </view>
+         </view>
+
+        <view class="device-actions">
+          <button class="edit-btn" bindtap="showEditModal" data-device="{{item}}">修改昵称</button>
+          <button class="delete-btn" bindtap="confirmDeleteDevice" data-device="{{item}}">删除账号</button>
         </view>
       </view>
     </view>
@@ -94,8 +156,117 @@
     <!-- 空状态 -->
     <view wx:else class="empty-state">
       <view class="empty-icon">📱</view>
-      <text class="empty-title">{{noDevicesMessage ? '提示' : '暂无设备'}}</text>
-      <text class="empty-subtitle">{{noDevicesMessage || '请联系管理员为您分配设备'}}</text>
+      <text class="empty-title">{{noDevicesMessage ? '提示' : '暂无账号'}}</text>
+      <text class="empty-subtitle">{{noDevicesMessage || '请联系管理员为您分配账号'}}</text>
+    </view>
+  </view>
+
+  <!-- 新增账号弹窗 -->
+  <view class="add-modal" wx:if="{{showAddModal}}">
+    <view class="modal-mask" bindtap="hideAddModal"></view>
+    <view class="modal-content">
+      <view class="modal-header">
+        <text class="modal-title">新增账号</text>
+        <view class="close-btn" bindtap="hideAddModal">✕</view>
+      </view>
+      <view class="modal-body">
+        <view class="form-item">
+          <text class="form-label">账号ID</text>
+          <input class="form-input" value="{{addForm.accountId}}" bindinput="onAccountIdInput" placeholder="请输入账号ID" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">账号昵称</text>
+          <input class="form-input" value="{{addForm.accountName}}" bindinput="onAccountNameInput" placeholder="请输入账号昵称" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">账号链接</text>
+          <view class="url-input-container">
+            <input
+              class="form-input url-input"
+              value="{{addForm.accountUrl}}"
+              bindinput="onAccountUrlInput"
+              placeholder="请输入账号链接或粘贴分享文本"
+              confirm-type="done"
+              maxlength="500"
+            />
+            <button class="paste-btn" bindtap="pasteAccountUrl" size="mini">粘贴分享</button>
+          </view>
+          <view class="input-hint">
+            <text>支持小红书分享文本自动提取链接</text>
+          </view>
+        </view>
+        <view class="form-item">
+          <text class="form-label">审核图片</text>
+          <view class="image-upload-container">
+            <view class="image-preview" wx:if="{{reviewImage}}">
+              <image class="preview-image" src="{{reviewImage}}" mode="aspectFill" bindtap="uploadReviewImage" />
+              <view class="image-hint">点击重新选择</view>
+            </view>
+            <view class="image-placeholder" wx:else bindtap="uploadReviewImage">
+              <view class="placeholder-icon">{{uploadingImage ? '⏳' : '📷'}}</view>
+              <view class="placeholder-text">{{uploadingImage ? '上传中...' : '点击上传小红薯个人页面截图'}}</view>
+            </view>
+          </view>
+          <view class="input-hint">
+            <text>请上传小红书个人主页的截图，用于账号审核</text>
+          </view>
+        </view>
+      </view>
+      <view class="modal-footer">
+        <button class="cancel-btn" bindtap="hideAddModal">取消</button>
+        <button class="confirm-btn" bindtap="addAccount" loading="{{adding}}">提交审核</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 修改账号弹窗 -->
+  <view class="edit-modal" wx:if="{{showEditModal}}">
+    <view class="modal-mask" bindtap="hideEditModal"></view>
+    <view class="modal-content">
+      <view class="modal-header">
+        <text class="modal-title">修改账号昵称</text>
+        <view class="close-btn" bindtap="hideEditModal">✕</view>
+      </view>
+      <view class="modal-body">
+        <view class="current-info">
+          <text class="info-label">当前账号：</text>
+          <text class="info-value">{{editingDevice.accountName}}</text>
+        </view>
+        <view class="form-item">
+          <text class="form-label">新昵称</text>
+          <input
+            class="form-input"
+            value="{{editForm.accountName}}"
+            bindinput="onEditAccountNameInput"
+            placeholder="请输入新的账号昵称"
+            maxlength="50"
+          />
+        </view>
+        <view class="form-item">
+          <text class="form-label">账号链接</text>
+          <view class="url-input-container">
+            <input
+              class="form-input url-input"
+              value="{{editForm.accountUrl}}"
+              bindinput="onEditAccountUrlInput"
+              placeholder="请输入账号链接或粘贴分享文本"
+              confirm-type="done"
+              maxlength="500"
+            />
+            <button class="paste-btn" bindtap="pasteEditAccountUrl" size="mini">粘贴分享</button>
+          </view>
+          <view class="input-hint">
+            <text>支持小红书分享文本自动提取链接</text>
+          </view>
+        </view>
+        <view class="form-hint">
+          <text>修改昵称需要通过AI审核验证账号真实性</text>
+        </view>
+      </view>
+      <view class="modal-footer">
+        <button class="cancel-btn" bindtap="hideEditModal">取消</button>
+        <button class="confirm-btn" bindtap="editAccount" loading="{{editing}}">提交审核</button>
+      </view>
     </view>
   </view>
 

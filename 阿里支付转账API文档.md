@@ -122,7 +122,7 @@ const result = await alipaySdk.exec('alipay.fund.trans.toaccount.transfer', {
     out_biz_no: 'transfer_123456',
     payee_type: 'ALIPAY_LOGONID',
     payee_account: 'user@example.com',
-    amount: '100.00',
+    amount: '100',
     payee_real_name: '张三',
     remark: '任务奖励'
   }

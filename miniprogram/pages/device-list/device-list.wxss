@@ -32,6 +32,7 @@ page {
   padding: 40rpx 30rpx;
   margin-bottom: 20rpx;
   box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.15);
+  position: relative;
 }
 
 .header-content {
@@ -50,6 +51,21 @@ page {
   font-size: 26rpx;
   color: rgba(255, 255, 255, 0.8);
   display: block;
+}
+
+.header-actions {
+  position: absolute;
+  top: 20rpx;
+  right: 20rpx;
+}
+
+.add-btn {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1rpx solid rgba(255, 255, 255, 0.3);
+  border-radius: 20rpx;
+  padding: 12rpx 24rpx;
+  font-size: 26rpx;
 }
 
 /* 骨架屏样式 */
@@ -181,6 +197,14 @@ page {
   margin-bottom: 8rpx;
 }
 
+.device-id {
+  font-size: 24rpx;
+  color: #999;
+  display: block;
+  margin-bottom: 4rpx;
+  font-family: 'Courier New', monospace;
+}
+
 .device-influence {
   font-size: 26rpx;
   color: #666;
@@ -189,6 +213,10 @@ page {
 
 .device-status {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  align-items: flex-end;
 }
 
 .status-badge {
@@ -208,9 +236,47 @@ page {
 
 .device-stats {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   padding-top: 20rpx;
   border-top: 1rpx solid #f0f0f0;
+  gap: 16rpx;
+}
+
+.reject-reason {
+  background: #fff2f0;
+  border: 1rpx solid #ffccc7;
+  border-radius: 8rpx;
+  padding: 16rpx;
+}
+
+.reason-label {
+  font-size: 26rpx;
+  color: #ff4d4f;
+  font-weight: bold;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.reason-text {
+  font-size: 26rpx;
+  color: #333;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* 昵称限制状态 */
+.nickname-limit-status {
+  background: linear-gradient(135deg, #fff7e6 0%, #fff7e6 100%);
+  border: 1rpx solid #ffd591;
+  border-radius: 8rpx;
+  padding: 16rpx;
+}
+
+.status-text {
+  font-size: 26rpx;
+  font-weight: 500;
+  display: block;
+  text-align: center;
 }
 
 .stat-item {
@@ -260,4 +326,288 @@ page {
   font-size: 26rpx;
   color: #999;
   display: block;
+}
+
+/* 新增账号弹窗 */
+.add-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+}
+
+.modal-mask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal-content {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: white;
+  border-radius: 20rpx 20rpx 0 0;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 30rpx;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+
+.modal-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #333;
+}
+
+.close-btn {
+  font-size: 36rpx;
+  color: #999;
+  padding: 10rpx;
+}
+
+.modal-body {
+  padding: 30rpx;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.form-item {
+  margin-bottom: 30rpx;
+}
+
+.form-label {
+  display: block;
+  font-size: 28rpx;
+  color: #666;
+  margin-bottom: 12rpx;
+  font-weight: 500;
+}
+
+.form-input {
+  width: 100%;
+  height: 80rpx;
+  padding: 16rpx 20rpx 32rpx 20rpx;
+  border: 1rpx solid #e0e0e0;
+  border-radius: 8rpx;
+  font-size: 30rpx;
+  box-sizing: border-box;
+  background: #fafafa;
+  line-height: normal;
+}
+
+.url-input-container {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.url-input {
+  flex: 1;
+}
+
+.paste-btn {
+  background: #f0f0f0;
+  color: #666;
+  border: none;
+  border-radius: 6rpx;
+  padding: 12rpx 16rpx;
+  font-size: 24rpx;
+}
+
+.input-hint {
+  margin-top: 8rpx;
+}
+
+.input-hint text {
+  font-size: 24rpx;
+  color: #999;
+}
+
+.modal-footer {
+  display: flex;
+  padding: 30rpx;
+  border-top: 1rpx solid #f0f0f0;
+  background: #fafafa;
+  gap: 20rpx;
+}
+
+.cancel-btn, .confirm-btn {
+  flex: 1;
+  padding: 20rpx;
+  border-radius: 8rpx;
+  font-size: 32rpx;
+  text-align: center;
+}
+
+.cancel-btn {
+  background: #f5f5f5;
+  color: #666;
+  border: 1rpx solid #e0e0e0;
+}
+
+.confirm-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+}
+
+/* 设备操作区域 */
+.device-actions {
+  margin-top: 20rpx;
+  display: flex;
+  justify-content: flex-end;
+  gap: 16rpx;
+}
+
+.edit-btn, .delete-btn {
+  border: none;
+  border-radius: 16rpx;
+  padding: 12rpx 24rpx;
+  font-size: 24rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.edit-btn {
+  background: linear-gradient(135deg, #52c41a 0%, #73d13d 100%);
+  color: white;
+  box-shadow: 0 2rpx 8rpx rgba(82, 196, 26, 0.3);
+}
+
+.edit-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4rpx 12rpx rgba(82, 196, 26, 0.4);
+}
+
+.delete-btn {
+  background: linear-gradient(135deg, #ff4d4f 0%, #ff7875 100%);
+  color: white;
+  box-shadow: 0 2rpx 8rpx rgba(255, 77, 79, 0.3);
+}
+
+.delete-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4rpx 12rpx rgba(255, 77, 79, 0.4);
+}
+
+/* 修改账号弹窗 */
+.edit-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+}
+
+.edit-modal .modal-content {
+  max-height: 60vh;
+}
+
+.current-info {
+  background: #f6ffed;
+  border: 1rpx solid #b7eb8f;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  margin-bottom: 24rpx;
+}
+
+.info-label {
+  font-size: 26rpx;
+  color: #52c41a;
+  font-weight: bold;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.info-value {
+  font-size: 28rpx;
+  color: #333;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.form-hint {
+  margin-top: 16rpx;
+}
+
+.form-hint text {
+  font-size: 24rpx;
+  color: #fa8c16;
+  display: block;
+}
+
+/* 图片上传样式 */
+.image-upload-container {
+  margin-top: 12rpx;
+}
+
+.image-preview {
+  position: relative;
+  display: inline-block;
+}
+
+.preview-image {
+  width: 200rpx;
+  height: 200rpx;
+  border-radius: 12rpx;
+  border: 2rpx solid #e0e0e0;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+}
+
+.image-hint {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  text-align: center;
+  font-size: 20rpx;
+  padding: 4rpx;
+  border-radius: 0 0 10rpx 10rpx;
+}
+
+.image-placeholder {
+  width: 200rpx;
+  height: 200rpx;
+  border: 2rpx dashed #d9d9d9;
+  border-radius: 12rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #fafafa;
+  transition: all 0.3s ease;
+}
+
+.image-placeholder:active {
+  border-color: #667eea;
+  background: #f0f2ff;
+}
+
+.placeholder-icon {
+  font-size: 48rpx;
+  margin-bottom: 8rpx;
+}
+
+.placeholder-text {
+  font-size: 24rpx;
+  color: #999;
+  text-align: center;
+  line-height: 1.4;
+  padding: 0 12rpx;
 }

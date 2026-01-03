@@ -1,0 +1,159 @@
+/* pages/distribution/distribution.wxss */
+.container {
+  padding: 20rpx;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  min-height: 100vh;
+}
+
+.page-header {
+  text-align: center;
+  margin-bottom: 30rpx;
+}
+
+.page-title {
+  font-size: 36rpx;
+  font-weight: bold;
+  color: #333;
+}
+
+/* 分销积分卡片 */
+.points-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 20rpx;
+  padding: 40rpx 30rpx;
+  margin-bottom: 30rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+}
+
+.points-icon {
+  font-size: 60rpx;
+  margin-right: 24rpx;
+}
+
+.points-info {
+  flex: 1;
+}
+
+.points-value {
+  font-size: 48rpx;
+  font-weight: bold;
+  color: white;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.points-label {
+  font-size: 28rpx;
+  color: rgba(255, 255, 255, 0.8);
+  display: block;
+}
+
+/* 关系卡片 */
+.relationship-section {
+  margin-bottom: 30rpx;
+}
+
+.relationship-card {
+  background: linear-gradient(135deg, #ffffff 0%, #fefefe 100%);
+  border-radius: 20rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0,0,0,0.1);
+  border: 1rpx solid rgba(0,0,0,0.04);
+  overflow: hidden;
+}
+
+.card-header {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  padding: 24rpx 30rpx;
+  border-bottom: 1rpx solid rgba(0,0,0,0.04);
+}
+
+.card-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #333;
+}
+
+.user-list {
+  padding: 0 30rpx 20rpx;
+}
+
+.user-item {
+  display: flex;
+  align-items: center;
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid rgba(0,0,0,0.04);
+}
+
+.user-item:last-child {
+  border-bottom: none;
+}
+
+.user-avatar {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 40rpx;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32rpx;
+  margin-right: 20rpx;
+}
+
+.user-info {
+  flex: 1;
+}
+
+.user-name {
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #333;
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.user-role {
+  font-size: 24rpx;
+  color: #666;
+  display: block;
+}
+
+/* 空状态 */
+.empty-state {
+  text-align: center;
+  padding: 80rpx 40rpx;
+  background: linear-gradient(135deg, #ffffff 0%, #fefefe 100%);
+  border-radius: 20rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0,0,0,0.1);
+  border: 1rpx solid rgba(0,0,0,0.04);
+}
+
+.empty-icon {
+  font-size: 80rpx;
+  margin-bottom: 20rpx;
+  display: block;
+}
+
+.empty-text {
+  font-size: 32rpx;
+  color: #666;
+  display: block;
+  margin-bottom: 12rpx;
+}
+
+.empty-hint {
+  font-size: 26rpx;
+  color: #999;
+  display: block;
+}
+
+/* 加载状态 */
+.loading {
+  text-align: center;
+  padding: 60rpx;
+  font-size: 28rpx;
+  color: #666;
+}

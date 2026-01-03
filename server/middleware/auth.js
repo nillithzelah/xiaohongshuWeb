@@ -23,12 +23,14 @@ const authenticateToken = async (req, res, next) => {
       // 首先尝试按ObjectId查找
       user = await User.findById(decoded.userId).select('-password');
     } catch (error) {
+      console.log('ObjectId查找失败:', error.message);
       // 如果ObjectId查找失败，尝试按username查找（兼容旧数据）
-      console.log('ObjectId查找失败，尝试按username查找:', decoded.userId);
+      console.log('尝试按username查找:', decoded.userId);
       user = await User.findOne({ username: decoded.userId }).select('-password');
     }
 
     if (!user) {
+      console.log('用户不存在:', decoded.userId);
       return res.status(401).json({ success: false, message: '用户不存在' });
     }
 
@@ -44,6 +46,9 @@ const authenticateToken = async (req, res, next) => {
       role: user.role,
       nickname: user.nickname
     };
+
+    console.log('👤 用户信息:', { userId: user._id, username: user.username, role: user.role });
+
     next();
   } catch (error) {
     console.error('Token验证错误:', error);

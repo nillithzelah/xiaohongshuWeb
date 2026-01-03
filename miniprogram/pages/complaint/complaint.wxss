@@ -1,0 +1,101 @@
+/* pages/complaint/complaint.wxss */
+.container {
+  padding: 20rpx;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  min-height: 100vh;
+}
+
+.page-header {
+  text-align: center;
+  margin-bottom: 40rpx;
+}
+
+.page-title {
+  font-size: 36rpx;
+  font-weight: bold;
+  color: #333;
+  display: block;
+  margin-bottom: 12rpx;
+}
+
+.page-desc {
+  font-size: 28rpx;
+  color: #666;
+  display: block;
+}
+
+/* 内容输入区域 */
+.content-section {
+  background: linear-gradient(135deg, #ffffff 0%, #fefefe 100%);
+  border-radius: 20rpx;
+  padding: 30rpx;
+  margin-bottom: 30rpx;
+  box-shadow: 0 6rpx 16rpx rgba(0,0,0,0.1);
+  border: 1rpx solid rgba(0,0,0,0.04);
+}
+
+.complaint-input {
+  width: 100%;
+  min-height: 300rpx;
+  padding: 20rpx;
+  font-size: 28rpx;
+  line-height: 1.5;
+  border: 1rpx solid #e0e0e0;
+  border-radius: 12rpx;
+  background: #fafafa;
+  box-sizing: border-box;
+}
+
+/* 提示信息 */
+.tips-section {
+  margin-bottom: 40rpx;
+}
+
+.tip-item {
+  display: flex;
+  align-items: center;
+  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+  border-radius: 12rpx;
+  padding: 20rpx 24rpx;
+  margin-bottom: 16rpx;
+  border-left: 6rpx solid #ffc107;
+}
+
+.tip-icon {
+  font-size: 32rpx;
+  margin-right: 16rpx;
+}
+
+.tip-text {
+  font-size: 26rpx;
+  color: #856404;
+  flex: 1;
+}
+
+/* 操作区域 */
+.action-section {
+  padding: 0 20rpx;
+}
+
+.submit-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 12rpx;
+  font-size: 32rpx;
+  font-weight: 500;
+  padding: 24rpx;
+  box-shadow: 0 4rpx 12rpx rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+.submit-btn:active {
+  transform: translateY(2rpx);
+  box-shadow: 0 2rpx 8rpx rgba(102, 126, 234, 0.3);
+}
+
+.submit-btn[disabled] {
+  background: #ccc;
+  box-shadow: none;
+}

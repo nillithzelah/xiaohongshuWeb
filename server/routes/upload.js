@@ -98,7 +98,7 @@ router.post('/image', upload.single('file'), async (req, res) => {
   }
 });
 
-// 批量上传多张图片
+// 批量上传多张图片（优化版：并发控制和错误处理）
 router.post('/images', upload.array('files', 9), async (req, res) => {
   try {
     const files = req.files;
@@ -123,19 +123,19 @@ router.post('/images', upload.array('files', 9), async (req, res) => {
       }
       // PNG: 89 50 4E 47 0D 0A 1A 0A
       else if (fileHeader[0] === 0x89 && fileHeader[1] === 0x50 && fileHeader[2] === 0x4E &&
-               fileHeader[3] === 0x47 && fileHeader[4] === 0x0D && fileHeader[5] === 0x0A &&
-               fileHeader[6] === 0x1A && fileHeader[7] === 0x0A) {
+              fileHeader[3] === 0x47 && fileHeader[4] === 0x0D && fileHeader[5] === 0x0A &&
+              fileHeader[6] === 0x1A && fileHeader[7] === 0x0A) {
         isValidImage = true;
       }
       // GIF: 47 49 46 38
       else if (fileHeader[0] === 0x47 && fileHeader[1] === 0x49 && fileHeader[2] === 0x46 &&
-               fileHeader[3] === 0x38) {
+              fileHeader[3] === 0x38) {
         isValidImage = true;
       }
       // WebP: 52 49 46 46 ... 57 45 42 50
       else if (fileHeader[0] === 0x52 && fileHeader[1] === 0x49 && fileHeader[2] === 0x46 &&
-               fileHeader[3] === 0x46 && fileHeader[8] === 0x57 && fileHeader[9] === 0x45 &&
-               fileHeader[10] === 0x42 && fileHeader[11] === 0x50) {
+              fileHeader[3] === 0x46 && fileHeader[8] === 0x57 && fileHeader[9] === 0x45 &&
+              fileHeader[10] === 0x42 && fileHeader[11] === 0x50) {
         isValidImage = true;
       }
 
@@ -163,22 +163,67 @@ router.post('/images', upload.array('files', 9), async (req, res) => {
       secure: true
     });
 
-    // 批量上传到OSS
-    const results = await Promise.all(files.map(file => {
-      const filename = `uploads/${Date.now()}-${file.originalname}`;
-      return client.put(filename, file.buffer);
-    }));
+    // 批量上传到OSS（并发控制：最多3个并发，避免OSS限流）
+    const BATCH_SIZE = 3;
+    const results = [];
+    const errors = [];
 
-    // 返回所有图片URL
-    const imageUrls = results.map(result => result.url.replace('http://', 'https://'));
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      const batch = files.slice(i, i + BATCH_SIZE);
+      const batchPromises = batch.map(async (file, index) => {
+        try {
+          const filename = `uploads/${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${file.originalname}`;
+          const result = await client.put(filename, file.buffer);
+          return {
+            success: true,
+            url: result.url.replace('http://', 'https://'),
+            filename: result.name,
+            originalIndex: i + index
+          };
+        } catch (error) {
+          console.error(`上传第${i + index + 1}张图片失败:`, error);
+          errors.push({
+            index: i + index,
+            filename: file.originalname,
+            error: error.message
+          });
+          return {
+            success: false,
+            originalIndex: i + index,
+            error: error.message
+          };
+        }
+      });
 
-    res.json({
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
+    }
+
+    // 按原始顺序排序
+    results.sort((a, b) => a.originalIndex - b.originalIndex);
+
+    // 提取成功上传的URL
+    const successfulUploads = results.filter(r => r.success);
+    const imageUrls = successfulUploads.map(r => r.url);
+
+    // 返回结果
+    const response = {
       success: true,
       data: {
         urls: imageUrls,
-        count: imageUrls.length
+        count: imageUrls.length,
+        totalRequested: files.length
       }
-    });
+    };
+
+    // 如果有失败的上传，添加到响应中
+    if (errors.length > 0) {
+      response.data.errors = errors;
+      response.data.failedCount = errors.length;
+      response.message = `上传完成：成功${imageUrls.length}张，失败${errors.length}张`;
+    }
+
+    res.json(response);
 
   } catch (error) {
     console.error('批量上传失败:', error);

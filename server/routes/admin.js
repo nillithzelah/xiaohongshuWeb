@@ -3,6 +3,8 @@ const express = require('express');
 const ImageReview = require('../models/ImageReview');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const TaskConfig = require('../models/TaskConfig');
+const Complaint = require('../models/Complaint');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const router = express.Router();
 
@@ -373,30 +375,13 @@ router.post('/finance/pay', authenticateToken, requireRole(['boss', 'finance']),
         });
       }
 
-      // 验证用户钱包信息
+      // 验证用户是否存在
       const user = await User.findById(transaction.user_id).session(session);
       if (!user) {
         await session.abortTransaction();
         return res.status(404).json({
           success: false,
           message: `用户 ${transaction.user_id} 不存在`
-        });
-      }
-      if (!user.wallet || !user.wallet.alipay_account || !user.wallet.real_name) {
-        await session.abortTransaction();
-        return res.status(400).json({
-          success: false,
-          message: `用户 ${user.username} 钱包信息不完整（需要支付宝账号和真实姓名）`
-        });
-      }
-
-      // 检查用户已提现金额是否会溢出
-      const currentWithdrawn = user.wallet.total_withdrawn || 0;
-      if (currentWithdrawn + transaction.amount > 999999.99) {
-        await session.abortTransaction();
-        return res.status(400).json({
-          success: false,
-          message: `用户 ${user.username} 已提现金额将超过上限`
         });
       }
 
@@ -628,6 +613,320 @@ router.get('/finance/stats', authenticateToken, requireRole(['boss', 'finance', 
     res.status(500).json({
       success: false,
       message: '获取财务统计失败'
+    });
+  }
+});
+
+// ============ 任务积分管理相关路由 ============
+
+// 获取任务积分配置列表
+router.get('/task-points', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const configs = await TaskConfig.find({ is_active: true })
+      .select('type_key name price commission_1 commission_2 daily_reward_points continuous_check_days')
+      .sort({ type_key: 1 });
+
+    res.json({
+      success: true,
+      configs
+    });
+  } catch (error) {
+    console.error('获取任务积分配置失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取任务积分配置失败'
+    });
+  }
+});
+
+// 更新任务积分配置
+router.put('/task-points/:id', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    console.log('📝 收到更新任务积分配置请求');
+    console.log('📝 请求体:', JSON.stringify(req.body, null, 2));
+
+    const { price, commission_1, commission_2, daily_reward_points, continuous_check_days } = req.body;
+
+    console.log('📝 解构后的参数:', {
+      id: req.params.id,
+      price,
+      commission_1,
+      commission_2,
+      daily_reward_points,
+      continuous_check_days
+    });
+
+    // 验证参数
+    if (price === undefined || commission_1 === undefined || commission_2 === undefined || daily_reward_points === undefined || continuous_check_days === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: '任务积分、一级分销积分、二级分销积分、每日奖励积分和持续检查天数都是必填项'
+      });
+    }
+
+    if (price < 0 || commission_1 < 0 || commission_2 < 0 || daily_reward_points < 0) {
+      return res.status(400).json({
+        success: false,
+        message: '积分值不能为负数'
+      });
+    }
+
+    if (continuous_check_days < 1 || continuous_check_days > 365) {
+      return res.status(400).json({
+        success: false,
+        message: '持续检查天数必须在1-365天之间'
+      });
+    }
+
+    const updateData = {
+      price,
+      commission_1,
+      commission_2,
+      daily_reward_points,
+      continuous_check_days,
+      updatedAt: new Date()
+    };
+
+    console.log('📝 执行数据库更新，ID:', req.params.id);
+    console.log('📝 更新数据:', JSON.stringify(updateData, null, 2));
+
+    try {
+      // 使用 findOneAndUpdate 确保更新并返回结果
+      console.log('📝 使用 findOneAndUpdate 更新配置');
+
+      const updatedDoc = await TaskConfig.findOneAndUpdate(
+        { _id: req.params.id },
+        { $set: updateData },
+        {
+          new: true,  // 返回更新后的文档
+          runValidators: false  // 跳过验证以避免问题
+        }
+      );
+
+      if (!updatedDoc) {
+        console.log('❌ 没有找到匹配的文档');
+        return res.status(404).json({
+          success: false,
+          message: '任务配置不存在'
+        });
+      }
+
+      console.log('✅ 文档更新成功:', {
+        id: updatedDoc._id,
+        price: updatedDoc.price,
+        commission_1: updatedDoc.commission_1,
+        commission_2: updatedDoc.commission_2,
+        daily_reward_points: updatedDoc.daily_reward_points
+      });
+
+      res.json({
+        success: true,
+        message: '任务积分配置更新成功',
+        config: updatedDoc
+      });
+
+    } catch (updateError) {
+      console.error('📝 数据库更新异常:', updateError);
+      return res.status(500).json({
+        success: false,
+        message: '数据库更新失败'
+      });
+    }
+
+  } catch (error) {
+    console.error('更新任务积分配置失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '更新任务积分配置失败'
+    });
+  }
+});
+
+// ============ 兼职用户管理相关路由 ============
+
+// 执行用户提现（将待打款移至已提现）
+router.post('/withdraw/:userId', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // 查找用户
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    // 查找该用户的所有待打款交易
+    const pendingTransactions = await Transaction.find({
+      user_id: userId,
+      status: 'pending'
+    });
+
+    if (pendingTransactions.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '该用户没有待打款记录'
+      });
+    }
+
+    // 计算总提现金额
+    const totalWithdrawAmount = pendingTransactions.reduce((sum, t) => sum + t.amount, 0);
+
+    // 由于使用内部打款，不再需要检查用户钱包信息
+
+    // 更新所有待打款交易为已完成状态
+    await Transaction.updateMany(
+      {
+        user_id: userId,
+        status: 'pending'
+      },
+      {
+        status: 'completed',
+        paid_at: new Date(),
+        paid_by: req.user._id,
+        paid_by_name: req.user.username,
+        payment_status: 'completed',
+        updatedAt: new Date()
+      }
+    );
+
+    // 更新用户已提现金额
+    const currentWithdrawn = user.wallet?.total_withdrawn || 0;
+    await User.findByIdAndUpdate(userId, {
+      $inc: {
+        'wallet.total_withdrawn': totalWithdrawAmount
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `提现成功：处理了${pendingTransactions.length}笔交易，总金额${totalWithdrawAmount}元`,
+      data: {
+        userId,
+        username: user.username,
+        transactionCount: pendingTransactions.length,
+        totalAmount: totalWithdrawAmount,
+        newTotalWithdrawn: currentWithdrawn + totalWithdrawAmount
+      }
+    });
+
+  } catch (error) {
+    console.error('执行提现失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '执行提现失败'
+    });
+  }
+});
+
+// ============ 投诉管理相关路由 ============
+
+// 获取投诉列表
+router.get('/complaints', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, keyword } = req.query;
+    const skip = (page - 1) * limit;
+
+    let query = {};
+
+    // 状态过滤
+    if (status) {
+      query.status = status;
+    }
+
+    // 搜索投诉内容或用户信息
+    if (keyword) {
+      // 这里需要联合查询用户信息
+      const userIds = await User.find({
+        $or: [
+          { username: { $regex: keyword, $options: 'i' } },
+          { nickname: { $regex: keyword, $options: 'i' } },
+          { phone: { $regex: keyword, $options: 'i' } }
+        ]
+      }).select('_id');
+
+      query.$or = [
+        { content: { $regex: keyword, $options: 'i' } },
+        { userId: { $in: userIds.map(u => u._id) } }
+      ];
+    }
+
+    const complaints = await Complaint.find(query)
+      .populate('userId', 'username nickname phone')
+      .populate('respondedBy', 'username nickname')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Complaint.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: complaints,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('获取投诉列表失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取投诉列表失败'
+    });
+  }
+});
+
+// 更新投诉状态和回复
+router.put('/complaints/:id', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { status, adminResponse } = req.body;
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (status) {
+      updateData.status = status;
+    }
+
+    if (adminResponse && adminResponse.trim()) {
+      updateData.adminResponse = adminResponse.trim();
+      updateData.respondedBy = req.user._id;
+      updateData.respondedAt = new Date();
+    }
+
+    const updatedComplaint = await Complaint.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    )
+    .populate('userId', 'username nickname phone')
+    .populate('respondedBy', 'username nickname');
+
+    if (!updatedComplaint) {
+      return res.status(404).json({
+        success: false,
+        message: '投诉不存在'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '投诉更新成功',
+      data: updatedComplaint
+    });
+
+  } catch (error) {
+    console.error('更新投诉失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '更新投诉失败'
     });
   }
 });

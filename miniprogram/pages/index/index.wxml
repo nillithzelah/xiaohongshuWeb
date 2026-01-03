@@ -1,5 +1,5 @@
 <!-- pages/index/index.wxml -->
-<view class="container">
+<scroll-view class="container" scroll-y="true" enable-flex="true" bindscrolltolower="onScrollToLower" refresher-enabled="{{true}}" bindrefresherrefresh="onPullDownRefresh" bindrefresherrestore="onPullDownRefreshRestore">
 
   <!-- 🔒 内部员工使用说明 -->
   <view class="internal-notice">
@@ -9,7 +9,7 @@
     </view>
   </view>
 
-  <!--  简化的用户信息头图 -->
+  <!-- 简化的用户信息头图 -->
   <view class="header-card">
     <view class="user-info">
       <view class="avatar-container">
@@ -18,12 +18,11 @@
       <view class="user-text">
         <view class="greeting">你好，{{userInfo.nickName || '奋斗者'}}</view>
         <view class="subtitle">{{userInfo.phone ? '今天也是努力搞积分的一天！💪' : '请先完成手机号授权'}}</view>
-
       </view>
     </view>
   </view>
 
-  <!-- ️ 画廊轮播图 -->
+  <!-- 画廊轮播图 -->
   <view class="banner-container">
     <swiper
       class="card-swiper"
@@ -51,7 +50,36 @@
         📢 今日笔记任务单价上调至 10 积分！
       </view>
     </view>
-  
+  </view>
+
+  <!-- 📋 设备审核状态卡片 -->
+  <view class="device-review-card" wx:if="{{showDeviceReviewCard}}">
+    <view class="card-header">
+      <text class="card-title">📱 设备审核状态</text>
+    </view>
+    <view class="card-content">
+      <view class="review-info">
+        <view class="device-name">设备: {{deviceReviewStatus.accountName || '未知设备'}}</view>
+        <view class="review-status {{deviceReviewStatus.status}}">
+          状态:
+          {{
+            deviceReviewStatus.status === 'pending' ? '待审核' :
+            deviceReviewStatus.status === 'ai_approved' ? 'AI审核通过，等待人工审核' :
+            deviceReviewStatus.status === 'approved' ? '审核通过' :
+            deviceReviewStatus.status === 'rejected' ? '审核拒绝' : '审核中'
+          }}
+        </view>
+        <view class="review-time" wx:if="{{deviceReviewStatus.createdAt}}">
+          提交时间: {{deviceReviewStatus.createdAt}}
+        </view>
+        <view class="review-reason" wx:if="{{deviceReviewStatus.status === 'rejected' && deviceReviewStatus.reviewReason}}">
+          拒绝原因: {{deviceReviewStatus.reviewReason}}
+        </view>
+      </view>
+      <view class="review-actions" wx:if="{{deviceReviewStatus.status === 'rejected'}}">
+        <button class="retry-btn" bindtap="goToDeviceList">重新提交</button>
+      </view>
+    </view>
   </view>
 
   <!-- 📋 审核记录列表 -->
@@ -75,31 +103,60 @@
         <view class="card-content">
           <view class="card-row">
             <text class="task-type">{{item.imageType === 'customer_resource' ? '客资' : (item.imageType === 'note' ? '笔记' : '评论')}}</text>
-            <view class="status-tag {{item.status}}">
+            <view class="status-tag {{(item.aiReviewResult && item.aiReviewResult.passed === false) ? 'rejected' : item.status}}">
               {{
                 item.status === 'completed' ? '已到账' :
-                (item.status === 'rejected' || item.status === 'manager_rejected' ? '已驳回' :
+                ((item.status === 'rejected' || item.status === 'manager_rejected' || (item.aiReviewResult && item.aiReviewResult.passed === false)) ? '已驳回' :
                 (item.status === 'manager_approved' ? '审核通过' :
                 (item.status === 'mentor_approved' ? '主管审核中' : '审核中')))
               }}
             </view>
           </view>
           <view class="card-row time-row">
-            <text class="submit-time">{{item.deviceName}} · {{item.formattedTime}}</text>
+            <text class="submit-time">{{item.commentAuthor || item.deviceName}} · {{item.formattedTime}}</text>
             <text class="amount" wx:if="{{item.status === 'manager_approved' || item.status === 'completed'}}">+ {{item.snapshotPrice}}</text>
           </view>
 
           <!-- 驳回原因 -->
-          <view class="reject-reason" wx:if="{{item.status === 'rejected'}}">
-            驳回原因：{{item.rejectionReason || '不符合要求'}}
+          <view class="audit-failure-reason" wx:if="{{(item.aiReviewResult && item.aiReviewResult.passed === false) || item.status === 'rejected' || item.status === 'manager_rejected'}}">
+            <text class="failure-label">审核失败原因：</text>
+            <text class="failure-reason">{{item.rejectionReason || (item.aiReviewResult && item.aiReviewResult.reasons && item.aiReviewResult.reasons.length > 0 ? item.aiReviewResult.reasons[item.aiReviewResult.reasons.length - 1] : '审核未通过')}}</text>
           </view>
-        </view>
-      </view>
+
+          <!-- AI审核结果展示 - 已注释 -->
+          <!-- <view class="ai-review-info" wx:if="{{item.aiReviewResult}}">
+            <view class="ai-review-status">
+              <text class="ai-label">机审结果：</text>
+              <text class="ai-status {{item.aiReviewResult.passed ? 'passed' : 'failed'}}">
+                {{item.aiReviewResult.passed ? '通过' : '未通过'}}
+              </text>
+            </view>
+          </view> -->
+
+          <!-- 持续检查结果 - 已注释 -->
+          <!-- <view class="continuous-check-info" wx:if="{{item.continuousCheck}}">
+            <view class="check-status">
+              <text class="check-label">持续检查：</text>
+              <text class="check-result {{item.continuousCheck.status === 'active' ? 'active' : 'failed'}}">
+                {{item.continuousCheck.status === 'active' ? '正常' : '异常'}}
+              </text>
+              <text class="check-time" wx:if="{{item.continuousCheck.lastCheckTime}}">
+                ({{item.continuousCheck.lastCheckTime.substring(5, 16).replace('T', ' ')}})
+              </text>
+            </view>
+          </view> -->
+        </view> <!-- 闭合 card-content -->
+      </view> <!-- 闭合 review-card -->
     </block>
 
     <!-- 加载更多/到底提示 -->
     <view class="loading-more" wx:if="{{reviews.length > 0}}">
-      {{hasMore ? '加载中...' : '--- 到底啦 ---'}}
+      <view wx:if="{{loading && hasMore}}" class="loading-indicator">
+        <text class="loading-text">正在加载更多...</text>
+      </view>
+      <view wx:elif="{{!hasMore}}" class="no-more-data">
+        <text class="no-more-text">--- 没有更多数据了 ---</text>
+      </view>
     </view>
   </view>
 
@@ -133,4 +190,4 @@
       </view>
     </view>
   </view>
-</view>
+</scroll-view>

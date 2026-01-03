@@ -20,7 +20,8 @@ const userSchema = new mongoose.Schema({
     }
   },
   avatar: {
-    type: String
+    type: String,
+    default: 'https://via.placeholder.com/120x120/E5E7EB/9CA3AF?text=用户'
   },
   role: {
     type: String,
@@ -33,6 +34,13 @@ const userSchema = new mongoose.Schema({
   phone: String,
   wechat: String,
   notes: String,
+
+  // 邀请码系统
+  invitationCode: {
+    type: String,
+    unique: true,
+    sparse: true // 允许为空值，但唯一
+  },
 
   // 带教老师专属字段
   integral_w: String, // 积分号W
@@ -84,7 +92,11 @@ const userSchema = new mongoose.Schema({
 
   createdAt: {
     type: Date,
-    default: Date.now
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
   },
 
   // 培训状态（仅兼职用户）
@@ -143,20 +155,42 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// 密码加密中间件
+// 密码加密和邀请码生成中间件
 userSchema.pre('save', async function(next) {
-  // 只有在密码被修改时才加密
-  if (!this.isModified('password')) return next();
-
-  // 如果密码已经是bcrypt哈希，跳过加密
-  if (this.password && (this.password.startsWith('$2a$') || this.password.startsWith('$2b$') || this.password.startsWith('$2y$'))) {
-    return next();
-  }
-
   try {
-    // 生成盐并加密密码
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    // 密码加密逻辑
+    if (this.isModified('password') && this.password) {
+      // 如果密码已经是bcrypt哈希，跳过加密
+      if (this.password.startsWith('$2a$') || this.password.startsWith('$2b$') || this.password.startsWith('$2y$')) {
+        // 密码已经是哈希格式，跳过
+      } else {
+        // 生成盐并加密密码
+        const salt = await bcrypt.genSalt(10);
+        this.password = await bcrypt.hash(this.password, salt);
+      }
+    }
+
+    // 确保积分字段为整数（避免浮点数精度问题）
+    if (this.isModified('points') && this.points !== undefined) {
+      this.points = Math.round(this.points);
+    }
+
+    // 确保钱包金额字段为分单位整数（避免浮点数精度问题）
+    if (this.isModified('wallet.total_earned') && this.wallet?.total_earned !== undefined) {
+      this.wallet.total_earned = Math.round(this.wallet.total_earned);
+    }
+
+    if (this.isModified('wallet.total_withdrawn') && this.wallet?.total_withdrawn !== undefined) {
+      this.wallet.total_withdrawn = Math.round(this.wallet.total_withdrawn);
+    }
+
+    // 自动生成邀请码（仅对新用户且没有邀请码时）
+    if (this.isNew && !this.invitationCode && this.username) {
+      // 使用用户名作为邀请码（确保唯一性）
+      this.invitationCode = this.username;
+      console.log('🎫 自动生成邀请码:', this.invitationCode);
+    }
+
     next();
   } catch (error) {
     next(error);

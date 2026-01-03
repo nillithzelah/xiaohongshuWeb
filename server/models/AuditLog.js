@@ -87,11 +87,29 @@ const auditLogSchema = new mongoose.Schema({
   // 时间戳
   timestamp: {
     type: Date,
-    default: Date.now,
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    },
     index: true
+  },
+  createdAt: {
+    type: Date,
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
+  },
+  updatedAt: {
+    type: Date,
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
   }
-}, {
-  timestamps: true
 });
 
 // 索引优化

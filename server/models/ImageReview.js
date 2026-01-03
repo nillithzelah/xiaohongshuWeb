@@ -6,6 +6,11 @@ const imageReviewSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // AI识别的真实昵称（用于评论限制和小程序显示）
+  nickname: {
+    type: String,
+    default: null
+  },
   // 支持多图：将单图字段改为数组
   imageUrls: {
     type: [String],
@@ -34,9 +39,9 @@ const imageReviewSchema = new mongoose.Schema({
     default: function() {
       // 根据图片类型设置默认价格
       const priceMap = {
-        'customer_resource': 10.00,
-        'note': 8.00,
-        'comment': 3.00
+        'customer_resource': 10,
+        'note': 8,
+        'comment': 3
       };
       return priceMap[this.imageType] || 0;
     }
@@ -63,7 +68,9 @@ const imageReviewSchema = new mongoose.Schema({
   userNoteInfo: {
     author: String,     // 用户填写的作者昵称
     title: String,      // 用户填写的笔记标题
-    comment: String     // 用户填写的评论内容（评论类型专用）
+    comment: String,    // 用户填写的评论内容（评论类型专用）
+    customerPhone: String, // 客户手机号
+    customerWechat: String // 客户微信号
   },
   // AI审核解析的笔记信息
   aiParsedNoteInfo: {
@@ -104,6 +111,11 @@ const imageReviewSchema = new mongoose.Schema({
       }]
     }
   },
+  // 第一次审核失败原因（用于第二次审核失败时保持一致的原因描述）
+  firstReviewFailureReason: {
+    type: String,
+    default: null
+  },
   status: {
     type: String,
     enum: ['pending', 'mentor_approved', 'manager_rejected', 'manager_approved', 'finance_processing', 'completed', 'rejected'],
@@ -133,7 +145,7 @@ const imageReviewSchema = new mongoose.Schema({
     accountName: String,
     status: {
       type: String,
-      enum: ['online', 'offline', 'protected', 'frozen']
+      enum: ['online', 'offline', 'protected', 'frozen', 'reviewing']
     },
     influence: {
       type: [String],
@@ -181,9 +193,27 @@ const imageReviewSchema = new mongoose.Schema({
       errorMessage: String // 错误信息
     }]
   },
+  // 审核尝试次数（用于延迟重试机制）
+  reviewAttempt: {
+    type: Number,
+    default: 1,
+    min: 1,
+    max: 2,
+    validate: {
+      validator: function(v) {
+        return Number.isInteger(v) && v >= 1 && v <= 2;
+      },
+      message: '审核尝试次数必须是1或2'
+    },
+    comment: '审核尝试次数，1表示第一次尝试，2表示第二次尝试'
+  },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: () => {
+      const now = new Date();
+      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
+      return new Date(now.getTime() + beijingOffset);
+    }
   }
 });
 
@@ -201,6 +231,10 @@ imageReviewSchema.index({ userId: 1, createdAt: -1 });
 imageReviewSchema.index({ status: 1 });
 imageReviewSchema.index({ 'imageUrls': 1 }); // 新增图片数组索引
 imageReviewSchema.index({ 'imageMd5s': 1 }); // 新增MD5数组索引
+// 用户账号评论限制查询索引
+imageReviewSchema.index({ userId: 1, imageType: 1, noteUrl: 1, status: 1 });
+// 昵称评论限制查询索引
+imageReviewSchema.index({ 'aiParsedNoteInfo.author': 1, imageType: 1, noteUrl: 1, status: 1 });
 // 持续检查相关索引
 imageReviewSchema.index({ 'continuousCheck.enabled': 1 });
 imageReviewSchema.index({ 'continuousCheck.status': 1 });

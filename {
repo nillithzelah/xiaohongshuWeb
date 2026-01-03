@@ -1,0 +1,71 @@
+基于我对代码的详细分析，我已经找到了问题的可能原因。让我总结一下：
+
+## 问题分析：CommentLimit 数据无法创建
+
+### 5-7个可能的问题原因：
+
+1. **昵称清理逻辑不一致**：在 [`CommentVerificationService.js`](server/services/CommentVerificationService.js:599-614) 中，作者匹配时会清理"关注"后缀，但在 [`asyncAiReviewService.js`](server/services/asyncAiReviewService.js:661-691) 记录 CommentLimit 时，`authorToRecord` 的获取逻辑可能获取到带"关注"后缀的昵称。
+
+2. **`authorToRecord` 为空**：在 [`asyncAiReviewService.js`](server/services/asyncAiReviewService.js:661-691) 第661-691行，记录 CommentLimit 的条件是 `authorToRecord && review.noteUrl && review.userNoteInfo?.comment`，如果 `authorToRecord` 为空，则不会记录。
+
+3. **`aiParsedNoteInfo.author` 未正确设置**：在 [`asyncAiReviewService.js`](server/services/asyncAiReviewService.js:576-596) 第576-596行，设置 `aiParsedNoteInfo.author` 的逻辑依赖于 `commentVerification.foundComments[0].author`，如果评论验证没有找到作者，则不会设置。
+
+4. **评论验证返回的作者为空**：在 [`CommentVerificationService.js`](server/services/CommentVerificationService.js:597-632) 中，即使评论内容匹配成功，`matchedAuthor` 可能为 `null`（如果页面上找不到对应的作者元素）。
+
+5. **`userNoteInfo.author` 格式问题**：用户提交的 `author` 可能是数组格式，但在某些地方被当作字符串处理。
+
+6. **审核状态不是 `manager_approved`**：只有当 `updateData.status === 'manager_approved'` 时才会记录 CommentLimit，如果审核被其他条件拒绝（如7天昵称限制），则不会记录。
+
+7. **异常被静默捕获**：在 [`asyncAiReviewService.js`](server/services/asyncAiReviewService.js:689-691) 第689-691行，`recordCommentApproval` 的异常被 `catch` 捕获但只打印日志，不会影响主流程。
+
+### 最可能的1-2个原因：
+
+**最可能原因1：`authorToRecord` 为空导致跳过记录**
+
+在 [`asyncAiReviewService.js`](server/services/asyncAiReviewService.js:661-691) 中：
+```javascript
+// 第661-691行
+if (updateData.status === 'manager_approved' && review.imageType === 'comment') {
+  try {
+    let authorToRecord = updateData.aiParsedNoteInfo?.author;  // 可能为空
+
+    // 如果AI解析的作者为空，优先使用评论验证找到的作者
+    if (!authorToRecord && aiReviewResult.commentVerification?.foundComments?.[0]?.author) {
+      authorToRecord = aiReviewResult.commentVerification.foundComments[0].author;  // 可能也为空
+    }
+
+    // 如果还是为空，使用用户提交的作者
+    if (!authorToRecord && Array.isArray(review.userNoteInfo?.author)) {
+      authorToRecord = review.userNoteInfo.author[0];  // 可能也为空
+    }
+
+    if (authorToRecord && review.noteUrl && review.userNoteInfo?.comment) {
+      // 只有这里才会记录
+      await CommentLimit.recordCommentApproval(...);
+    } else {
+      console.warn('⚠️ 无法记录评论限制: 缺少必要信息', {...});  // 这里会打印警告
+    }
+  } catch (error) {
+    console.error('记录评论限制信息失败:', error);
+  }
+}
+```
+
+**最可能原因2：评论验证时找不到作者信息**
+
+在 [`CommentVerificationService.js`](server/services/CommentVerificationService.js:597-632) 中，`matchedAuthor` 可能为 `null`，因为页面上的作者元素选择器可能无法正确匹配。
+
+---
+
+为了验证这些假设，我建议在 [`asyncAiReviewService.js`](server/services/asyncAiReviewService.js:661-691) 中添加更详细的日志。请确认是否需要我添加这些日志来验证问题？
+基于代码分析，我发现最可能的问题是：
+
+1. **`authorToRecord` 为空**：在记录 CommentLimit 时，获取作者昵称的三个来源（`aiParsedNoteInfo.author`、`commentVerification.foundComments[0].author`、`userNoteInfo.author[0]`）可能都为空。
+
+2. **评论验证时找不到作者信息**：`CommentVerificationService` 在匹配评论时，可能找到了评论内容但没有找到对应的作者。
+
+为了验证这些假设，我需要：
+- 查看服务器日志中是否有 "⚠️ 无法记录评论限制: 缺少必要信息" 的警告
+- 或者在代码中添加更详细的日志
+
+请问您希望我：

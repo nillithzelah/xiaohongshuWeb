@@ -9,9 +9,9 @@ async function updateReviewPrices() {
 
     // 定义价格映射
     const priceMap = {
-      'login_qr': 5.00,
-      'note': 8.00,
-      'comment': 3.00
+      'login_qr': 5,
+      'note': 8,
+      'comment': 3
     };
 
     // 查找所有没有snapshotPrice的记录
@@ -49,7 +49,7 @@ async function updateReviewPrices() {
     const sampleReviews = await ImageReview.find().limit(3);
     console.log('\n💰 价格示例:');
     sampleReviews.forEach(review => {
-      console.log(`  ${review.imageType}: ¥${review.snapshotPrice}`);
+      console.log(`  ${review.imageType}: ${review.snapshotPrice}`);
     });
 
   } catch (error) {
