@@ -74,6 +74,9 @@ temp/
 #微信小程序
 project.private.config.json
 
+# KiloCode configuration
+.kilocode/
+
 # Archive files
 *.rar
 *.zip
