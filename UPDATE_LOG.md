@@ -67,6 +67,18 @@
 |------|---------|
 | `server/models/ClientHeartbeat.js` | 添加 `clientType` 字段 |
 | `server/routes/client.js` | 心跳接口支持 `clientType` 参数 |
+| `server/routes/client.js` | 新增 `GET /harvest/pending` 接口（采集客户端） |
+| `server/routes/client.js` | 新增 `POST /harvest/submit` 接口（提交评论线索） |
+| `server/routes/client.js` | 新增 `GET /discovery/keywords` 接口（发现客户端） |
+
+**新增API接口**：
+| 接口 | 方法 | 客户端 | 说明 |
+|------|------|--------|------|
+| `/pending-tasks` | GET | audit | 获取待审核任务（原有，保持兼容） |
+| `/harvest/pending` | GET | harvest | 获取待采集评论的笔记列表 |
+| `/harvest/submit` | POST | harvest | 提交采集到的评论线索 |
+| `/discovery/keywords` | GET | discovery | 获取搜索关键词列表 |
+| `/heartbeat` | POST | 全部 | 心跳接口（支持 clientType） |
 
 **兼容性**：
 - ✅ 保留原有 API 接口（旧客户端仍可运行）
