@@ -169,6 +169,29 @@ class ContinuousCheckService {
         const noteExists = validationResult.valid;
         let rewardPoints = 0;
 
+        // 处理Cookie失效的情况 - 不停止检查，只记录并更新下次检查时间
+        if (validationResult.cookieExpired) {
+          console.log(`⚠️ [持续检查] Cookie失效，稍后重试: ${review.noteUrl}，原因: ${validationResult.reason}`);
+
+          // 记录Cookie失效检查
+          await this.recordCheckResult(review._id, {
+            result: 'cookie_expired',
+            noteExists: false,
+            rewardPoints: 0,
+            errorMessage: validationResult.reason,
+            checkDuration: checkDuration,
+            attempt: attempt
+          });
+
+          // 更新下次检查时间（1小时后重试）
+          await ImageReview.findByIdAndUpdate(review._id, {
+            'continuousCheck.nextCheckTime': new Date(Date.now() + 60 * 60 * 1000)
+          });
+
+          // 返回特殊标记，让重试机制继续工作
+          return { success: false, rewardPoints: 0, cookieExpired: true, retryable: true };
+        }
+
         if (noteExists) {
           // 从笔记任务配置中获取每日奖励积分
           const TaskConfig = require('../models/TaskConfig');

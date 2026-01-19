@@ -200,6 +200,17 @@ router.post('/:id/review', authenticateToken, requireRole(['mentor', 'manager', 
       // 所有类型人工审核通过后直接完成（一次审核）
       review.status = 'manager_approved';
 
+      // 如果是笔记类型，启用持续检查
+      if (review.imageType === 'note') {
+        const firstCheckTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        review.continuousCheck = {
+          enabled: true,
+          status: 'active',
+          nextCheckTime: firstCheckTime
+        };
+        console.log(`✅ [单次审核] 笔记类型审核通过，已启用持续检查，reviewId: ${review._id}`);
+      }
+
       // 人工审核通过时发放任务积分（根据类型）
       let typeKey;
       if (review.imageType === 'customer_resource') {
@@ -1579,8 +1590,9 @@ router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manag
     const pageNum = parseInt(page);
 
     // AI自动审核记录只显示笔记类型，不显示评论；排除主管驳回重审
+    // 注意：由于笔记类型跳过服务器AI审核，使用 skip_server_audit action
     let query = {
-      'auditHistory.action': 'ai_auto_approved',
+      'auditHistory.action': 'skip_server_audit',
       imageType: 'note',  // 只显示笔记，评论不需要持续检查
       status: { $ne: 'manager_rejected' }  // 排除主管驳回重审的记录
     };

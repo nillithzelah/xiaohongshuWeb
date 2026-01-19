@@ -89,6 +89,16 @@ class XiaohongshuService {
       // 4. 检查笔记状态（是否存在、是否公开等）
       const noteStatus = await this.getNoteStatus(noteId, noteUrl);
       if (!noteStatus.exists) {
+        // 如果是Cookie失效导致的问题，返回特殊标记让持续检查可以重试
+        if (noteStatus.status === 'login_required') {
+          return {
+            valid: false,
+            reason: noteStatus.reason || 'Cookie可能已失效',
+            noteStatus: noteStatus,
+            cookieExpired: true, // 标记为Cookie失效，可重试
+            retryable: true
+          };
+        }
         return {
           valid: false,
           reason: noteStatus.reason || '笔记不存在或已被删除',
@@ -315,16 +325,10 @@ class XiaohongshuService {
 
   /**
    * 检查笔记页面是否可访问
+   * 优化：先不带Cookie访问（公开笔记不需要），失败后再带Cookie重试
    */
   async checkNotePage(url) {
     try {
-      // 构建请求头，如果有cookie则添加
-      const requestHeaders = { ...this.headers };
-      const cookie = await this.getCookie();
-      if (cookie) {
-        requestHeaders.Cookie = cookie;
-      }
-
       // 检查请求限流
       const rateLimiter = require('./RateLimiter');
       const limitResult = await rateLimiter.checkLimit();
@@ -334,6 +338,40 @@ class XiaohongshuService {
           accessible: false,
           reason: limitResult.reason || '请求过于频繁，请稍后重试'
         };
+      }
+
+      // 第一次尝试：不带Cookie访问（公开笔记和短链接不需要Cookie）
+      let response = await this._tryAccessPage(url, false);
+
+      // 如果不带Cookie访问失败，且是因为需要登录，则带Cookie重试
+      if (!response.accessible && response.requiresLogin) {
+        console.log('🔄 [笔记访问] 不带Cookie访问需要登录，尝试带Cookie访问');
+        response = await this._tryAccessPage(url, true);
+      }
+
+      return response;
+
+    } catch (error) {
+      console.error('页面访问失败:', error.message);
+      return {
+        accessible: false,
+        reason: error.message
+      };
+    }
+  }
+
+  /**
+   * 尝试访问页面（可选择是否带Cookie）
+   */
+  async _tryAccessPage(url, withCookie) {
+    try {
+      const requestHeaders = { ...this.headers };
+
+      if (withCookie) {
+        const cookie = await this.getCookie();
+        if (cookie) {
+          requestHeaders.Cookie = cookie;
+        }
       }
 
       const response = await axios.get(url, {
@@ -353,6 +391,19 @@ class XiaohongshuService {
       // 检查页面内容是否包含笔记相关信息
       const $ = cheerio.load(response.data);
       const title = $('title').text();
+      const pageData = response.data.toLowerCase();
+
+      // 检测是否是登录页面
+      const loginPatterns = ['登录后推荐', '扫码登录', '请先登录', '登录后即可查看'];
+      const hasLoginPattern = loginPatterns.some(p => pageData.includes(p.toLowerCase()));
+
+      if (hasLoginPattern && !withCookie) {
+        // 不带Cookie时检测到登录页面，标记需要重试
+        return {
+          accessible: false,
+          requiresLogin: true
+        };
+      }
 
       // 如果页面标题包含"小红书"或笔记相关信息，说明页面正常
       if (title && (title.includes('小红书') || title.includes('笔记'))) {
@@ -375,7 +426,13 @@ class XiaohongshuService {
       };
 
     } catch (error) {
-      console.error('页面访问失败:', error.message);
+      // 网络错误，可能是需要Cookie
+      if (error.response && error.response.status === 403 && !withCookie) {
+        return {
+          accessible: false,
+          requiresLogin: true
+        };
+      }
       return {
         accessible: false,
         reason: error.message
@@ -792,20 +849,40 @@ class XiaohongshuService {
       const $ = cheerio.load(pageData);
       const title = $('title').text();
 
-      // 检测笔记不存在的情况
+      // 先检查是否是登录页面（Cookie失效）
+      const loginPatterns = ['登录后推荐', '扫码登录', '请先登录', '登录后即可查看'];
+      const pageText = pageData.toLowerCase() + title.toLowerCase();
+      const hasLoginPattern = loginPatterns.some(pattern =>
+        pageText.includes(pattern.toLowerCase())
+      );
+
+      if (hasLoginPattern) {
+        // 检测到登录页面，Cookie可能失效
+        // 返回错误状态，让调用者重试，而不是判定笔记不存在
+        console.log(`⚠️ [笔记状态] 检测到登录页面，Cookie可能失效: ${noteId}`);
+        return {
+          exists: false,
+          noteId,
+          status: 'login_required',
+          reason: '需要登录，Cookie可能已失效',
+          retryable: true // 标记为可重试
+        };
+      }
+
+      // 检测笔记明确不存在的情况（不包括登录相关）
       const notExistPatterns = [
         '笔记不存在',
         '内容已删除',
         '内容违规',
         '该内容已被作者删除',
         '该内容暂不可见',
+        '该内容暂时无法查看',
         '404',
         '页面不存在',
         '抱歉，你访问的内容不见了',
-        '登录后推荐' // 如果页面只有登录提示，说明笔记可能不可访问
+        '当前笔记暂时无法浏览'
       ];
 
-      const pageText = pageData.toLowerCase() + title.toLowerCase();
       const hasNotExistPattern = notExistPatterns.some(pattern =>
         pageText.includes(pattern.toLowerCase())
       );
@@ -823,7 +900,7 @@ class XiaohongshuService {
       const hasNoteContent = pageData.includes('note-text') ||
                              pageData.includes('content') ||
                              pageData.includes('desc') ||
-                             title.includes('小红书') && !title.includes('登录');
+                             (title.includes('小红书') && !title.includes('登录'));
 
       if (!hasNoteContent && pageData.length < 5000) {
         // 页面内容过短且没有笔记内容，可能是错误页面

@@ -2289,6 +2289,7 @@ router.post('/discovery/report', async (req, res) => {
       author,
       publishTime,
       keyword,
+      lastCommentTime,  // 新增：笔记内最新评论时间
       aiAnalysis,
       clientId
     } = req.body;
@@ -2305,27 +2306,38 @@ router.post('/discovery/report', async (req, res) => {
     console.log(`   URL: ${noteUrl}`);
     console.log(`   关键词: ${keyword || 'N/A'}`);
     console.log(`   AI结果: ${aiAnalysis?.is_genuine_victim_post ? '通过' : '未通过'}`);
+    if (lastCommentTime) {
+      console.log(`   最新评论: ${new Date(lastCommentTime).toLocaleString('zh-CN')}`);
+    }
+
+    // 构建更新数据
+    const updateData = {
+      noteUrl,
+      noteId,
+      title: title || '',
+      author: (author || '').replace(/关注$/, '').trim(),
+      publishTime: publishTime ? new Date(publishTime) : null,
+      keyword: keyword || '',
+      aiAnalysis: aiAnalysis || {
+        is_genuine_victim_post: false,
+        confidence_score: 0,
+        reason: ''
+      },
+      clientId: clientId || null,
+      // 根据AI分析结果设置状态
+      status: aiAnalysis?.is_genuine_victim_post ? 'verified' : 'discovered',
+      discoverTime: new Date()
+    };
+
+    // 如果提供了最新评论时间，更新它
+    if (lastCommentTime) {
+      updateData.lastCommentTime = new Date(lastCommentTime);
+    }
 
     // 使用 findOneAndUpdate 防止重复
     const note = await DiscoveredNote.findOneAndUpdate(
       { noteUrl },
-      {
-        noteUrl,
-        noteId,
-        title: title || '',
-        author: (author || '').replace(/关注$/, '').trim(),
-        publishTime: publishTime ? new Date(publishTime) : null,
-        keyword: keyword || '',
-        aiAnalysis: aiAnalysis || {
-          is_genuine_victim_post: false,
-          confidence_score: 0,
-          reason: ''
-        },
-        clientId: clientId || null,
-        // 根据AI分析结果设置状态
-        status: aiAnalysis?.is_genuine_victim_post ? 'verified' : 'discovered',
-        discoverTime: new Date()
-      },
+      updateData,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
@@ -2508,64 +2520,17 @@ router.put('/discovery/:id/short-url', authenticateToken, async (req, res) => {
   }
 });
 
-// ==================== 评论采集队列管理 ====================
-
-/**
- * 获取待采集评论的笔记列表
- * GET /xiaohongshu/api/client/harvest/pending
- *
- * 返回10天内创建/编辑的、需要采集评论但尚未采集的笔记
- */
-router.get('/harvest/pending', async (req, res) => {
-  try {
-    const { limit = 10 } = req.query;
-
-    // 计算10天前的时间点
-    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
-
-    // 查询待采集评论的笔记：
-    // 1. needsCommentHarvest = true (需要采集)
-    // 2. commentsHarvested != true (未采集过)
-    // 3. createdAt 在10天内
-    // 4. status 为 discovered 或 verified（已验证的笔记也需要采集评论）
-    const notes = await DiscoveredNote.find({
-      needsCommentHarvest: true,
-      commentsHarvested: { $ne: true },
-      createdAt: { $gte: tenDaysAgo },
-      status: { $in: ['discovered', 'verified'] }
-    })
-    .select('noteUrl noteId title author keyword createdAt')
-    .sort({ createdAt: -1 }) // 最旧的优先
-    .limit(parseInt(limit));
-
-    console.log(`📝 [采集队列] 返回 ${notes.length} 个待采集评论的笔记`);
-
-    res.json({
-      success: true,
-      data: {
-        notes: notes,
-        count: notes.length
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ [采集队列] 获取失败:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
 /**
  * 标记笔记评论已采集
  * POST /xiaohongshu/api/client/harvest/complete
  *
  * 客户端采集评论成功后调用
+ *
+ * 新增参数 lastCommentTime：笔记内最新评论的时间（用于计算下次采集间隔）
  */
 router.post('/harvest/complete', async (req, res) => {
   try {
-    const { noteUrl, commentCount = 0 } = req.body;
+    const { noteUrl, commentCount = 0, lastCommentTime } = req.body;
 
     if (!noteUrl) {
       return res.status(400).json({
@@ -2574,17 +2539,26 @@ router.post('/harvest/complete', async (req, res) => {
       });
     }
 
+    // 构建更新数据
+    const updateData = {
+      commentsHarvested: true,
+      commentsHarvestedAt: new Date(),
+      lastCommentCount: commentCount
+    };
+
+    // 如果提供了最新评论时间，更新它
+    if (lastCommentTime) {
+      updateData.lastCommentTime = new Date(lastCommentTime);
+    }
+
     const result = await DiscoveredNote.updateOne(
       { noteUrl: noteUrl },
-      {
-        commentsHarvested: true,
-        commentsHarvestedAt: new Date(),
-        lastCommentCount: commentCount
-      }
+      updateData
     );
 
     if (result.matchedCount > 0) {
-      console.log(`✅ [采集队列] 已标记评论采集完成: ${noteUrl.substring(0, 60)}... (${commentCount}条)`);
+      const timeInfo = lastCommentTime ? ` (最新评论: ${new Date(lastCommentTime).toLocaleString('zh-CN')})` : '';
+      console.log(`✅ [采集队列] 已标记评论采集完成: ${noteUrl.substring(0, 60)}... (${commentCount}条)${timeInfo}`);
     }
 
     res.json({
@@ -3277,112 +3251,103 @@ router.post('/link-convert/fail', async (req, res) => {
  * GET /xiaohongshu/api/client/harvest/pending
  *
  * 专用于 harvest-client（评论采集客户端）
+ *
+ * 采集优先级分级（根据笔记内最新评论时间）：
+ * - 11小时内 → 最高级，每10分钟采集
+ * - 12小时-3天 → 第二级，每1小时采集
+ * - 3天-7天 → 第三级，每6小时采集
+ * - 7天以上 → 最低级，每12小时采集
  */
 router.get('/harvest/pending', async (req, res) => {
   try {
-    const { limit = 5, clientId, clientType } = req.query;
+    const { limit = 10 } = req.query;
 
-    // 从请求头也尝试读取
-    const headerClientType = req.headers['x-client-type'];
-    const finalClientType = clientType || headerClientType;
+    // 计算10天前的时间点
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
 
-    // 验证客户端类型
-    if (finalClientType && finalClientType !== 'harvest') {
-      return res.status(400).json({
-        success: false,
-        message: `此接口仅限 harvest-client 使用`
-      });
-    }
-
-    // 查找需要采集评论的笔记
-    // 条件：状态为 approved/completed，且近期有审核通过的评论任务
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-
-    // 查找最近审核通过的笔记
-    const notes = await ImageReview.find({
-      status: { $in: ['completed', 'approved'] },
-      imageType: 'comment',
-      noteUrl: { $exists: true, $ne: null },
-      updatedAt: { $gte: oneHourAgo }
+    // 查询所有需要采集的笔记
+    const notes = await DiscoveredNote.find({
+      needsCommentHarvest: true,
+      createdAt: { $gte: tenDaysAgo },
+      status: { $in: ['discovered', 'verified'] }
     })
-    .select('noteUrl userId updatedAt')
-    .sort({ updatedAt: -1 })
-    .limit(parseInt(limit));
+    .select('noteUrl noteId title author keyword commentsHarvestedAt lastCommentTime createdAt');
 
-    // 去重笔记URL
-    const uniqueNotes = [];
-    const seenUrls = new Set();
+    // 根据每个笔记的优先级判断是否可以采集
+    const now = new Date();
+    const readyNotes = [];
+
+    // 定义优先级计算函数
+    const calculatePriority = (note) => {
+      if (!note.lastCommentTime) return 1; // 没有评论时间记录，最低优先级
+
+      const hoursSinceLastComment = (now - note.lastCommentTime) / (1000 * 60 * 60);
+
+      if (hoursSinceLastComment <= 11) {
+        return 10; // 最高级 - 11小时内
+      } else if (hoursSinceLastComment <= 72) {
+        return 5;  // 第二级 - 12小时到3天
+      } else if (hoursSinceLastComment <= 168) {
+        return 2;  // 第三级 - 3天到7天
+      } else {
+        return 1;  // 最低级 - 7天以上
+      }
+    };
+
+    // 定义获取采集间隔（分钟）
+    const getIntervalMinutes = (note) => {
+      const priority = calculatePriority(note);
+      switch (priority) {
+        case 10: return 10;   // 10分钟
+        case 5:  return 60;   // 1小时
+        case 2:  return 360;  // 6小时
+        default: return 720;  // 12小时
+      }
+    };
 
     for (const note of notes) {
-      if (note.noteUrl && !seenUrls.has(note.noteUrl)) {
-        seenUrls.add(note.noteUrl);
-        uniqueNotes.push({
-          noteUrl: note.noteUrl,
-          userId: note.userId,
-          updatedAt: note.updatedAt
-        });
+      // 从未采集过，立即采集
+      if (!note.commentsHarvestedAt) {
+        readyNotes.push(note);
+        continue;
+      }
+
+      // 根据最后评论时间计算采集间隔
+      const intervalMinutes = getIntervalMinutes(note);
+      const nextHarvestTime = new Date(note.commentsHarvestedAt.getTime() + intervalMinutes * 60 * 1000);
+
+      // 检查是否到达采集时间
+      if (now >= nextHarvestTime) {
+        readyNotes.push(note);
       }
     }
 
-    console.log(`📥 [采集客户端] 返回 ${uniqueNotes.length} 个待采集笔记`);
+    // 按优先级排序（高优先级在前）
+    readyNotes.sort((a, b) => {
+      const priorityA = calculatePriority(a);
+      const priorityB = calculatePriority(b);
+      if (priorityA !== priorityB) {
+        return priorityB - priorityA;
+      }
+      // 优先级相同时，按创建时间排序（旧的优先）
+      return a.createdAt - b.createdAt;
+    });
+
+    // 限制返回数量
+    const limitedNotes = readyNotes.slice(0, parseInt(limit));
+
+    console.log(`📥 [采集客户端] 返回 ${limitedNotes.length} 个待采集评论的笔记 (查询了 ${notes.length} 个，准备就绪 ${readyNotes.length} 个)`);
 
     res.json({
       success: true,
       data: {
-        notes: uniqueNotes,
-        count: uniqueNotes.length
+        notes: limitedNotes,
+        count: limitedNotes.length
       }
     });
 
   } catch (error) {
-    console.error('❌ [采集客户端] 获取待采集笔记失败:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-/**
- * 提交采集到的评论线索
- * POST /xiaohongshu/api/client/harvest/submit
- *
- * 专用于 harvest-client 提交采集到的评论
- */
-router.post('/harvest/submit', async (req, res) => {
-  try {
-    const { noteUrl, comments, clientId, clientType } = req.body;
-
-    const headerClientType = req.headers['x-client-type'];
-    const finalClientType = clientType || headerClientType;
-
-    // 验证客户端类型
-    if (finalClientType && finalClientType !== 'harvest') {
-      return res.status(400).json({
-        success: false,
-        message: `此接口仅限 harvest-client 使用`
-      });
-    }
-
-    if (!noteUrl || !Array.isArray(comments)) {
-      return res.status(400).json({
-        success: false,
-        message: '缺少必要参数: noteUrl 或 comments'
-      });
-    }
-
-    console.log(`📥 [采集客户端] 收到 ${comments.length} 条评论线索: ${noteUrl}`);
-
-    res.json({
-      success: true,
-      data: {
-        received: comments.length,
-        noteUrl: noteUrl
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ [采集客户端] 提交评论失败:', error);
+    console.error('❌ [采集客户端] 获取失败:', error);
     res.status(500).json({
       success: false,
       message: error.message

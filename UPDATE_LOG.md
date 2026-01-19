@@ -1,5 +1,62 @@
 # UPDATE_LOG
 
+## 2026-01-19 采集优先级分级系统
+
+**需求**：根据笔记内最新评论时间动态调整采集间隔，提高热点评论采集效率
+
+**分级规则**：
+| 笔记内最新评论时间 | 优先级 | 采集间隔 |
+|------------------|-------|---------|
+| 11小时内 | 最高级 (10分) | 每 10 分钟 |
+| 12小时-3天 | 第二级 (5分) | 每 1 小时 |
+| 3天-7天 | 第三级 (2分) | 每 6 小时 |
+| 7天以上 | 最低级 (1分) | 每 12 小时 |
+
+**修改文件**：
+
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | `/harvest/pending` 改为动态间隔查询，按优先级排序 |
+| `server/routes/client.js` | `/harvest/complete` 接收并保存 `lastCommentTime` |
+| `xiaohongshu-audit-clients/harvest-client/services/CommentHarvestService.js` | 计算笔记内最新评论时间并传给后端 |
+| `admin/src/pages/DiscoveredNotes.js` | 采集优先级列和队列剩余时间列显示动态间隔 |
+
+**关键逻辑**：
+- 优先级基于 **笔记内最新评论时间** (`lastCommentTime`)，而非采集到的评论时间
+- 原有的采集评论业务逻辑不变（1小时过滤、黑名单、AI检测）
+- 同一笔记可以根据优先级重复采集
+
+**部署状态**：✅ 已同步到服务器并重启服务
+
+---
+
+## 2026-01-19 清理后端 client.js 死代码
+
+**原因**：发现重复路由和无人调用的接口，进行清理
+
+**修改内容**：
+
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | 删除旧版 `/harvest/pending` 重复路由（查 DiscoveredNote 的错误逻辑） |
+| `server/routes/client.js` | 删除死代码 `/harvest/submit`（harvest-client 实际调用的是 `/comments/submit`） |
+
+**删除的代码**：
+- ❌ 旧版 `/harvest/pending` GET（2511-2558 行，约 48 行）
+- ❌ 死代码 `/harvest/submit` POST（3298-3343 行，约 46 行）
+
+**保留的逻辑**：
+- ✅ 新版 `/harvest/pending` GET：从 `ImageReview` 查 1 小时内审核通过的笔记
+- ✅ `/comments/submit` POST：保存评论到 `CommentLead`
+- ✅ `/harvest/complete` POST：标记笔记采集完成
+
+**Harvest 采集逻辑**（1小时时间窗口）：
+1. 后端返回 1 小时内审核通过的笔记
+2. 客户端访问笔记，只采集 1 小时内的新评论
+3. 避免重复采集旧评论
+
+---
+
 ## 2026-01-19 移除笔记发现管理的转化功能
 
 **需求**：笔记发现和审核任务是两个独立系统，不需要转化功能
