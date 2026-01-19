@@ -95,5 +95,14 @@ Page({
     }).catch(() => {
       wx.stopPullDownRefresh()
     })
+  },
+
+  // 分享给朋友
+  onShareAppMessage() {
+    return {
+      title: '易交单 - 邀请好友',
+      path: '/pages/index/index',
+      imageUrl: ''
+    };
   }
 })

@@ -1,10 +1,33 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireRole } = require('../middleware/auth');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 
 console.log('🔧 auth路由已加载');
+
+// 登录速率限制 - 防止暴力破解
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15分钟
+  max: 20, // 限制每个IP 15分钟内最多20次登录尝试
+  message: { success: false, message: '登录尝试过多，请15分钟后再试' },
+  skipSuccessfulRequests: false
+});
+
+// 手机号登录专用限流器 - 更宽松的限制（适用于小程序频繁授权场景）
+const phoneLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15分钟
+  max: 50, // 15分钟内最多50次
+  message: { success: false, message: '手机号授权请求过于频繁，请稍后重试' },
+  skipSuccessfulRequests: false
+});
+
+// 从环境变量获取JWT密钥，如果未设置则抛出错误
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET环境变量必须设置且至少32个字符');
+}
 
 // 测试路由
 router.get('/test-auth', (req, res) => {
@@ -14,18 +37,52 @@ router.get('/test-auth', (req, res) => {
 
 // 生成JWT token
 const generateToken = (userId) => {
-  const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
 };
 
+// 刷新 Token 接口
+router.post('/refresh-token', async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ success: false, message: '未提供令牌' });
+    }
+
+    // 验证旧 token，允许过期（ignoreExpiration: true），但签名必须正确
+    const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true });
+
+    if (!decoded || !decoded.userId) {
+      return res.status(401).json({ success: false, message: '无效令牌' });
+    }
+
+    // 检查用户状态
+    const user = await User.findById(decoded.userId);
+    if (!user || user.is_deleted) {
+      return res.status(401).json({ success: false, message: '用户不存在或已被禁用' });
+    }
+
+    // 生成新 token
+    const newToken = generateToken(user._id);
+
+    res.json({
+      success: true,
+      token: newToken
+    });
+  } catch (error) {
+    console.error('❌ Token刷新错误:', error);
+    res.status(401).json({ success: false, message: '刷新失败' });
+  }
+});
+
 // 生成指定用户的JWT token（仅管理员可用，用于测试）
 const generateUserToken = (userId, username) => {
-  const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
   return jwt.sign({ userId, username }, JWT_SECRET, { expiresIn: '7d' });
 };
 
 // 微信小程序登录/注册
-router.post('/wechat-login', async (req, res) => {
+router.post('/wechat-login', loginLimiter, async (req, res) => {
   try {
     const { code, encryptedData, iv, phoneNumber: requestPhoneNumber } = req.body;
 
@@ -207,13 +264,27 @@ router.post('/wechat-login', async (req, res) => {
         console.error('📱 手机号解密失败:', decryptError.message);
         console.error('📱 解密错误详情:', decryptError);
 
-        // 解密失败不设置手机号，让用户重新授权
-        console.log('📱 解密失败，不设置手机号');
-        phoneNumber = null;
+        // 【修复】手机号解密失败时，返回错误而不是继续登录
+        // 这样前端可以区分"解密失败"和"用户确实没有手机号"
+        return res.status(400).json({
+          success: false,
+          message: '手机号解密失败，请重新授权',
+          errorCode: 'PHONE_DECRYPT_FAILED'
+        });
       }
     }
 
     let user;
+
+    // 【修复】必须要有手机号才能登录，防止解密失败导致的循环
+    if (!phoneNumber) {
+      console.warn('❌ 手机号解密失败或未获取，拒绝登录');
+      return res.status(400).json({
+        success: false,
+        message: '无法获取手机号，请重新授权',
+        errorCode: 'PHONE_NOT_OBTAINED'
+      });
+    }
 
     // 如果有手机号，优先通过手机号查找用户（实现手机号绑定）
     if (phoneNumber) {
@@ -240,24 +311,6 @@ router.post('/wechat-login', async (req, res) => {
           message: '该手机号尚未注册，请先通过账号密码注册或联系管理员'
         });
       }
-    } else {
-      // 没有手机号，通过openid查找（兼容旧逻辑）
-      user = await User.findOne({ openid });
-
-      if (!user) {
-        // 创建新用户
-        user = new User({
-          username: `user_${openid.substr(-8)}`,
-          openid,
-          role: 'part_time',
-          phone: null,
-          points: 0
-        });
-        await user.save();
-        console.log('👤 创建微信用户:', user.username);
-      } else {
-        console.log('🔄 微信用户已存在:', user.username);
-      }
     }
 
     const token = generateToken(user._id);
@@ -269,8 +322,9 @@ router.post('/wechat-login', async (req, res) => {
         id: user.username, // 使用username作为id，与小程序兼容
         username: user.username,
         role: user.role,
+        nickname: user.nickname, // 【修复】添加 nickname 字段，与其他接口保持一致
         phone: user.phone,
-        points: user.points,
+        points: user.points || 0,
         totalWithdrawn: user.wallet?.total_withdrawn || 0
       }
     });
@@ -337,7 +391,7 @@ router.post('/wechat-login', async (req, res) => {
 //   });
 // });
 
-// 管理员登录路由
+// 管理员登录路由 (临时禁用登录限制测试)
 router.post('/admin-login', async (req, res) => {
   try {
     console.log('🎯 收到管理员登录请求:', req.body);
@@ -385,12 +439,8 @@ router.post('/admin-login', async (req, res) => {
       console.log(`🔐 bcrypt验证结果: ${isPasswordValid}`);
     } else {
       // 如果用户没有密码，允许开发环境下登录（空密码或admin123）
-      console.log('⚠️ 用户无密码，检查开发环境规则');
       if (password === '' || password === 'admin123') {
         isPasswordValid = true;
-        console.log(`⚠️ 允许开发环境登录`);
-      } else {
-        console.log(`❌ 密码不符合开发环境规则: "${password}"`);
       }
     }
 
@@ -400,20 +450,20 @@ router.post('/admin-login', async (req, res) => {
     }
 
     // 生成token
-    console.log('🎫 生成JWT token...');
-    const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    console.log('✅ token生成成功');
 
     console.log('📤 发送登录成功响应');
     res.json({
       success: true,
       token,
       user: {
-        id: user._id,
+        id: user.username, // 【修复】统一使用 username 作为 id，与其他接口保持一致
         username: user.username,
         role: user.role,
-        nickname: user.nickname
+        nickname: user.nickname,
+        phone: user.phone, // 【修复】添加 phone 字段，与前端检查逻辑兼容
+        points: user.points || 0,
+        totalWithdrawn: user.wallet?.total_withdrawn || 0
       }
     });
 
@@ -439,7 +489,7 @@ router.post('/register', authenticateToken, async (req, res) => {
       'boss': ['part_time', 'mentor', 'hr', 'manager', 'finance'], // 老板可以创建所有角色
       'manager': ['part_time', 'mentor', 'hr'], // 经理管理 兼职、带教、HR
       'hr': ['part_time', 'lead'], // HR 负责招募 兼职 和 线索
-      'mentor': [], // 带教老师只负责带人，不负责建号
+      'mentor': ['part_time'], // 带教老师可以创建兼职用户
       'finance': [], // 财务禁止创建任何用户
       'part_time': [] // 兼职用户禁止创建任何用户
     };
@@ -485,7 +535,14 @@ router.post('/register', authenticateToken, async (req, res) => {
         const registrationTime = new Date();
         const daysBefore = Math.floor(Math.random() * 7) + 1; // 1-7天
         return new Date(registrationTime.getTime() - daysBefore * 24 * 60 * 60 * 1000);
-      })() : null
+      })() : null,
+      // 支付宝二维码存储在 wallet 对象中
+      wallet: {
+        alipay_account: req.body.integral_w || null,
+        real_name: req.body.integral_z || null,
+        alipay_qr_code: req.body.alipay_qr_code || null,
+        total_withdrawn: 0
+      }
     });
 
     await newUser.save();
@@ -553,7 +610,7 @@ router.post('/generate-user-token', authenticateToken, async (req, res) => {
 });
 
 // 手机号快速验证登录
-router.post('/phone-login', async (req, res) => {
+router.post('/phone-login', phoneLoginLimiter, async (req, res) => {
   try {
     const { phoneNumber } = req.body;
 
@@ -574,17 +631,13 @@ router.post('/phone-login', async (req, res) => {
       // 找到匹配的兼职用户，直接使用
       console.log('🔗 匹配到已有兼职用户:', user.username, phoneNumber);
     } else {
-      // 没有找到匹配的兼职用户，创建新用户
-      const username = `phone_${phoneNumber.slice(-4)}`; // 使用手机号后4位作为用户名
-      user = new User({
-        username,
-        phone: phoneNumber,
-        role: 'part_time',
-        points: 0,
-        nickname: `用户${phoneNumber.slice(-4)}` // 默认昵称
+      // 没有找到匹配的兼职用户，拒绝自动创建（修复：防止用户名重复问题）
+      console.log('❌ 手机号未注册，拒绝登录:', phoneNumber);
+      return res.status(404).json({
+        success: false,
+        message: '该手机号未注册，请联系管理员获取注册链接',
+        needRegister: true
       });
-      await user.save();
-      console.log('👤 创建新手机号用户:', username, phoneNumber);
     }
 
     const token = generateToken(user._id);
@@ -609,7 +662,7 @@ router.post('/phone-login', async (req, res) => {
   }
 });
 
-// 用户注册（需要手机号验证）
+// 用户注册（第三方APK使用）
 router.post('/user-register', async (req, res) => {
   try {
     const { phoneNumber, username, password, nickname, invitationCode } = req.body;
@@ -638,27 +691,6 @@ router.post('/user-register', async (req, res) => {
       return res.status(400).json({ success: false, message: '密码至少需要6位字符' });
     }
 
-    // 检查手机号是否已在后端存在
-    const existingPhoneUser = await User.findOne({
-      phone: phoneNumber,
-      is_deleted: { $ne: true }
-    });
-
-    if (!existingPhoneUser) {
-      return res.status(400).json({
-        success: false,
-        message: '该手机号尚未在系统中注册，请先通过手机号一键登录创建账号'
-      });
-    }
-
-    // 检查手机号是否已被其他账号绑定（防止重复注册）
-    if (existingPhoneUser.username && existingPhoneUser.password) {
-      return res.status(400).json({
-        success: false,
-        message: '该手机号已被注册账号，请直接登录'
-      });
-    }
-
     // 检查用户名是否已被使用
     const existingUsernameUser = await User.findOne({
       username,
@@ -669,79 +701,131 @@ router.post('/user-register', async (req, res) => {
       return res.status(400).json({ success: false, message: '用户名已被使用' });
     }
 
-    console.log('✅ 手机号验证通过，更新用户账号信息');
+    // 检查手机号是否已被使用
+    const existingPhoneUser = await User.findOne({
+      phone: phoneNumber,
+      is_deleted: { $ne: true }
+    });
 
-    // 处理邀请码（如果提供）
-    let parentUser = null;
-    if (invitationCode && invitationCode.trim()) {
-      console.log('🔍 验证邀请码:', invitationCode);
-      parentUser = await User.findOne({
-        username: invitationCode.trim(),
-        is_deleted: { $ne: true }
+    let user;
+
+    if (existingPhoneUser) {
+      // 手机号已存在，检查是否已设置用户名密码
+      if (existingPhoneUser.username && existingPhoneUser.password) {
+        return res.status(400).json({
+          success: false,
+          message: '该手机号已被注册账号，请直接登录'
+        });
+      }
+
+      // 手机号存在但未设置用户名密码
+      console.log('📱 手机号已存在，更新账号信息:', existingPhoneUser.username);
+
+      // 检查用户是否已被分配给带教老师（HR创建的线索）
+      const isAssignedToMentor = existingPhoneUser.mentor_id !== null
+        && existingPhoneUser.mentor_id !== undefined;
+
+      if (isAssignedToMentor) {
+        console.log('📋 用户已被分配给带教老师，更新账号信息并保留系统设置');
+
+        // 对于已分配用户，只更新用户主动设置的信息
+        // 保留HR和主管设置的系统信息（如微信、小红书账号、mentor_id等）
+        existingPhoneUser.username = username;
+        existingPhoneUser.password = password;
+
+        // 如果用户提供了昵称，则更新；否则保持原有昵称
+        if (nickname && nickname.trim()) {
+          existingPhoneUser.nickname = nickname.trim();
+        }
+
+        // 如果提供了邀请码，设置上级用户（但不覆盖已有的mentor分配）
+        if (invitationCode && invitationCode.trim() && !existingPhoneUser.parent_id) {
+          const parentUser = await User.findOne({
+            username: invitationCode.trim(),
+            is_deleted: { $ne: true }
+          });
+          if (parentUser) {
+            existingPhoneUser.parent_id = parentUser._id;
+            console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
+          }
+        }
+
+        console.log('🔄 已分配用户账号信息更新完成，保留系统配置');
+      } else {
+        console.log('🆕 临时账号，设置完整账号信息');
+
+        // 对于临时账号（如phone-login创建的），设置完整的账号信息
+        existingPhoneUser.username = username;
+        existingPhoneUser.password = password;
+        existingPhoneUser.nickname = nickname || username;
+        existingPhoneUser.role = existingPhoneUser.role || 'part_time';
+
+        // 处理邀请码
+        if (invitationCode && invitationCode.trim()) {
+          const parentUser = await User.findOne({
+            username: invitationCode.trim(),
+            is_deleted: { $ne: true }
+          });
+          if (parentUser) {
+            existingPhoneUser.parent_id = parentUser._id;
+            console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
+          }
+        }
+      }
+
+      await existingPhoneUser.save();
+      user = existingPhoneUser;
+      console.log('👤 更新用户成功:', username, phoneNumber);
+    } else {
+      // 手机号不存在，创建新用户
+      console.log('🆕 创建新用户:', username, phoneNumber);
+
+      // 处理邀请码
+      let parentId = null;
+      if (invitationCode && invitationCode.trim()) {
+        const parentUser = await User.findOne({
+          username: invitationCode.trim(),
+          is_deleted: { $ne: true }
+        });
+
+        if (!parentUser) {
+          return res.status(400).json({ success: false, message: '邀请码无效，请检查后重新输入' });
+        }
+        parentId = parentUser._id;
+        console.log('✅ 邀请码验证通过，上级用户:', parentUser.username);
+      }
+
+      // 创建新用户
+      user = new User({
+        username,
+        password,
+        phone: phoneNumber,
+        nickname: nickname || username,
+        role: 'part_time',
+        points: 0,
+        parent_id: parentId,
+        training_status: '已筛选' // 自动设置培训状态
       });
 
-      if (!parentUser) {
-        return res.status(400).json({ success: false, message: '邀请码无效，请检查后重新输入' });
-      }
-      console.log('✅ 邀请码验证通过，上级用户:', parentUser.username);
+      await user.save();
+      console.log('👤 新用户注册成功:', username, phoneNumber);
     }
-
-    // 检查用户是否已被分配给带教老师
-    const isAssignedToMentor = existingPhoneUser.mentor_id !== null && existingPhoneUser.mentor_id !== undefined;
-
-    if (isAssignedToMentor) {
-      console.log('📋 用户已被分配给带教老师，更新账号信息并保留系统设置');
-
-      // 对于已分配用户，只更新用户主动设置的信息
-      // 保留HR和主管设置的系统信息（如微信、小红书账号等）
-      existingPhoneUser.username = username;
-      existingPhoneUser.password = password; // 会通过pre save中间件自动加密
-
-      // 如果用户提供了昵称，则更新；否则保持原有昵称
-      if (nickname && nickname.trim()) {
-        existingPhoneUser.nickname = nickname.trim();
-      }
-
-      // 如果提供了邀请码，设置上级用户（但不覆盖已有的mentor分配）
-      if (parentUser && !existingPhoneUser.parent_id) {
-        existingPhoneUser.parent_id = parentUser._id;
-        console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
-      }
-
-      console.log('🔄 已分配用户账号信息更新完成，保留系统配置');
-    } else {
-      console.log('🆕 新线索用户，设置完整账号信息');
-
-      // 对于新线索用户，设置完整的账号信息
-      existingPhoneUser.username = username;
-      existingPhoneUser.password = password; // 会通过pre save中间件自动加密
-      existingPhoneUser.nickname = nickname || username;
-
-      // 设置上级用户（通过邀请码）
-      if (parentUser) {
-        existingPhoneUser.parent_id = parentUser._id;
-        console.log('👨‍👩‍👧‍👦 新用户通过邀请码设置上级用户:', parentUser.username);
-      }
-    }
-
-    await existingPhoneUser.save();
-    console.log('👤 用户注册成功:', username, phoneNumber, isAssignedToMentor ? '(已分配)' : '(新用户)');
 
     // 自动登录，返回token
-    const token = generateToken(existingPhoneUser._id);
+    const token = generateToken(user._id);
 
     res.json({
       success: true,
       message: '注册成功',
       token,
       user: {
-        id: existingPhoneUser.username,
-        username: existingPhoneUser.username,
-        role: existingPhoneUser.role,
-        phone: existingPhoneUser.phone,
-        nickname: existingPhoneUser.nickname,
-        points: existingPhoneUser.points,
-        totalWithdrawn: existingPhoneUser.wallet?.total_withdrawn || 0
+        id: user.username,
+        username: user.username,
+        role: user.role,
+        phone: user.phone,
+        nickname: user.nickname,
+        points: user.points || 0,
+        totalWithdrawn: user.wallet?.total_withdrawn || 0
       }
     });
 
@@ -785,7 +869,7 @@ router.get('/check-phone', async (req, res) => {
 });
 
 // 账号密码登录
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { phoneNumber, password } = req.body;
 
@@ -853,6 +937,49 @@ router.post('/logout', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('登出错误:', error);
     res.status(500).json({ success: false, message: '登出失败' });
+  }
+});
+
+// 重新激活Cookie（管理员权限）
+router.post('/reactivate-cookie', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const asyncAiReviewService = require('../services/asyncAiReviewService');
+
+    console.log(`用户 ${req.user.username} (${req.user.role}) 请求重新激活Cookie`);
+
+    // 重新激活Cookie
+    asyncAiReviewService.reactivateCookie();
+
+    // 获取当前Cookie状态
+    const cookieStatus = asyncAiReviewService.getCookieStatus();
+
+    res.json({
+      success: true,
+      message: 'Cookie已重新激活，AI审核服务已恢复',
+      data: cookieStatus
+    });
+
+  } catch (error) {
+    console.error('重新激活Cookie错误:', error);
+    res.status(500).json({ success: false, message: '重新激活Cookie失败' });
+  }
+});
+
+// 获取Cookie状态
+router.get('/cookie-status', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const asyncAiReviewService = require('../services/asyncAiReviewService');
+
+    const cookieStatus = asyncAiReviewService.getCookieStatus();
+
+    res.json({
+      success: true,
+      data: cookieStatus
+    });
+
+  } catch (error) {
+    console.error('获取Cookie状态错误:', error);
+    res.status(500).json({ success: false, message: '获取Cookie状态失败' });
   }
 });
 

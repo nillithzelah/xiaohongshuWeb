@@ -40,7 +40,7 @@
           <view class="user-avatar">👤</view>
           <view class="user-info">
             <text class="user-name">{{item.nickname || item.username}}</text>
-            <text class="user-role">加入时间: {{item.joinedAt.substring(0,10)}}</text>
+            <text class="user-role">已贡献佣金: ¥{{item.contributedCommission || 0}}</text>
           </view>
         </view>
       </view>
@@ -56,7 +56,7 @@
           <view class="user-avatar">👤</view>
           <view class="user-info">
             <text class="user-name">{{item.nickname || item.username}}</text>
-            <text class="user-role">加入时间: {{item.joinedAt.substring(0,10)}}</text>
+            <text class="user-role">已贡献佣金: ¥{{item.contributedCommission || 0}}</text>
           </view>
         </view>
       </view>

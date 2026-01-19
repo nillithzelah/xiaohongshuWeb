@@ -181,5 +181,19 @@
     </view>
   </view>
 
-  <!-- 服务条款提示 - 已删除 -->
+  <!-- 错误提示模态框 -->
+  <view class="error-modal {{showErrorModal ? 'show' : ''}}" bindtap="closeErrorModal">
+    <view class="error-modal-content" catchtap="">
+      <view class="error-modal-header">
+        <text class="error-icon">⚠️</text>
+        <text class="error-title">操作失败</text>
+      </view>
+      <view class="error-modal-body">
+        <text class="error-message">{{errorMessage}}</text>
+      </view>
+      <view class="error-modal-footer">
+        <button class="error-modal-btn" bindtap="closeErrorModal">知道了</button>
+      </view>
+    </view>
+  </view>
 </view>

@@ -116,10 +116,10 @@ Page({
 
           this.setData({
             userInfo: preloadData.data.user,
-            points: preloadData.data.user.points || 0, // 显示积分（直接显示原始数字）
-            totalEarned: totalWithdrawnRaw * 100, // 总获得金额（直接显示原始数字，不转换）
-            totalWithdrawn: totalWithdrawnRaw, // 已提现金额（直接显示原始数字，不转换）
-            pendingAmount: preloadData.data.user.pendingAmount *100 || 0 // 待兑换金额（直接显示原始数字，不转换）
+            points: preloadData.data.user.points || 0,
+            totalEarned: (totalWithdrawnRaw / 100).toFixed(2),  // 后端返回的是分，显示时除以100转为元
+            totalWithdrawn: (totalWithdrawnRaw / 100).toFixed(2),  // 已提现金额
+            pendingAmount: ((preloadData.data.user.pendingAmount || 0) / 100).toFixed(2)  // 服务器返回分，显示时除以100转为元
           });
           console.log('📱 页面数据已更新（预加载）');
           return; // 使用预加载数据后直接返回
@@ -146,10 +146,10 @@ Page({
 
         this.setData({
           userInfo: res.data.user,
-          points: res.data.user.points || 0, // 显示积分（直接显示原始数字）
-          totalEarned: totalWithdrawnRaw * 100, // 总获得金额（直接显示原始数字，不转换）
-          totalWithdrawn: totalWithdrawnRaw, // 已提现金额（直接显示原始数字，不转换）
-          pendingAmount: res.data.user.pendingAmount *100 || 0 // 待兑换金额（直接显示原始数字，不转换）
+          points: res.data.user.points || 0,
+          totalEarned: (totalWithdrawnRaw / 100).toFixed(2),  // 后端返回的是分，显示时除以100转为元
+          totalWithdrawn: (totalWithdrawnRaw / 100).toFixed(2),  // 已提现金额
+          pendingAmount: ((res.data.user.pendingAmount || 0) / 100).toFixed(2)  // 服务器返回分，显示时除以100转为元
         });
         console.log('📱 页面数据已更新');
 
@@ -254,6 +254,91 @@ Page({
     });
   },
 
+  // 修改密码
+  changePassword: function() {
+    wx.showModal({
+      title: '修改密码',
+      editable: true,
+      placeholderText: '请输入新密码（至少6位）',
+      success: (res) => {
+        if (res.confirm) {
+          const newPassword = res.content;
+          if (!newPassword || newPassword.trim().length < 6) {
+            wx.showToast({
+              title: '密码至少需要6位',
+              icon: 'none'
+            });
+            return;
+          }
+          this.doChangePassword(newPassword.trim());
+        }
+      }
+    });
+  },
+
+  // 执行修改密码
+  doChangePassword: function(newPassword) {
+    const token = app.getCurrentToken();
+    if (!token) {
+      wx.showToast({
+        title: '请先登录',
+        icon: 'none'
+      });
+      return;
+    }
+
+    wx.showLoading({
+      title: '修改中...'
+    });
+
+    app.request({
+      url: CONFIG.API_BASE_URL + '/xiaohongshu/api/user/change-password',
+      method: 'PUT',
+      header: {
+        'Authorization': `Bearer ${token}`
+      },
+      data: {
+        newPassword: newPassword
+      }
+    }).then(res => {
+      wx.hideLoading();
+      if (res.data && res.data.success) {
+        wx.showModal({
+          title: '修改成功',
+          content: '密码已修改，请重新登录',
+          showCancel: false,
+          success: () => {
+            // 清除本地存储
+            app.tokenManager.clear();
+            wx.removeStorageSync('userInfo');
+            wx.removeStorageSync('loginType');
+
+            // 清除全局数据
+            app.globalData.userInfo = null;
+            app.globalData.token = null;
+
+            // 跳转到登录页
+            wx.redirectTo({
+              url: '/pages/login/login'
+            });
+          }
+        });
+      } else {
+        wx.showToast({
+          title: res.data?.message || '修改失败',
+          icon: 'none'
+        });
+      }
+    }).catch(err => {
+      wx.hideLoading();
+      console.log('修改密码失败:', err);
+      wx.showToast({
+        title: '网络错误，请重试',
+        icon: 'none'
+      });
+    });
+  },
+
   // 登出
   logout: function() {
     wx.showModal({
@@ -310,6 +395,12 @@ Page({
     });
   },
 
-
-
-})
+  // 分享给朋友
+  onShareAppMessage() {
+    return {
+      title: '易交单',
+      path: '/pages/index/index',
+      imageUrl: ''
+    };
+  }
+});

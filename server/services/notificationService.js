@@ -91,7 +91,7 @@ class NotificationService {
     const imageTypeText = typeMap[review.imageType] || review.imageType;
 
     if (newStatus === 'rejected') {
-      return `您的${imageTypeText}审核未通过`;
+      return `当前帖子评论区无法检测到你的评论（请用其他号观察）`;
     } else if (newStatus === 'completed') {
       return `您的${imageTypeText}审核已完成，打款处理中`;
     } else {

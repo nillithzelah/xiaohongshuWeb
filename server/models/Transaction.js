@@ -27,6 +27,9 @@ const transactionSchema = new mongoose.Schema({
     enum: ['task_reward', 'referral_bonus', 'referral_bonus_1', 'referral_bonus_2', 'withdrawal', 'point_exchange'],
     index: true
   },
+  description: {
+    type: String
+  },
   status: {
     type: String,
     required: true,
@@ -65,11 +68,7 @@ const transactionSchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: () => {
-      const now = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
-      return new Date(now.getTime() + beijingOffset);
-    },
+    default: Date.now,
     index: true
   }
 });

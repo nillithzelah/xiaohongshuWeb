@@ -116,10 +116,48 @@ const imageReviewSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // 本地客户端处理锁定（防止多设备重复处理）
+  processingLock: {
+    clientId: String,      // 客户端唯一标识
+    lockedAt: Date,        // 锁定开始时间
+    heartbeatAt: Date,     // 最后心跳时间
+    lockedUntil: Date      // 锁定截止时间（超时自动释放）
+  },
   status: {
     type: String,
-    enum: ['pending', 'mentor_approved', 'manager_rejected', 'manager_approved', 'finance_processing', 'completed', 'rejected'],
+    enum: ['pending', 'processing', 'ai_approved', 'mentor_approved', 'manager_rejected', 'manager_approved', 'finance_processing', 'completed', 'rejected', 'client_verification_pending', 'client_verification_failed'],
     default: 'pending'
+  },
+  // 客户端验证尝试信息（用于本地客户端验证流程）
+  clientVerification: {
+    attempt: {
+      type: Number,
+      default: 1,
+      min: 1,
+      max: 2
+    },
+    firstResult: {
+      success: Boolean,
+      verified: Boolean,
+      comment: String,
+      verifiedAt: Date,
+      screenshotUrl: String
+    },
+    secondResult: {
+      success: Boolean,
+      verified: Boolean,
+      comment: String,
+      verifiedAt: Date,
+      screenshotUrl: String
+    },
+    readyForSecondAttempt: {
+      type: Boolean,
+      default: false
+    },
+    secondAttemptReadyAt: {
+      type: Date,
+      default: null
+    }
   },
   mentorReview: {
     reviewer: {
@@ -161,7 +199,8 @@ const imageReviewSchema = new mongoose.Schema({
     operatorName: String, // 操作人姓名
     action: {
       type: String,
-      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'ai_auto_approved', 'daily_check_passed', 'daily_check_failed', 'note_deleted']
+      enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'ai_auto_approved', 'ai_auto_rejected', 'daily_check_passed', 'daily_check_failed', 'note_deleted', 'points_reward', 'commission_reward', 'local_client_passed', 'local_client_rejected',
+        'review_start', 'review_delay', 'review_wait_complete', 'page_content_extracted', 'keyword_check', 'ai_content_analysis', 'await_client_verification', 'keyword_check_failed', 'ai_content_analysis_failed', 'system_error_rejected', 'skip_server_audit']
     },
     comment: String, // 操作意见
     timestamp: {
@@ -177,7 +216,7 @@ const imageReviewSchema = new mongoose.Schema({
     },
     status: {
       type: String,
-      enum: ['active', 'inactive', 'deleted'], // active: 笔记存在，继续检查; inactive: 暂停检查; deleted: 笔记已删除，停止检查
+      enum: ['active', 'inactive', 'deleted', 'expired'], // active: 笔记存在，继续检查; inactive: 暂停检查; deleted: 笔记已删除，停止检查; expired: 超过检查期限
       default: 'inactive'
     },
     lastCheckTime: Date, // 最后检查时间
@@ -209,11 +248,7 @@ const imageReviewSchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: () => {
-      const now = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
-      return new Date(now.getTime() + beijingOffset);
-    }
+    default: Date.now // 使用UTC时间存储
   }
 });
 
@@ -226,15 +261,32 @@ function arrayLimit(val) {
 // imageReviewSchema.set('toJSON', { getters: true, virtuals: false });
 // imageReviewSchema.set('toObject', { getters: true, virtuals: false });
 
-// 索引
+// 索引 - 优化查询性能
 imageReviewSchema.index({ userId: 1, createdAt: -1 });
 imageReviewSchema.index({ status: 1 });
+imageReviewSchema.index({ imageType: 1 });
 imageReviewSchema.index({ 'imageUrls': 1 }); // 新增图片数组索引
 imageReviewSchema.index({ 'imageMd5s': 1 }); // 新增MD5数组索引
+
 // 用户账号评论限制查询索引
 imageReviewSchema.index({ userId: 1, imageType: 1, noteUrl: 1, status: 1 });
+
 // 昵称评论限制查询索引
 imageReviewSchema.index({ 'aiParsedNoteInfo.author': 1, imageType: 1, noteUrl: 1, status: 1 });
+
+// 审核相关索引 - 优化审核查询性能
+imageReviewSchema.index({ 'mentorReview.reviewer': 1 });
+imageReviewSchema.index({ 'auditHistory.operator': 1 });
+imageReviewSchema.index({ 'auditHistory.action': 1 });
+imageReviewSchema.index({ 'auditHistory.timestamp': -1 });
+
+// AI自动审核索引
+imageReviewSchema.index({ 'auditHistory.action': 1, 'auditHistory.timestamp': -1 });
+
+// 复合索引 - 优化复杂查询
+imageReviewSchema.index({ status: 1, userId: 1, createdAt: -1 });
+imageReviewSchema.index({ status: 1, 'mentorReview.reviewer': 1 });
+
 // 持续检查相关索引
 imageReviewSchema.index({ 'continuousCheck.enabled': 1 });
 imageReviewSchema.index({ 'continuousCheck.status': 1 });

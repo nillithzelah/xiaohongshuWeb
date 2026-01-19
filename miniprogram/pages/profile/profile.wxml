@@ -71,6 +71,12 @@
       <view class="menu-arrow">›</view>
     </navigator> -->
 
+    <view class="menu-item" bindtap="changePassword">
+      <view class="menu-icon">🔐</view>
+      <text class="menu-text">修改密码</text>
+      <view class="menu-arrow">›</view>
+    </view>
+
     <view class="menu-item" bindtap="logout">
       <view class="menu-icon">🚪</view>
       <text class="menu-text">退出登录</text>

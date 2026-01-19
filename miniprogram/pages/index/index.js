@@ -14,29 +14,25 @@ console.info(`首页环境: ${CONFIG.ENV}`);
 Page({
   data: {
     userInfo: {},
-    announcements: ['暂无公告'], // 默认值，防止空白
+    announcements: [], // 公告列表，默认为空数组
     reviews: [],
     loading: true,
     page: 1,
     hasMore: true,
-    cardCur: 0, // 当前选中的索引
-    bannerList: [
-      { id: 0, url: 'https://images.unsplash.com/photo-1621600411688-4be93cd68504?auto=format&fit=crop&w=800&q=80', title: '📢 今日笔记任务单价上调！' },
-      { id: 1, url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80', title: '💰 提现功能升级维护通知' },
-      { id: 2, url: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&w=800&q=80', title: '🎉 恭喜用户A提现500元' }
-    ],
     showPhoneAuthModal: false, // 手机号授权模态框
     forceAuth: false, // 是否为强制授权模式
     deviceReviewStatus: null, // 设备审核状态
     showDeviceReviewCard: false, // 是否显示设备审核卡片
+    auditorStatus: { totalAuditors: 0, onlineAuditors: 0 } // 审核员在线状态
   },
 
   onLoad() {
     this.fetchAnnouncements();
     this.fetchReviews(true); // true 表示重置列表
+    this.fetchAuditorStatus(); // 获取审核员在线状态
 
-    // 获取本地缓存的用户信息（如果没有则显示默认）
-    this.updateUserInfo();
+    // 主动获取用户信息（不依赖预加载）
+    this.fetchUserInfo();
 
     // 获取设备审核状态
     this.fetchDeviceReviewStatus();
@@ -70,6 +66,9 @@ Page({
 
     // 获取设备审核状态
     this.fetchDeviceReviewStatus();
+
+    // 刷新审核员状态
+    this.fetchAuditorStatus();
   },
 
   onPullDownRefresh() {
@@ -122,10 +121,55 @@ Page({
     app.globalDataManager.clear('userDevices');
 
     // 清除网络请求缓存
-    app.requestCache.cache.clear();
-    app.requestCache.pendingRequests.clear();
+    app.requestCache.clear();
 
    console.debug('用户相关缓存已清除');
+  },
+
+  // 主动获取用户信息
+  fetchUserInfo() {
+    const app = getApp();
+    const token = app.getCurrentToken();
+
+    if (!token) {
+      console.debug('没有token，使用默认用户信息');
+      this.setData({
+        userInfo: {
+          nickName: '奋斗者',
+          avatar: 'https://via.placeholder.com/120x120/E5E7EB/9CA3AF?text=用户'
+        }
+      });
+      return;
+    }
+
+    console.debug('主动获取用户信息');
+    app.request({
+      url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/user/me`,
+      method: 'GET',
+      header: { 'Authorization': `Bearer ${token}` },
+      useCache: true
+    }).then(res => {
+      if (res.data && res.data.success && res.data.user) {
+        const userInfo = res.data.user;
+        console.debug('获取到用户信息:', userInfo);
+        
+        // 更新全局用户信息
+        app.globalData.userInfo = userInfo;
+        wx.setStorageSync('userInfo', userInfo);
+        
+        // 更新页面用户信息
+        this.setData({ userInfo });
+      }
+    }).catch(err => {
+      console.error('获取用户信息失败:', err);
+      // 失败时使用默认值
+      this.setData({
+        userInfo: {
+          nickName: '奋斗者',
+          avatar: 'https://via.placeholder.com/120x120/E5E7EB/9CA3AF?text=用户'
+        }
+      });
+    });
   },
 
   // 更新用户信息
@@ -152,9 +196,12 @@ Page({
 
     // 默认用户信息
    console.debug('使用默认用户信息');
-    this.setData({
-      userInfo: { nickName: '奋斗者' }
-    });
+     this.setData({
+       userInfo: {
+         nickName: '奋斗者',
+         avatar: 'https://via.placeholder.com/120x120/E5E7EB/9CA3AF?text=用户'
+       }
+     });
   },
 
   // 检查是否需要手机号授权
@@ -169,10 +216,26 @@ Page({
         return;
       }
 
-      // 如果是手机号一键登录但没有手机号，才需要授权
-      if (loginType === 'phone' && !this.data.userInfo.phone) {
-        console.debug('手机号一键登录用户缺少手机号，显示授权弹窗');
+      // 【修复】兼容旧数据：loginType 可能是 'wechat'，应该被当作 'phone' 处理
+      const isPhoneLogin = loginType === 'phone' || loginType === 'wechat';
+
+      // 【增强】从多个来源检查用户信息，提高可靠性
+      const app = getApp();
+      const phone = this.data.userInfo.phone ||
+                    app.globalData.userInfo?.phone ||
+                    wx.getStorageSync('userInfo')?.phone;
+
+      // 如果是手机号一键登录但没有手机号，需要授权
+      if (isPhoneLogin && !phone) {
+        console.warn('手机号登录用户缺少手机号，显示授权弹窗 (loginType:', loginType, ')');
         this.setData({ showPhoneAuthModal: true });
+
+        // 【修复】统一 loginType 为 'phone'，避免后续混淆
+        if (loginType === 'wechat') {
+          wx.setStorageSync('loginType', 'phone');
+        }
+      } else {
+        console.debug('手机号授权检查通过，phone:', phone ? '已授权' : '无需授权');
       }
     }, 500);
   },
@@ -238,56 +301,110 @@ Page({
     const token = app.getCurrentToken();
 
     return new Promise((resolve) => {
-      wx.request({
+      app.request({
         url: `${API_CONFIG.USER_TASKS}?page=${this.data.page}&limit=10`,
         method: 'GET',
         header: token ? { 'Authorization': `Bearer ${token}` } : {},
-        success: (res) => {
-          if (res.data && res.data.success) {
-            const reviews = getApp().utils.ensureArray(res.data.reviews);
-            const newReviews = reviews.map(item => ({
+        useCache: false // 审核记录需要实时数据
+      }).then(res => {
+        if (res.data && res.data.success) {
+          const reviews = getApp().utils.ensureArray(res.data.reviews);
+          const newReviews = reviews.map(item => {
+            // 持续检查奖励记录
+            if (item.isContinuousCheckReward) {
+              return {
+                ...item,
+                imageUrl: '', // 持续检查奖励不需要图片
+                formattedTime: item.continuousCheckInfo?.checkTime || '刚刚'
+              };
+            }
+            // 普通审核记录 - 添加空值安全检查
+            return {
               ...item,
               // 支持多图：显示第一张图片（类型安全）
-              imageUrl: getApp().utils.safeGet(item, 'imageUrls.0', item.imageUrl),
-              // 简单格式化时间 MM-DD HH:mm
-              formattedTime: item.createdAt ? item.createdAt.substring(5, 16).replace('T', ' ') : '刚刚',
+              imageUrl: getApp().utils.safeGet(item, 'imageUrls.0', item.imageUrl) || '',
+              // 简单格式化时间 MM-DD HH:mm - 添加空值检查
+              formattedTime: item.createdAt ?
+                (typeof item.createdAt === 'string' ?
+                  item.createdAt.substring(5, 16).replace('T', ' ') :
+                  new Date(item.createdAt).toISOString().substring(5, 16).replace('T', ' ')) :
+                '刚刚',
               // 添加设备信息显示（类型安全）
-              deviceName: getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备'),
-              // 添加评论昵称显示（优先使用AI解析的昵称）
+              deviceName: getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备') || '未知设备',
+              // 添加评论昵称显示（优先使用AI解析的昵称）- 添加空值保护
               commentAuthor: item.imageType === 'comment' ?
                 (getApp().utils.safeGet(item, 'aiParsedNoteInfo.author') ||
-                 getApp().utils.safeGet(item, 'userNoteInfo.author', '').split(',')[0] ||
-                 '未知昵称') :
-                getApp().utils.safeGet(item, 'deviceInfo.accountName', '未知设备')
-            }));
+                 (getApp().utils.safeGet(item, 'userNoteInfo.author') || '未知昵称').toString().split(',')[0]) :
+                null,
+              // 添加笔记作者显示
+              noteAuthor: item.imageType === 'note' ?
+                (getApp().utils.safeGet(item, 'aiParsedNoteInfo.author') ||
+                 getApp().utils.safeGet(item, 'userNoteInfo.author') || '未知作者') :
+                null,
+              // 计算失败原因（简化WXML中的复杂表达式）
+              failureReason: item.rejectionReason ||
+                (getApp().utils.safeGet(item, 'aiReviewResult.reasons')?.length > 0
+                  ? item.aiReviewResult.reasons[item.aiReviewResult.reasons.length - 1]
+                  : null)
+            };
+          });
 
-            this.setData({
-              reviews: reset ? newReviews : [...this.data.reviews, ...newReviews],
-              page: this.data.page + 1,
-              hasMore: newReviews.length === 10, // 如果返回少于10条，说明没更多了
-              loading: false
-            });
-          }
-        },
-        fail: (err) => {
-         console.error('获取审核记录失败:', err.message);
-          this.setData({ loading: false });
-        },
-        complete: () => {
-          this.setData({ loading: false });
-          resolve();
+          this.setData({
+            reviews: reset ? newReviews : [...this.data.reviews, ...newReviews],
+            page: this.data.page + 1,
+            hasMore: newReviews.length === 10, // 如果返回少于10条，说明没更多了
+            loading: false
+          });
         }
+      }).catch(err => {
+        console.error('获取审核记录失败:', err.message);
+        // 如果是401错误，app.request已经处理过了，这里不需要额外处理
+        if (err.message !== '登录已过期') {
+          this.setData({ loading: false });
+        }
+      }).finally(() => {
+        this.setData({ loading: false });
+        resolve();
       });
     });
   },
 
-  // 监听轮播图切换，实现中间放大效果
-  cardSwiper(e) {
-    this.setData({
-      cardCur: e.detail.current
-    })
-  },
+  // 处理公告点击事件
+  handleAnnouncementTap(e) {
+    const item = e.currentTarget.dataset.item;
 
+    // 如果有跳转动作
+    if (item.actionType && item.actionType !== 'none' && item.actionData) {
+      if (item.actionType === 'link') {
+        // 跳转到H5页面
+        wx.navigateTo({
+          url: `/pages/webview/index?url=${encodeURIComponent(item.actionData)}`,
+          fail: () => {
+            wx.showToast({
+              title: '无法打开链接',
+              icon: 'none'
+            });
+          }
+        });
+      } else if (item.actionType === 'page') {
+        // 跳转到小程序页面
+        wx.navigateTo({
+          url: item.actionData,
+          fail: () => {
+            wx.switchTab({
+              url: item.actionData,
+              fail: () => {
+                wx.showToast({
+                  title: '页面不存在',
+                  icon: 'none'
+                });
+              }
+            });
+          }
+        });
+      }
+    }
+  },
 
   // 处理手机号授权 - 跳转到登录页面完成完整授权流程
   onGetPhoneNumber(e) {
@@ -343,6 +460,24 @@ Page({
     });
   },
 
+  // 获取审核员在线状态
+  fetchAuditorStatus: function() {
+    app.request({
+      url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/client/auditor-status`,
+      method: 'GET',
+      useCache: false // 实时刷新，不缓存
+    }).then(res => {
+      if (res.data && res.data.success) {
+        this.setData({
+          auditorStatus: res.data.data
+        });
+      }
+    }).catch(err => {
+      console.error('获取审核员状态失败:', err);
+      // 失败时保持默认值，不影响页面显示
+    });
+  },
+
   // 跳转到设备列表页面
   goToDeviceList: function() {
     wx.navigateTo({
@@ -354,5 +489,14 @@ Page({
     wx.switchTab({
       url: '/pages/upload/upload',
     });
+  },
+
+  // 分享给朋友
+  onShareAppMessage() {
+    return {
+      title: '易交单 - 内容审核',
+      path: '/pages/index/index',
+      imageUrl: ''
+    };
   }
 });

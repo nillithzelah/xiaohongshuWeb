@@ -33,11 +33,7 @@ const deviceNoteHistorySchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: () => {
-      const now = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
-      return new Date(now.getTime() + beijingOffset);
-    }
+    default: Date.now // 使用UTC时间存储
   }
 });
 

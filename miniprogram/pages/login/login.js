@@ -1,6 +1,7 @@
 // pages/login/login.js
 const app = getApp();
 const CONFIG = require('../../config.js');
+const authService = require('../../services/authService');
 
 Page({
   data: {
@@ -29,25 +30,19 @@ Page({
     },
     registerLoading: false,
     showRegPassword: false,
-    showRegConfirmPassword: false
+    showRegConfirmPassword: false,
+    // 错误提示
+    errorMessage: '',
+    showErrorModal: false
   },
 
   onLoad: function (options) {
-    console.info('登录页面加载');
+    console.info('登录页面加载', options);
 
-    // 检查是否已经有token
-    const token = app.tokenManager.get();
-    if (token) {
-      console.info('检测到已有token，跳转到首页');
-      wx.switchTab({
-        url: '/pages/index/index'
-      });
-      return;
-    }
-
-    // 检查是否是从首页跳转过来需要手机号授权
+    // 【优先处理】检查是否是从首页跳转过来需要手机号授权
+    // 这必须在token检查之前，否则会导致授权循环BUG
     if (options.needPhoneAuth === 'true') {
-      console.info('从首页跳转过来需要手机号授权');
+      console.info('从首页跳转过来需要手机号授权 - 跳过token检查');
       this.setData({
         currentTab: 'wechat', // 切换到手机号登录标签
         showRegister: false,
@@ -60,8 +55,18 @@ Page({
         icon: 'none',
         duration: 2000
       });
+      return; // 直接返回，不进行token检查
     }
 
+    // 检查是否已经有token（只有在非手机号授权模式下才检查）
+    const token = app.tokenManager.get();
+    if (token) {
+      console.info('检测到已有token，跳转到首页');
+      wx.switchTab({
+        url: '/pages/index/index'
+      });
+      return;
+    }
   },
 
   // 切换选项卡
@@ -224,9 +229,7 @@ Page({
             duration: 1500
           });
           // 注册成功后自动登录
-          setTimeout(() => {
-            this.loginSuccess(res.data);
-          }, 1500);
+          this.loginSuccess(res.data);
         } else {
           console.error('用户注册失败:', res.data.message);
 
@@ -301,27 +304,15 @@ Page({
       },
       success: (res) => {
         if (res.data.success) {
-          const { user, token } = res.data;
-
-          // 更新用户信息
-          app.globalData.userInfo = user;
-          app.globalData.token = token;
-          app.tokenManager.set(token);
-          wx.setStorageSync('userInfo', user);
-
-          // 更新状态管理器
-          app.stateManager.updateUserState(user);
-
-          console.info('手机号授权成功:', user.phone);
-
+          console.info('手机号授权成功:', res.data.user.phone);
           // 手机号一键登录成功，直接完成登录
-          console.info('手机号一键登录完成');
-          this.loginSuccess();
+          this.loginSuccess(res.data);
         } else {
           console.error('手机号授权失败:', res.data.message);
 
           // 检查是否是没有手机号，如果是则跳转到注册页面
           if (res.data.message && res.data.message.includes('手机号未注册')) {
+            this.setData({ loading: false }); // 重置加载状态
             wx.showModal({
               title: '需要注册',
               content: '该手机号尚未注册，请先完成注册',
@@ -332,7 +323,7 @@ Page({
                   this.setData({
                     showRegister: true,
                     currentTab: 'account', // 切换到账号标签页显示注册表单
-                    'registerForm.phoneNumber': this.data.loginForm.phoneNumber || '' // 如果有手机号则预填
+                    'registerForm.phoneNumber': res.data.phoneNumber || '' // 使用后端返回的手机号预填
                   });
                 }
               }
@@ -345,6 +336,9 @@ Page({
       fail: (err) => {
         console.error('手机号授权网络请求失败:', err.errMsg);
         this.showError('网络错误，请重试');
+      },
+      complete: () => {
+        this.setData({ loading: false });
       }
     });
   },
@@ -352,17 +346,43 @@ Page({
 
   // 登录成功处理
   loginSuccess: function(data) {
-    if (data) {
-      // 保存登录信息
-      app.globalData.userInfo = data.user;
-      app.globalData.token = data.token;
-      app.tokenManager.set(data.token);
-      wx.setStorageSync('userInfo', data.user);
-      wx.setStorageSync('loginType', this.data.currentTab === 'wechat' ? 'phone' : 'account');
-
-      // 更新状态管理器
-      app.stateManager.updateUserState(data.user);
+    if (!data || !data.user) {
+      console.error('登录数据异常:', data);
+      this.showError('登录数据异常，请重试');
+      return;
     }
+
+    // 【防御性检查】如果是从手机号授权流程来的，必须确保返回的用户信息包含phone
+    if (this.data.fromIndexForPhoneAuth && !data.user.phone) {
+      console.error('手机号授权成功但用户信息中没有phone字段:', data.user);
+      wx.showModal({
+        title: '授权异常',
+        content: '手机号授权成功但未获取到手机号信息，请重新授权',
+        showCancel: false,
+        confirmText: '重新授权',
+        success: () => {
+          // 清理可能不完整的登录数据
+          app.tokenManager.clear();
+          wx.removeStorageSync('userInfo');
+          // 重新设置授权状态
+          this.setData({
+            loading: false,
+            loginLoading: false
+          });
+        }
+      });
+      return;
+    }
+
+    // 保存登录信息
+    app.globalData.userInfo = data.user;
+    app.globalData.token = data.token;
+    app.tokenManager.set(data.token);
+    wx.setStorageSync('userInfo', data.user);
+    wx.setStorageSync('loginType', this.data.currentTab === 'wechat' ? 'phone' : 'account');
+
+    // 更新状态管理器
+    app.stateManager.updateUserState(data.user);
 
     wx.showToast({
       title: '登录成功',
@@ -374,7 +394,7 @@ Page({
     setTimeout(() => {
       if (this.data.fromIndexForPhoneAuth) {
         // 从首页跳转过来进行手机号授权，完成授权后返回首页
-        console.info('手机号授权完成，返回首页');
+        console.info('手机号授权完成，返回首页，phone:', data.user.phone);
         wx.navigateBack({
           delta: 1, // 返回上一页（首页）
           success: () => {
@@ -397,13 +417,83 @@ Page({
     }, 1500);
   },
 
-  // 显示错误信息
-  showError: function(message) {
-    this.setData({ loading: false });
+  // 显示错误信息（增强版）
+  showError: function(message, duration = 3000) {
+    this.setData({ loading: false, loginLoading: false, registerLoading: false });
+
+    // 根据错误类型选择显示方式
+    if (message.length > 30) {
+      // 长错误消息使用模态框
+      this.setData({
+        errorMessage: message,
+        showErrorModal: true
+      });
+    } else {
+      // 短错误消息使用Toast
+      wx.showToast({
+        title: message,
+        icon: 'none',
+        duration: duration
+      });
+    }
+  },
+
+  // 关闭错误模态框
+  closeErrorModal: function() {
+    this.setData({
+      showErrorModal: false,
+      errorMessage: ''
+    });
+  },
+
+  // 显示成功信息
+  showSuccess: function(message = '操作成功') {
     wx.showToast({
       title: message,
-      icon: 'none',
-      duration: 3000
+      icon: 'success',
+      duration: 2000
+    });
+  },
+
+  // 处理API请求错误（统一处理）
+  handleRequestError: function(err, context = '') {
+    const errorResult = authService.errorHandler.handleApiError(err, context);
+
+    // 如果需要登出，使用authService的登出方法
+    if (errorResult.shouldLogout) {
+      setTimeout(() => {
+        authService.logout();
+      }, 2000);
+    }
+
+    this.showError(errorResult.userMessage);
+    return errorResult;
+  },
+
+  // 请求超时重试封装
+  requestWithRetry: function(requestFn, maxRetries = 2) {
+    return new Promise((resolve, reject) => {
+      const attempt = (retryCount = 0) => {
+        requestFn()
+          .then(resolve)
+          .catch((err) => {
+            // 判断是否是网络错误
+            const isNetworkError =
+              !err.statusCode ||
+              err.errMsg?.includes('timeout') ||
+              err.errMsg?.includes('fail');
+
+            if (isNetworkError && retryCount < maxRetries) {
+              const delay = 1000 * (retryCount + 1); // 递增延迟
+              console.warn(`请求失败，${delay}ms后重试 (${retryCount + 1}/${maxRetries})`);
+              setTimeout(() => attempt(retryCount + 1), delay);
+            } else {
+              reject(err);
+            }
+          });
+      };
+
+      attempt();
     });
   },
 

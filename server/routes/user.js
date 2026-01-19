@@ -28,9 +28,10 @@ router.get('/me', authenticateToken, async (req, res) => {
       user_id: req.user._id,
       status: 'pending'
     });
-    // 计算待兑换金额，确保正确处理单位转换
-    // Transaction模型的amount字段以元为单位存储（经过setter四舍五入到分）
-    const pendingAmount = pendingTransactions.reduce((sum, t) => sum + t.amount, 0);
+    // 计算待兑换金额，确保正确处理单位转换（避免浮点精度问题）
+    const pendingAmount = Math.round(
+      pendingTransactions.reduce((sum, t) => sum + t.amount, 0) * 100
+    ) / 100;
 
     // 生成邀请码（如果没有）
     let invitationCode = user.invitationCode;
@@ -311,9 +312,18 @@ router.put('/profile', authenticateToken, async (req, res) => {
       updateData.password = newPassword.trim(); // 会通过pre save中间件自动加密
     }
 
-    // 如果提供了上级邀请码，尝试绑定
+    // 如果提供了上级邀请码，尝试绑定（只在 parent_id 为空时允许设置）
     if (parentInvitationCode && parentInvitationCode.trim()) {
       const invitationCode = parentInvitationCode.trim();
+
+      // 检查用户是否已有上级用户
+      if (req.user.parent_id) {
+        return res.status(400).json({
+          success: false,
+          message: '您已有上级用户，无法修改邀请关系'
+        });
+      }
+
       // 查找拥有此邀请码的用户
       const parentUser = await require('../models/User').findOne({
         invitationCode: invitationCode,
@@ -445,6 +455,7 @@ router.get('/invitation-code', authenticateToken, async (req, res) => {
 router.get('/referral-tree', authenticateToken, async (req, res) => {
   try {
     const User = require('../models/User');
+    const Transaction = require('../models/Transaction');
 
     // 获取上级用户
     const currentUser = await User.findById(req.user._id).populate('parent_id', 'username nickname');
@@ -456,6 +467,23 @@ router.get('/referral-tree', authenticateToken, async (req, res) => {
       is_deleted: { $ne: true }
     }).select('username nickname createdAt');
 
+    // 计算每个下级为您贡献的佣金（从一级佣金交易中计算）
+    const childrenWithCommission = await Promise.all(children.map(async (child) => {
+      const commissionTransactions = await Transaction.find({
+        user_id: req.user._id,
+        type: 'referral_bonus_1',
+        description: { $regex: child.username, $options: 'i' },
+        status: 'completed'
+      });
+      const totalCommission = commissionTransactions.reduce((sum, t) => sum + t.amount, 0);
+      return {
+        username: child.username,
+        nickname: child.nickname,
+        joinedAt: child.createdAt,
+        contributedCommission: Math.round(totalCommission * 100) / 100  // 该下级为您贡献的佣金
+      };
+    }));
+
     // 获取下级的下级用户
     const grandchildren = [];
     for (const child of children) {
@@ -466,6 +494,23 @@ router.get('/referral-tree', authenticateToken, async (req, res) => {
       grandchildren.push(...childDescendants);
     }
 
+    // 计算每个下级的下级为您贡献的佣金（从二级佣金交易中计算）
+    const grandchildrenWithCommission = await Promise.all(grandchildren.map(async (gc) => {
+      const commissionTransactions = await Transaction.find({
+        user_id: req.user._id,
+        type: 'referral_bonus_2',
+        description: { $regex: gc.username, $options: 'i' },
+        status: 'completed'
+      });
+      const totalCommission = commissionTransactions.reduce((sum, t) => sum + t.amount, 0);
+      return {
+        username: gc.username,
+        nickname: gc.nickname,
+        joinedAt: gc.createdAt,
+        contributedCommission: Math.round(totalCommission * 100) / 100  // 该下级为您贡献的佣金
+      };
+    }));
+
     res.json({
       success: true,
       referralTree: {
@@ -473,16 +518,8 @@ router.get('/referral-tree', authenticateToken, async (req, res) => {
           username: parent.username,
           nickname: parent.nickname
         } : null,
-        children: children.map(child => ({
-          username: child.username,
-          nickname: child.nickname,
-          joinedAt: child.createdAt
-        })),
-        grandchildren: grandchildren.map(gc => ({
-          username: gc.username,
-          nickname: gc.nickname,
-          joinedAt: gc.createdAt
-        }))
+        children: childrenWithCommission,
+        grandchildren: grandchildrenWithCommission
       }
     });
 
@@ -504,8 +541,10 @@ router.get('/distribution-points', authenticateToken, async (req, res) => {
       status: 'completed'
     }).sort({ createdAt: -1 });
 
-    // 计算总分销积分
-    const totalDistributionPoints = referralTransactions.reduce((sum, t) => sum + t.amount, 0);
+    // 计算总分销积分（避免浮点精度问题）
+    const totalDistributionPoints = Math.round(
+      referralTransactions.reduce((sum, t) => sum + t.amount, 0) * 100
+    ) / 100;
 
     // 获取最近的分销记录
     const recentRecords = referralTransactions.slice(0, 10).map(t => ({
@@ -556,13 +595,17 @@ router.get('/referral-stats', authenticateToken, async (req, res) => {
       status: 'completed'
     });
 
-    const level1Earnings = referralTransactions
-      .filter(t => t.type === 'referral_bonus_1')
-      .reduce((sum, t) => sum + t.amount, 0);
+    const level1Earnings = Math.round(
+      referralTransactions
+        .filter(t => t.type === 'referral_bonus_1')
+        .reduce((sum, t) => sum + t.amount, 0) * 100
+    ) / 100;
 
-    const level2Earnings = referralTransactions
-      .filter(t => t.type === 'referral_bonus_2')
-      .reduce((sum, t) => sum + t.amount, 0);
+    const level2Earnings = Math.round(
+      referralTransactions
+        .filter(t => t.type === 'referral_bonus_2')
+        .reduce((sum, t) => sum + t.amount, 0) * 100
+    ) / 100;
 
     res.json({
       success: true,
@@ -572,7 +615,7 @@ router.get('/referral-stats', authenticateToken, async (req, res) => {
         totalReferrals: directReferrals + indirectReferrals,
         level1Earnings,
         level2Earnings,
-        totalEarnings: level1Earnings + level2Earnings
+        totalEarnings: Math.round((level1Earnings + level2Earnings) * 100) / 100
       }
     });
 
@@ -665,6 +708,56 @@ router.post('/upload-avatar', authenticateToken, avatarUpload.single('avatar'), 
   } catch (error) {
     console.error('头像上传失败:', error);
     res.status(500).json({ success: false, message: '头像上传失败' });
+  }
+});
+
+// 修改密码（需要验证旧密码）
+router.put('/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    // 验证必填字段
+    if (!oldPassword || !oldPassword.trim()) {
+      return res.status(400).json({ success: false, message: '请输入原密码' });
+    }
+    if (!newPassword || !newPassword.trim()) {
+      return res.status(400).json({ success: false, message: '请输入新密码' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: '新密码至少需要6位字符' });
+    }
+    if (oldPassword === newPassword) {
+      return res.status(400).json({ success: false, message: '新密码不能与原密码相同' });
+    }
+
+    const User = require('../models/User');
+    const bcrypt = require('bcrypt');
+
+    // 获取用户（包含密码字段）
+    const user = await User.findById(req.user._id).select('+password');
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    // 验证旧密码
+    const isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
+    if (!isOldPasswordValid) {
+      return res.status(400).json({ success: false, message: '原密码错误' });
+    }
+
+    // 更新密码
+    user.password = newPassword.trim();
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '密码修改成功'
+    });
+
+  } catch (error) {
+    console.error('修改密码错误:', error);
+    res.status(500).json({ success: false, message: '修改密码失败' });
   }
 });
 

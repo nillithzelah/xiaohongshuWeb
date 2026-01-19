@@ -1,6 +1,12 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// 从环境变量获取JWT密钥，如果未设置则抛出错误
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET环境变量必须设置且至少32个字符');
+}
+
 // 验证JWT token中间件
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -11,11 +17,8 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    const JWT_SECRET = process.env.JWT_SECRET || 'xiaohongshu_prod_jwt_secret_2025_v2_a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-    console.log('🔐 验证token，使用的密钥:', JWT_SECRET.substring(0, 20) + '...');
-    console.log('🔑 收到的token:', token);
+    // 不记录敏感信息到日志
     const decoded = jwt.verify(token, JWT_SECRET);
-    console.log('✅ Token验证成功:', decoded);
 
     // 从数据库获取真实用户信息
     let user;
@@ -23,14 +26,11 @@ const authenticateToken = async (req, res, next) => {
       // 首先尝试按ObjectId查找
       user = await User.findById(decoded.userId).select('-password');
     } catch (error) {
-      console.log('ObjectId查找失败:', error.message);
       // 如果ObjectId查找失败，尝试按username查找（兼容旧数据）
-      console.log('尝试按username查找:', decoded.userId);
       user = await User.findOne({ username: decoded.userId }).select('-password');
     }
 
     if (!user) {
-      console.log('用户不存在:', decoded.userId);
       return res.status(401).json({ success: false, message: '用户不存在' });
     }
 
@@ -41,17 +41,16 @@ const authenticateToken = async (req, res, next) => {
 
     req.user = {
       _id: user._id,
-      id: user.username, // 使用username作为id，与小程序兼容
-      username: user.username,
+      id: user._id.toString(), // 用户ID统一使用ObjectId字符串，便于权限比较
+      username: user.username, // 用户名保留用于兼容
       role: user.role,
-      nickname: user.nickname
+      nickname: user.nickname,
+      parent_id: user.parent_id // 添加 parent_id 用于邀请关系检查
     };
-
-    console.log('👤 用户信息:', { userId: user._id, username: user.username, role: user.role });
 
     next();
   } catch (error) {
-    console.error('Token验证错误:', error);
+    // 不暴露详细错误信息
     res.status(403).json({ success: false, message: '无效的访问令牌' });
   }
 };

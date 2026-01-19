@@ -131,7 +131,9 @@ router.get('/my-leads', authenticateToken, requireRole(['hr', 'boss', 'manager']
 
     let query = {
       role: 'part_time', // 只查询兼职用户（线索）
-      is_deleted: { $ne: true }
+      is_deleted: { $ne: true },
+      // 排除小程序自动创建的没有姓名的用户
+      nickname: { $ne: null, $ne: '', $exists: true }
     };
 
     // HR只能看到自己创建的线索，主管和老板可以看到所有线索

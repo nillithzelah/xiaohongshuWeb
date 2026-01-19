@@ -4,7 +4,12 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   openid: {
     type: String,
-    default: () => `admin_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    default: () => {
+      // 使用加密安全的随机数生成器（修复：防止高并发时重复）
+      const crypto = require('crypto');
+      const randomBytes = crypto.randomBytes(8).toString('hex');
+      return `admin_${Date.now()}_${randomBytes}`;
+    },
     unique: true // 确保唯一性
   },
   username: {
@@ -30,10 +35,10 @@ const userSchema = new mongoose.Schema({
   },
 
   // 基本信息
-  nickname: String,
-  phone: String,
-  wechat: String,
-  notes: String,
+  nickname: { type: String, maxLength: 50 },
+  phone: { type: String, maxLength: 20 },
+  wechat: { type: String, maxLength: 50 },
+  notes: { type: String, maxLength: 500 },
 
   // 邀请码系统
   invitationCode: {
@@ -43,8 +48,8 @@ const userSchema = new mongoose.Schema({
   },
 
   // 带教老师专属字段
-  integral_w: String, // 积分号W
-  integral_z: String, // 积分号Z
+  integral_w: { type: String, maxLength: 100 }, // 积分号W
+  integral_z: { type: String, maxLength: 100 }, // 积分号Z
 
   // 层级管理字段
   hr_id: {
@@ -70,10 +75,17 @@ const userSchema = new mongoose.Schema({
   // 财务账户信息
   wallet: {
     alipay_account: {
-      type: String
+      type: String,
+      maxLength: 100
     },
     real_name: {
-      type: String
+      type: String,
+      maxLength: 50
+    },
+    alipay_qr_code: {
+      type: String,
+      default: null,
+      maxLength: 2000
     },
     total_withdrawn: {
       type: Number,
@@ -92,17 +104,14 @@ const userSchema = new mongoose.Schema({
 
   createdAt: {
     type: Date,
-    default: () => {
-      const now = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
-      return new Date(now.getTime() + beijingOffset);
-    }
+    default: Date.now // 使用UTC时间存储
   },
 
   // 培训状态（仅兼职用户）
   training_status: {
     type: String,
     enum: [
+      null,
       '已筛选',
       '培训中',
       '业务实操',

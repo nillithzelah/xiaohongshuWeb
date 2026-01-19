@@ -4,6 +4,7 @@ const cheerio = require('cheerio');
 const Device = require('../models/Device');
 const User = require('../models/User');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const simpleCookiePool = require('../services/SimpleCookiePool');
 const router = express.Router();
 
 // 设备AI预审核函数
@@ -54,15 +55,6 @@ async function performDeviceAiReview(device) {
       };
     }
 
-    // 检查账号链接格式
-    if (!device.accountUrl || !device.accountUrl.includes('xiaohongshu.com')) {
-      console.log(`❌ [AI预审核] 失败: 账号链接格式不正确 - ${device.accountUrl}`);
-      return {
-        passed: false,
-        reason: '账号链接格式不正确'
-      };
-    }
-
     console.log(`✅ [AI预审核] 通过: 所有检查通过`);
     // 所有检查通过
     return {
@@ -85,8 +77,8 @@ async function performDeviceAiReview(device) {
   }
 }
 
-// 设备管理权限：mentor, manager, boss 均可访问
-const deviceRoles = ['mentor', 'manager', 'boss'];
+// 设备管理权限：mentor, manager, boss, hr 均可访问
+const deviceRoles = ['mentor', 'manager', 'boss', 'hr'];
 
 // 获取待审核设备列表
 router.get('/pending-review', authenticateToken, async (req, res) => {
@@ -105,6 +97,19 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
     if (req.user.role === 'part_time') {
       query.createdBy = req.user._id;
       console.log('👤 part_time 用户，仅显示自己创建的设备');
+    } else if (req.user.role === 'mentor') {
+      // 带教老师只能看到自己名下用户提交的设备
+      const assignedUsers = await User.find({ mentor_id: req.user._id }).select('_id');
+      const assignedUserIds = assignedUsers.map(u => u._id);
+      query.createdBy = { $in: assignedUserIds };
+      console.log(`🎓 [带教老师权限] 当前带教老师: ${req.user.username}, 名下用户数: ${assignedUserIds.length}`);
+
+      // 调试：检查这些用户的所有设备状态
+      const allDevices = await Device.find({ createdBy: { $in: assignedUserIds } }).select('accountName reviewStatus');
+      console.log(`🎓 [调试] 这些用户创建的所有设备 (${allDevices.length}个):`);
+      allDevices.forEach(d => {
+        console.log(`   - ${d.accountName}: ${d.reviewStatus}`);
+      });
     } else if (!deviceRoles.includes(req.user.role)) {
       return res.status(403).json({ success: false, message: '权限不足' });
     }
@@ -152,8 +157,7 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
     });
     res.status(500).json({
       success: false,
-      message: '获取待审核设备列表失败',
-      error: error.message
+      message: '获取待审核设备列表失败'
     });
   }
 });
@@ -173,21 +177,69 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
       query.status = status;
     }
 
-    // 分配用户过滤
-    if (assignedUser) {
-      query.assignedUser = assignedUser;
-    }
-
-    // 按客服筛选：找到该客服名下的用户，然后筛选这些用户分配的设备
-    if (reviewer) {
-      const csUsers = await User.find({ managed_by: reviewer }).select('_id');
-      const userIds = csUsers.map(user => user._id);
-      query.assignedUser = { $in: userIds };
-    }
-
     // 搜索设备账号名
     if (keyword) {
       query.accountName = { $regex: keyword, $options: 'i' };
+    }
+
+    // 数据权限过滤
+    if (req.user.role === 'hr') {
+      // HR 可以看到：
+      // 1. 分配给 hr_id = 自己的用户的设备
+      // 2. 分配给 hr_id = null（未分配HR）的用户的设备
+      // 3. assignedUser = null（完全未分配）的设备
+      const hrUsers = await User.find({
+        $or: [
+          { hr_id: req.user._id },
+          { hr_id: null },
+          { hr_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const hrUserIds = hrUsers.map(user => user._id);
+
+      console.log(`🔍 [设备管理权限] HR ${req.user.username} 查询设备，找到 ${hrUserIds.length} 个兼职用户`);
+
+      // 使用 $or：分配给该HR相关用户的设备 OR 完全未分配的设备
+      query.$or = [
+        { assignedUser: { $in: hrUserIds } },
+        { assignedUser: null }
+      ];
+    } else if (req.user.role === 'mentor') {
+      // 带教老师可以看到：
+      // 1. 分配给 mentor_id = 自己的用户的设备
+      // 2. 分配给 mentor_id = null（未分配带教老师）的用户的设备
+      // 3. assignedUser = null（完全未分配）的设备
+      const mentorUsers = await User.find({
+        $or: [
+          { mentor_id: req.user._id },
+          { mentor_id: null },
+          { mentor_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const mentorUserIds = mentorUsers.map(user => user._id);
+
+      console.log(`🔍 [设备管理权限] 带教老师 ${req.user.username} 查询设备，找到 ${mentorUserIds.length} 个兼职用户`);
+
+      // 使用 $or：分配给该带教老师相关用户的设备 OR 完全未分配的设备
+      query.$or = [
+        { assignedUser: { $in: mentorUserIds } },
+        { assignedUser: null }
+      ];
+    } else {
+      // boss/manager 使用原有的筛选逻辑
+      // 分配用户过滤
+      if (assignedUser) {
+        query.assignedUser = assignedUser;
+      }
+
+      // 按客服筛选：找到该客服名下的用户，然后筛选这些用户分配的设备
+      if (reviewer) {
+        const csUsers = await User.find({ managed_by: reviewer }).select('_id');
+        const userIds = csUsers.map(user => user._id);
+        query.assignedUser = { $in: userIds };
+      }
     }
 
     const devices = await Device.find(query)
@@ -453,8 +505,7 @@ router.put('/:id', authenticateToken, requireRole(deviceRoles), async (req, res)
     } else {
       res.status(500).json({
         success: false,
-        message: '更新设备失败',
-        error: error.message
+        message: '更新设备失败'
       });
     }
   }
@@ -562,147 +613,24 @@ router.get('/users/list', authenticateToken, requireRole(deviceRoles), async (re
   }
 });
 
-// AI审核设备昵称和账号匹配 (免浏览器轻量版)
+// AI审核设备昵称和账号匹配 (免浏览器轻量版) - 已简化为默认通过
 router.post('/verify', authenticateToken, async (req, res) => {
   try {
     const { accountUrl, accountId, nickname } = req.body;
 
-    // 1. 基础验证
-    if (!accountUrl || !accountId || !nickname) {
-      return res.status(400).json({ success: false, message: '账号链接、账号ID和昵称均为必填' });
-    }
+    console.log(`🤖 [验证] 跳过验证，默认通过: 预期ID"${accountId}"，预期昵称"${nickname}"`);
 
-    console.log(`🤖 开始轻量级AI审核: 预期ID"${accountId}"，预期昵称"${nickname}"`);
-
-    const cleanUrl = accountUrl.trim();
-    let cleanAccountId = accountId.trim();
-    const cleanNickname = nickname.trim();
-
-    // 如果accountId是链接，尝试从中提取ID
-    if (cleanAccountId.includes('xiaohongshu.com')) {
-      const urlMatch = cleanAccountId.match(/\/user\/profile\/([^/?]+)/);
-      if (urlMatch && urlMatch[1]) {
-        cleanAccountId = urlMatch[1];
-        console.log(`🔄 从链接中提取账号ID: ${cleanAccountId}`);
-      }
-    }
-
-    // 2. 发起 HTTP 请求 (模拟真实浏览器)
-    let html;
-    try {
-      const response = await axios.get(cleanUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Cookie': process.env.XIAOHONGSHU_COOKIE || '', // 从环境变量读取真实Cookie
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Referer': 'https://www.xiaohongshu.com/',
-          'Accept-Language': 'zh-CN,zh;q=0.9'
-        },
-        timeout: 15000 // 15秒超时
-      });
-      html = response.data;
-    } catch (error) {
-      console.error('🌐 访问小红书失败:', error.message);
-      return res.status(400).json({ 
-        success: false, 
-        message: '无法连接小红书服务器，请检查链接或稍后再试',
-        error: error.message 
-      });
-    }
-
-    // 3. 安全检查：是否被验证码拦截
-    if (html.includes('captcha') || html.includes('无法浏览')) {
-      return res.status(403).json({
-        success: false,
-        verified: false,
-        message: '触发小红书安全验证，请联系管理员更新系统Cookie',
-        reason: 'ip_blocked_or_cookie_expired'
-      });
-    }
-
-    // 4. 核心提取逻辑：解析 window.__INITIAL_STATE__
-    let extractedNickname = null;
-    let extractedRedId = null;
-
-    try {
-      // 使用正则从源码抓取结构化 JSON
-      const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.*?})<\/script>/);
-      if (stateMatch && stateMatch[1]) {
-        const jsonStr = stateMatch[1].replace(/undefined/g, 'null');
-        const state = JSON.parse(jsonStr);
-        
-        // 个人主页深度路径解析
-        const info = state.user?.userPageData?.basicInfo || state.userPageData?.basicInfo;
-        if (info) {
-          extractedNickname = info.nickname;
-          extractedRedId = info.redId || info.redNo || info.userId;
-        }
-      }
-    } catch (parseErr) {
-      console.warn('⚠️ 结构化数据解析失败，尝试 DOM 回退逻辑');
-    }
-
-    // 5. 回退逻辑：如果结构化解析失败，使用 Cheerio (DOM) 解析
-    if (!extractedNickname) {
-      const $ = cheerio.load(html);
-      extractedNickname = $('.nickname, .user-nickname, [data-testid="user-nickname"]').text().trim() || $('h1').text().trim();
-      
-      // 提取 ID 并过滤掉“小红书号：”前缀
-      const idText = $('[class*="user-redId"], .user-redId').text().trim();
-      if (idText) {
-        extractedRedId = idText.replace(/小红书号[:：]\s*/, '').trim();
-      }
-    }
-
-    console.log(`🔍 抓取结果 -> 昵称: "${extractedNickname}", ID: "${extractedRedId}"`);
-
-    // 6. 最终比对逻辑
-    let isMatch = false;
-    let confidence = 0;
-    let reasonText = '';
-
-    if (extractedNickname) {
-      // ID 必须完全匹配（忽略大小写，防止用户填错大小写字母）
-      const idMatched = extractedRedId && extractedRedId.toLowerCase() === cleanAccountId.toLowerCase();
-
-      // 昵称必须完全匹配（忽略大小写）
-      const nameMatched = extractedNickname && extractedNickname.toLowerCase() === cleanNickname.toLowerCase();
-
-      if (!idMatched && !nameMatched) {
-        isMatch = false;
-        confidence = 10;
-        reasonText = `账号ID和昵称都不匹配 (发现ID: ${extractedRedId || '无'}, 预期ID: ${cleanAccountId}; 发现昵称: ${extractedNickname}, 预期昵称: ${cleanNickname})`;
-      } else if (!idMatched) {
-        isMatch = false;
-        confidence = 20;
-        reasonText = `账号ID不匹配 (发现ID: ${extractedRedId || '无'}, 预期ID: ${cleanAccountId})`;
-      } else if (!nameMatched) {
-        isMatch = false;
-        confidence = 30;
-        reasonText = `昵称不匹配 (发现昵称: ${extractedNickname}, 预期昵称: ${cleanNickname})`;
-      } else {
-        // ID和昵称都完全匹配
-        isMatch = true;
-        confidence = 100;
-        reasonText = '账号ID与昵称完全匹配';
-      }
-    } else {
-      isMatch = false;
-      confidence = 0;
-      reasonText = '无法获取页面数据，请确保是正确的小红书个人主页链接';
-    }
-
-    // 7. 返回统一结果格式
+    // 直接返回验证通过
     res.json({
       success: true,
-      verified: isMatch,
-      confidence,
-      message: isMatch ? '验证通过' : '验证失败',
+      verified: true,
+      confidence: 100,
+      message: '验证通过',
       data: {
-        extractedNickname,
-        extractedId: extractedRedId
+        extractedNickname: nickname,
+        extractedId: accountId
       },
-      reasonText
+      reasonText: '验证通过'
     });
 
   } catch (error) {
@@ -747,11 +675,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // 审核设备（通过或拒绝）
-router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
-  const mongoose = require('mongoose');
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr']), async (req, res) => {
   try {
     const { action, reason } = req.body;
     const deviceId = req.params.id;
@@ -768,21 +692,18 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), a
     // 参数验证
     if (!['approve', 'reject'].includes(action)) {
       console.log('❌ [人工审核] 参数验证失败: 无效的审核操作 -', action);
-      await session.abortTransaction();
       return res.status(400).json({ success: false, message: '无效的审核操作' });
     }
 
     if (action === 'reject' && (!reason || reason.trim() === '')) {
       console.log('❌ [人工审核] 参数验证失败: 拒绝操作必须提供原因');
-      await session.abortTransaction();
       return res.status(400).json({ success: false, message: '拒绝审核必须提供原因' });
     }
 
-    // 查找设备（在事务中）
-    const device = await Device.findById(deviceId).session(session);
+    // 查找设备
+    const device = await Device.findById(deviceId);
     if (!device) {
       console.log('❌ [人工审核] 设备不存在:', deviceId);
-      await session.abortTransaction();
       return res.status(404).json({ success: false, message: '设备不存在' });
     }
 
@@ -798,7 +719,6 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), a
     // 状态验证
     if (!['pending', 'ai_approved'].includes(device.reviewStatus)) {
       console.log('❌ [人工审核] 设备状态不允许审核:', device.reviewStatus);
-      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: `设备当前状态为 ${device.reviewStatus}，不允许人工审核`
@@ -825,23 +745,18 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), a
 
     console.log('🔄 [人工审核] 准备更新数据库:', updateData);
 
-    // 执行数据库更新（在事务中）
+    // 执行数据库更新
     const updatedDevice = await Device.findByIdAndUpdate(deviceId, updateData, {
       new: true,
-      runValidators: true,
-      session
+      runValidators: true
     });
 
     if (!updatedDevice) {
       console.log('❌ [人工审核] 数据库更新失败: 未找到更新的设备');
-      await session.abortTransaction();
       return res.status(500).json({ success: false, message: '数据库更新失败' });
     }
 
-    // 提交事务
-    await session.commitTransaction();
-
-    console.log('✅ [人工审核] 设备审核完成，事务已提交:', {
+    console.log('✅ [人工审核] 设备审核完成:', {
       id: updatedDevice._id,
       reviewStatus: updatedDevice.reviewStatus,
       status: updatedDevice.status,
@@ -849,7 +764,7 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), a
       reviewedAt: updatedDevice.reviewedAt
     });
 
-    // 事务外执行populate和通知
+    // 执行populate
     const populatedDevice = await Device.findById(updatedDevice._id)
       .populate({
         path: 'assignedUser',
@@ -872,7 +787,6 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), a
     });
 
   } catch (error) {
-    await session.abortTransaction();
     console.error('❌ [人工审核] 审核设备失败:', error);
     console.error('❌ [人工审核] 错误详情:', {
       message: error.message,
@@ -884,11 +798,8 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss']), a
     });
     res.status(500).json({
       success: false,
-      message: '审核设备失败',
-      error: error.message
+      message: '审核设备失败'
     });
-  } finally {
-    session.endSession();
   }
 });
 

@@ -141,7 +141,7 @@
                wx:elif="{{!item.nicknameLimitStatus.canUse}}"
                style="color: #fa8c16;"
              >
-               ⏳ {{item.nicknameLimitStatus.reason}} - 还需{{item.nicknameLimitStatus.remainingDays}}天
+               ⏳ {{item.nicknameLimitStatus.reason}} - 还需{{item.nicknameLimitStatus.remainingHours}}小时
              </text>
            </view>
          </view>
@@ -192,7 +192,7 @@
             <button class="paste-btn" bindtap="pasteAccountUrl" size="mini">粘贴分享</button>
           </view>
           <view class="input-hint">
-            <text>支持小红书分享文本自动提取链接</text>
+            <text>支持小红薯分享文本自动提取链接</text>
           </view>
         </view>
         <view class="form-item">
@@ -208,7 +208,7 @@
             </view>
           </view>
           <view class="input-hint">
-            <text>请上传小红书个人主页的截图，用于账号审核</text>
+            <text>请上传小红薯个人主页的截图，用于账号审核</text>
           </view>
         </view>
       </view>
@@ -256,7 +256,7 @@
             <button class="paste-btn" bindtap="pasteEditAccountUrl" size="mini">粘贴分享</button>
           </view>
           <view class="input-hint">
-            <text>支持小红书分享文本自动提取链接</text>
+            <text>支持小红薯分享文本自动提取链接</text>
           </view>
         </view>
         <view class="form-hint">

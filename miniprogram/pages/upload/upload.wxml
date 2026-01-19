@@ -1,19 +1,27 @@
 <!-- pages/upload/upload.wxml -->
 <view class="container">
 
-  <!-- 账号列表展示 -->
+  <!-- 账号列表展示 - 点击选择发布账号 -->
   <view class="section">
     <view class="section-title">
       <text class="step-num">1</text>
-      <text class="step-text">我的账号列表</text>
+      <text class="step-text">选择发布账号</text>
+      <text class="required-mark">*</text>
     </view>
 
     <view class="device-list" wx:if="{{devices.length > 0}}">
      <view
        wx:for="{{devices}}"
        wx:key="_id"
-       class="device-card"
+       class="device-card {{selectedDevice && selectedDevice._id === item._id ? 'selected' : ''}}"
+       bindtap="selectDeviceByTap"
+       data-device="{{item}}"
      >
+        <!-- 选中标记 -->
+        <view class="select-mark" wx:if="{{selectedDevice && selectedDevice._id === item._id}}">
+          <text class="check-icon">✔</text>
+        </view>
+
         <view class="device-info">
           <text class="device-name">{{item.accountName}}</text>
           <text class="device-id" wx:if="{{item.accountId}}">ID: {{item.accountId}}</text>
@@ -23,11 +31,6 @@
           <text class="device-status" wx:elif="{{item.status === 'frozen'}}" style="color: #ff4d4f;">● 冻结</text>
         </view>
         <view class="device-stats">
-          <!-- view class="stat-item">
-            <text class="stat-label">积分</text>
-            <text class="stat-value" style="color: #ff4d4f; font-weight: bold;">{{item.points}}</text>
-          </view -->
-
           <!-- 昵称限制状态显示 -->
           <view class="nickname-limit-status" wx:if="{{item.nicknameLimitStatus}}">
             <text
@@ -42,15 +45,15 @@
               wx:elif="{{!item.nicknameLimitStatus.canUse}}"
               style="color: #fa8c16;"
             >
-              ⏳ {{item.nicknameLimitStatus.reason}} - 还需{{item.nicknameLimitStatus.remainingDays}}天
+              ⏳ {{item.nicknameLimitStatus.reason}} - 还需{{item.nicknameLimitStatus.remainingHours}}小时
             </text>
           </view>
         </view>
       </view>
     </view>
 
-    <view wx:else class="no-devices">
-      <text>{{noDevicesMessage || '暂无账号，请新增账号'}}</text>
+    <view class="no-devices" wx:if="{{devices.length === 0}}">
+      <text>暂无账号，请先新增账号</text>
     </view>
 
     <!-- 新增账号按钮 -->
@@ -88,10 +91,18 @@
     </view>
   </view>
 
-  <!-- 步骤 2: 填写链接和信息 -->
+  <!-- 笔记限制提示 -->
+  <view class="section" wx:if="{{selectedType.value === 'note' && noteLimitStatus && !noteLimitStatus.canSubmit}}">
+    <view class="note-limit-warning">
+      <text class="warning-icon">⚠️</text>
+      <text class="warning-text">{{noteLimitStatus.message}}</text>
+    </view>
+  </view>
+
+  <!-- 步骤 3: 填写链接和信息 -->
   <view class="section" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment' || selectedType.value === 'customer_resource'}}">
     <view class="section-title">
-      <text class="step-num">2</text>
+      <text class="step-num">3</text>
       <text class="step-text">{{selectedType.value === 'customer_resource' ? '填写客户信息' : '填写笔记信息'}}</text>
       <text class="required-mark" wx:if="{{selectedType.value === 'note' || selectedType.value === 'comment' || selectedType.value === 'customer_resource'}}">*</text>
     </view>
@@ -111,7 +122,7 @@
         <button class="paste-btn" bindtap="pasteShareText" size="mini">粘贴分享</button>
       </view>
       <view class="input-hint">
-        <text>支持小红书分享文本自动提取链接</text>
+        <text>支持小红薯分享文本自动提取链接</text>
       </view>
     </view>
 
@@ -172,10 +183,10 @@
     </view>
   </view>
 
-  <!-- 步骤 3: 上传图片 -->
+  <!-- 步骤 4: 上传图片 -->
   <view class="section">
     <view class="section-title">
-      <text class="step-num">3</text>
+      <text class="step-num">4</text>
       <text class="step-text">上传凭证图片</text>
       <text class="optional-mark">(可选)</text>
     </view>
@@ -224,7 +235,7 @@
       class="submit-btn {{selectedType ? 'active' : ''}}"
       bindtap="submitTask"
       loading="{{uploading}}"
-      disabled="{{uploading}}"
+      disabled="{{isSubmitting || uploading || !selectedType}}"
     >
       {{uploading ? '上传中...' : '立即提交'}} {{imageUrls.length > 0 ? imageUrls.length + '张图片' : '任务'}}
     </button>

@@ -55,93 +55,60 @@ page {
   z-index: -1;
 }
 
-/* 🖼️ 画廊轮播图样式 */
-.banner-container {
-  padding-top: 20rpx;
-  background-color: #f5f7fa; /* 保持背景色一致 */
-}
-
-.card-swiper {
-  height: 360rpx; /* 轮播图高度 */
-}
-
-/* 自定义轮播图指示点样式 */
-.card-swiper .wx-swiper-dot {
-  width: 32rpx;
-  height: 6rpx;
-  border-radius: 3rpx;
-  background: rgba(0, 0, 0, 0.3);
-  margin: 0 6rpx;
-}
-
-.card-swiper .wx-swiper-dot.wx-swiper-dot-active {
-  background: #667eea;
-}
-
-.card-swiper-item {
+/* 📢 公告栏样式 */
+/* 公告栏 - 标题在正上方 */
+.announcement-container {
+  margin: 20rpx 30rpx;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 16rpx;
+  padding: 28rpx 24rpx 24rpx;
   display: flex;
+  flex-direction: column;
+  box-shadow: 0 4rpx 16rpx rgba(102, 126, 234, 0.25);
+}
+
+.announcement-icon {
+  font-size: 28rpx;
+  text-align: center;
+  margin-bottom: 8rpx;
+  opacity: 0.9;
+}
+
+.announcement-swiper {
+  height: 180rpx;
+}
+
+.announcement-item {
+  display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
-  padding: 10rpx 0; /* 上下留点空隙给阴影 */
-}
-
-.swiper-box {
-  width: 100%;
+  text-align: center;
   height: 100%;
-  border-radius: 20rpx;
-  overflow: hidden;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 8rpx 20rpx rgba(0, 0, 0, 0.15);
-  position: relative;
-  margin: 0 10rpx; /* 图片之间的间距 */
-  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
-  transform: translateZ(0); /* 启用硬件加速 */
+  padding: 0 16rpx;
 }
 
-/* 当前选中的图片放大 */
-.swiper-box.cur {
-  box-shadow: 0 12rpx 30rpx rgba(102, 126, 234, 0.4);
-  z-index: 10;
-}
-
-.swiper-image {
-  width: 100%;
-  height: 100%;
-  border-radius: 16rpx;
-}
-
-/* 图片上的文字标题 */
-.swiper-text {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 60rpx;
-  line-height: 60rpx;
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
-  font-size: 24rpx;
-  padding-left: 20rpx;
-  backdrop-filter: blur(4px);
-}
-
-/* 通告栏 */
-.announcement-bar {
-  background: linear-gradient(135deg, #f0f2ff 0%, #e8f2ff 100%);
-  border-radius: 12rpx;
-  margin: 20rpx 30rpx 32rpx 30rpx;
-  padding: 16rpx 20rpx;
-  border-left: 4rpx solid #667eea;
-  position: relative;
-  z-index: 10;
+.announcement-title {
+  font-size: 30rpx;
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 44rpx;
+  margin-bottom: 4rpx;
+  letter-spacing: 1rpx;
 }
 
 .announcement-content {
-  font-size: 26rpx;
-  color: #856404;
-  line-height: 1.4;
-  text-align: center;
-  font-weight: 500;
+  font-size: 25rpx;
+  color: #ffffff;
+  line-height: 38rpx;
+  opacity: 0.95;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.5rpx;
+  word-break: break-all;
 }
 
 /* 👤 头部用户信息卡片 */
@@ -158,7 +125,7 @@ page {
 .user-info {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .avatar {
@@ -187,6 +154,71 @@ page {
   font-size: 24rpx;
   color: #606266;
   margin-top: 8rpx;
+}
+
+/* 👥 审核员在线状态卡片 */
+.auditor-status-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 20rpx;
+  margin: 20rpx 30rpx;
+  padding: 24rpx 32rpx;
+  box-shadow: 0 8rpx 20rpx rgba(102, 126, 234, 0.25);
+}
+
+.auditor-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+}
+
+.auditor-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.auditor-label {
+  font-size: 24rpx;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+.auditor-count {
+  font-size: 44rpx;
+  font-weight: bold;
+  color: #ffffff;
+  text-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.15);
+}
+
+.auditor-count.online {
+  color: #ffd700;
+}
+
+.auditor-divider {
+  width: 1rpx;
+  height: 60rpx;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.auditor-tips {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid rgba(255, 255, 255, 0.15);
+}
+
+.tips-dot {
+  font-size: 20rpx;
+  color: #ffd700;
+  margin-right: 8rpx;
+}
+
+.tips-text {
+  font-size: 22rpx;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 /* 手机号授权按钮 */
@@ -233,6 +265,7 @@ page {
   transition: all 0.3s ease;
   position: relative;
   overflow: hidden;
+  min-height: 180rpx;
 }
 
 .review-card:hover {
@@ -270,6 +303,24 @@ page {
   box-shadow: 0 2rpx 8rpx rgba(82, 196, 26, 0.3);
 }
 
+.rejection-icon {
+  position: absolute;
+  top: -8rpx;
+  right: -8rpx;
+  width: 32rpx;
+  height: 32rpx;
+  background: #ff4d4f;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20rpx;
+  font-weight: bold;
+  border: 2rpx solid #fff;
+  box-shadow: 0 2rpx 8rpx rgba(255, 77, 79, 0.3);
+}
+
 .card-content {
   flex: 1;
   margin-left: 20rpx;
@@ -292,6 +343,66 @@ page {
 
 .time-row {
   margin-top: 8rpx;
+}
+
+/* 信息行样式 - 昵称和内容 */
+.info-row {
+  margin-top: 6rpx;
+  justify-content: flex-start;
+}
+
+.info-label {
+  font-size: 24rpx;
+  color: #999;
+  margin-right: 8rpx;
+  flex-shrink: 0;
+}
+
+.info-value {
+  font-size: 26rpx;
+  color: #333;
+  flex: 1;
+  word-break: break-all;
+}
+
+.comment-content {
+  font-size: 24rpx;
+  color: #666;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 内容行样式 */
+.device-row {
+  margin-top: 6rpx;
+}
+
+.device-name {
+  font-size: 24rpx;
+  color: #1890ff;
+  background: #e6f7ff;
+  padding: 4rpx 12rpx;
+  border-radius: 6rpx;
+}
+
+.content-row {
+  margin-top: 8rpx;
+  margin-bottom: 4rpx;
+}
+
+.content-text {
+  font-size: 26rpx;
+  color: #666;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-all;
 }
 
 .submit-time {
@@ -756,4 +867,48 @@ page {
 .retry-btn:active {
   transform: scale(0.98);
   box-shadow: 0 2rpx 8rpx rgba(102, 126, 234, 0.4);
+}
+
+/* 🎁 持续检查奖励卡片样式 */
+.continuous-check-card {
+  background: linear-gradient(135deg, #fff9e6 0%, #fff 100%);
+  border: 1rpx solid #ffd591;
+  min-height: 180rpx;
+}
+
+.continuous-check-thumb {
+  width: 100rpx;
+  height: 100rpx;
+  background: linear-gradient(135deg, #ffd666 0%, #ffa940 100%);
+  border-radius: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.continuous-check-icon {
+  font-size: 50rpx;
+}
+
+.continuous-check-type {
+  color: #d46b08;
+}
+
+.continuous-amount {
+  color: #fa8c16;
+  font-size: 36rpx;
+}
+
+.continuous-check-badge {
+  margin-top: 8rpx;
+  background: linear-gradient(135deg, #fff7e6 0%, #ffe7ba 100%);
+  border: 1rpx solid #ffd591;
+  border-radius: 8rpx;
+  padding: 4rpx 12rpx;
+  display: inline-block;
+}
+
+.continuous-check-badge text {
+  font-size: 22rpx;
+  color: #d46b08;
 }

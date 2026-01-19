@@ -66,25 +66,16 @@ Page({
     console.log('📞 用户手机号:', userInfo?.phone);
 
     if (!app.checkPhoneAuthForNavigation()) {
-      console.log('🚫 用户未完成手机号授权，跳转首页');
+      console.log('🚫 用户未完成手机号授权，跳转登录页');
       wx.showModal({
         title: '需要完成授权',
-        content: '请先完成手机号授权才能使用设备管理功能',
+        content: '请先完成手机号授权才能使用其他功能',
         showCancel: false,
         confirmText: '立即授权',
         success: (res) => {
           if (res.confirm) {
-            wx.switchTab({
-              url: '/pages/index/index',
-              success: () => {
-                setTimeout(() => {
-                  const pages = getCurrentPages();
-                  const currentPage = pages[pages.length - 1];
-                  if (currentPage && currentPage.checkPhoneAuth) {
-                    currentPage.checkPhoneAuth();
-                  }
-                }, 500);
-              }
+            wx.redirectTo({
+              url: '/pages/login/login?needPhoneAuth=true'
             });
           }
         }
@@ -267,8 +258,8 @@ Page({
 
      // 匹配小红书号格式
      const patterns = [
-       /小红书[号:]\s*([0-9]+)/i,  // "小红书号：123456" 或 "小红书号 123456"
-       /小红书号[：:]\s*([0-9]+)/i, // "小红书号：123456"
+       /账号[号:]\s*([0-9]+)/i,  // "账号号：123456" 或 "账号号 123456"
+       /账号号[：:]\s*([0-9]+)/i, // "账号号：123456"
        /账号[：:]\s*([0-9]+)/i,     // "账号：123456"
        /ID[：:]\s*([0-9]+)/i,       // "ID：123456"
        /\b([0-9]{8,12})\b/          // 纯数字账号ID (8-12位)
@@ -303,24 +294,49 @@ Page({
          }
          this.setData({ uploadingImage: true });
 
-         // 上传到OSS
-         app.uploadImage(tempFilePath).then(result => {
-           this.setData({
-             reviewImage: result.imageUrl,
-             'addForm.reviewImage': result.imageUrl,
-             uploadingImage: false
-           });
-           wx.showToast({
-             title: '上传成功',
-             icon: 'success'
-           });
-         }).catch(err => {
-           console.error('图片上传失败:', err);
-           this.setData({ uploadingImage: false });
-           wx.showToast({
-             title: '上传失败，请重试',
-             icon: 'none'
-           });
+         // 上传到服务器
+         const token = app.getCurrentToken();
+         wx.uploadFile({
+           url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/upload/image`,
+           filePath: tempFilePath,
+           name: 'file',
+           header: {
+             'Authorization': `Bearer ${token}`
+           },
+           success: (uploadRes) => {
+             try {
+               const data = JSON.parse(uploadRes.data);
+               if (data.success) {
+                 this.setData({
+                   reviewImage: data.data.url,
+                   'addForm.reviewImage': data.data.url
+                 });
+                 wx.showToast({
+                   title: '上传成功',
+                   icon: 'success'
+                 });
+               } else {
+                 throw new Error(data.message || '上传失败');
+               }
+             } catch (e) {
+               console.error('图片上传失败:', e);
+               wx.showToast({
+                 title: '上传失败，请重试',
+                 icon: 'none'
+               });
+             }
+           },
+           fail: (err) => {
+             console.error('图片上传失败:', err);
+             wx.showToast({
+               title: '上传失败，请重试',
+               icon: 'none'
+             });
+           },
+           complete: () => {
+             // 确保无论成功或失败都重置上传状态
+             this.setData({ uploadingImage: false });
+           }
          });
        },
        fail: (err) => {
@@ -345,7 +361,7 @@ Page({
          const text = res.data;
          console.log('📋 粘贴的文本:', text);
 
-         // 尝试提取小红书链接
+         // 尝试提取链接
          const xhsUrlMatch = text.match(/https?:\/\/[^\s]+/);
          if (xhsUrlMatch) {
            this.setData({
@@ -395,14 +411,6 @@ Page({
        return;
      }
 
-     if (!accountUrl.trim()) {
-       wx.showToast({
-         title: '请输入账号链接',
-         icon: 'none'
-       });
-       return;
-     }
-
      if (!reviewImage.trim()) {
        wx.showToast({
          title: '请上传小红薯个人页面截图',
@@ -415,49 +423,10 @@ Page({
 
      const token = app.getCurrentToken();
 
-     // 第一步：AI审核账号ID和昵称匹配
-     console.log('🤖 开始AI审核设备账号ID和昵称匹配...');
-     console.log(`📊 审核数据: 账号ID="${accountId.trim()}" vs 昵称="${accountName.trim()}"`);
+     // 跳过AI审核，直接创建设备
+     console.log('✅ 跳过AI审核，直接创建设备...');
 
      app.request({
-       url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/devices/verify`,
-       method: 'POST',
-       header: { 'Authorization': `Bearer ${token}` },
-       data: {
-         accountId: accountId.trim(), // 账号ID
-         nickname: accountName.trim(), // 昵称
-         accountUrl: accountUrl.trim() // 账号链接
-       }
-     }).then(verifyRes => {
-       console.log('🤖 AI审核结果:', verifyRes);
-
-       if (!verifyRes.data || !verifyRes.data.success) {
-         wx.showToast({
-           title: '审核服务异常，请重试',
-           icon: 'none'
-         });
-         return;
-       }
-
-       const verifyResult = verifyRes.data;
-
-       // 检查审核结果
-       if (!verifyResult.verified) {
-         // 审核失败，显示原因
-         const reasonText = verifyResult.reasonText || '昵称与账号不匹配';
-         wx.showModal({
-           title: '审核未通过',
-           content: reasonText,
-           showCancel: false,
-           confirmText: '重新填写'
-         });
-         return;
-       }
-
-       // 审核通过，继续创建设备
-       console.log('✅ AI审核通过，开始创建设备...');
-
-       app.request({
          url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/devices`,
          method: 'POST',
          header: { 'Authorization': `Bearer ${token}` },
@@ -489,15 +458,7 @@ Page({
            title: '网络错误，请重试',
            icon: 'none'
          });
-       });
-
-     }).catch(verifyErr => {
-       console.error('AI审核失败:', verifyErr);
-       wx.showToast({
-         title: '审核服务不可用，请重试',
-         icon: 'none'
-       });
-     }).finally(() => {
+       }).finally(() => {
        this.setData({ adding: false });
      });
    },
@@ -548,7 +509,7 @@ Page({
          const text = res.data;
          console.log('📋 修改账号粘贴的文本:', text);
 
-         // 优先尝试提取小红书链接
+         // 优先尝试提取链接
          const xhsUrlMatch = text.match(/https?:\/\/[^\s]+/);
          if (xhsUrlMatch) {
            this.setData({
@@ -591,14 +552,6 @@ Page({
        return;
      }
 
-     if (!accountUrl.trim()) {
-       wx.showToast({
-         title: '请输入账号链接',
-         icon: 'none'
-       });
-       return;
-     }
-
      if (accountName.trim() === device.accountName) {
        wx.showToast({
          title: '昵称未修改',
@@ -611,49 +564,10 @@ Page({
 
      const token = app.getCurrentToken();
 
-     // 第一步：AI审核新昵称与账号链接的匹配
-     console.log('🤖 开始AI审核修改后的昵称与账号链接匹配...');
-     console.log(`📊 审核数据: 新昵称="${accountName.trim()}" vs 账号链接="${accountUrl.trim()}"`);
+     // 跳过AI审核，直接修改设备
+     console.log('✅ 跳过AI审核，直接修改设备...');
 
      app.request({
-       url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/devices/verify`,
-       method: 'POST',
-       header: { 'Authorization': `Bearer ${token}` },
-       data: {
-         accountId: '', // ID自动从链接获取
-         nickname: accountName.trim(), // 新昵称
-         accountUrl: accountUrl.trim() // 用户提供的链接
-       }
-     }).then(verifyRes => {
-       console.log('🤖 AI审核结果:', verifyRes);
-
-       if (!verifyRes.data || !verifyRes.data.success) {
-         wx.showToast({
-           title: '审核服务异常，请重试',
-           icon: 'none'
-         });
-         return;
-       }
-
-       const verifyResult = verifyRes.data;
-
-       // 检查审核结果
-       if (!verifyResult.verified) {
-         // 审核失败，显示原因
-         const reasonText = verifyResult.reasonText || '昵称与账号不匹配';
-         wx.showModal({
-           title: '审核未通过',
-           content: reasonText,
-           showCancel: false,
-           confirmText: '重新填写'
-         });
-         return;
-       }
-
-       // 审核通过，继续修改设备
-       console.log('✅ AI审核通过，开始修改设备...');
-
-       app.request({
          url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/devices/${device._id}`,
          method: 'PUT',
          header: { 'Authorization': `Bearer ${token}` },
@@ -682,15 +596,13 @@ Page({
            title: '网络错误，请重试',
            icon: 'none'
          });
-       });
-
-     }).catch(verifyErr => {
-       console.error('AI审核失败:', verifyErr);
-       wx.showToast({
-         title: '审核服务不可用，请重试',
-         icon: 'none'
-       });
-     }).finally(() => {
+       }).catch(err => {
+         console.error('修改账号失败:', err);
+         wx.showToast({
+           title: '网络错误，请重试',
+           icon: 'none'
+         });
+       }).finally(() => {
        this.setData({ editing: false });
      });
    },

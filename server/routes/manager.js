@@ -11,7 +11,9 @@ router.get('/leads', authenticateToken, requireRole(['manager', 'boss']), async 
     let query = {
       role: 'part_time', // 只获取兼职用户
       mentor_id: null, // 未分配带教老师
-      is_deleted: { $ne: true }
+      is_deleted: { $ne: true },
+      // 排除小程序自动创建的没有姓名的用户
+      nickname: { $ne: null, $ne: '', $exists: true }
     };
 
     // 如果有搜索条件
@@ -97,9 +99,9 @@ router.put('/assign-mentor/:leadId', authenticateToken, requireRole(['manager', 
       });
     }
 
-    // 验证带教老师是否存在且角色正确
+    // 验证带教老师是否存在且角色正确（允许 mentor 或 manager）
     const mentorUser = await User.findById(mentor_id);
-    if (!mentorUser || mentorUser.role !== 'mentor') {
+    if (!mentorUser || !['mentor', 'manager'].includes(mentorUser.role)) {
       return res.status(400).json({
         success: false,
         message: '选择的带教老师不存在或角色不正确'
@@ -187,11 +189,11 @@ router.put('/assign-mentor/:leadId', authenticateToken, requireRole(['manager', 
   }
 });
 
-// 获取所有带教老师列表（用于分配选择）
+// 获取所有带教老师列表（用于分配选择，包括主管）
 router.get('/mentor-list', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
   try {
     const mentorUsers = await User.find({
-      role: 'mentor',
+      role: { $in: ['mentor', 'manager'] },
       is_deleted: { $ne: true }
     })
     .select('username nickname phone')
@@ -226,7 +228,7 @@ router.get('/stats', authenticateToken, requireRole(['manager', 'boss']), async 
         is_deleted: { $ne: true }
       }),
       totalMentors: await User.countDocuments({
-        role: 'mentor',
+        role: { $in: ['mentor', 'manager'] },
         is_deleted: { $ne: true }
       }),
       assignedUsers: await User.countDocuments({
@@ -246,6 +248,52 @@ router.get('/stats', authenticateToken, requireRole(['manager', 'boss']), async 
     res.status(500).json({
       success: false,
       message: '获取统计数据失败'
+    });
+  }
+});
+
+// HR团队管理 - 获取HR名下的带教老师列表
+router.get('/hr-team', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search } = req.query;
+    
+    let query = {
+      role: 'mentor',
+      is_deleted: { $ne: true }
+    };
+    
+    // 如果有搜索条件
+    if (search) {
+      query.$or = [
+        { username: { $regex: search, $options: 'i' } },
+        { nickname: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    const mentors = await User.find(query)
+      .select('username nickname phone')
+      .sort({ username: 1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+    
+    const total = await User.countDocuments(query);
+    
+    res.json({
+      success: true,
+      mentors,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('获取HR团队管理列表错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取HR团队管理列表失败'
     });
   }
 });

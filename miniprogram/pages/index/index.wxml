@@ -13,44 +13,49 @@
   <view class="header-card">
     <view class="user-info">
       <view class="avatar-container">
-        <image class="avatar" src="{{userInfo.avatarUrl || 'https://mmbiz.qpic.cn/mmbiz/icTdbqWNOwNRna42FI242Lcia07jQodd2FJGIYQfG0LAJGFxM4FbnQP6yfMxBgJ0F3YRqJCJ1aPAK2dQagdusBZg/0'}}" mode="cover"></image>
+        <image class="avatar" src="{{userInfo.avatar || userInfo.avatarUrl || 'https://mmbiz.qpic.cn/mmbiz/icTdbqWNOwNRna42FI242Lcia07jQodd2FJGIYQfG0LAJGFxM4FbnQP6yfMxBgJ0F3YRqJCJ1aPAK2dQagdusBZg/0'}}" mode="cover"></image>
       </view>
       <view class="user-text">
-        <view class="greeting">你好，{{userInfo.nickName || '奋斗者'}}</view>
+        <view class="greeting">你好，{{userInfo.nickname || userInfo.nickName || '奋斗者'}}</view>
         <view class="subtitle">{{userInfo.phone ? '今天也是努力搞积分的一天！💪' : '请先完成手机号授权'}}</view>
       </view>
     </view>
   </view>
 
-  <!-- 画廊轮播图 -->
-  <view class="banner-container">
-    <swiper
-      class="card-swiper"
-      indicator-dots="{{true}}"
-      autoplay="{{true}}"
-      interval="4000"
-      duration="500"
-      circular="{{true}}"
-      previous-margin="60rpx"
-      next-margin="60rpx"
-      bindchange="cardSwiper"
-    >
-      <block wx:for="{{bannerList}}" wx:key="id">
-        <swiper-item class="card-swiper-item">
-          <view class="swiper-box {{cardCur==index?'cur':''}}">
-            <image src="{{item.url}}" class="swiper-image" mode="aspectFill"></image>
-          </view>
-        </swiper-item>
-      </block>
-    </swiper>
-
-    <!-- 通告栏 -->
-    <view class="announcement-bar">
-      <view class="announcement-content">
-        📢 今日笔记任务单价上调至 10 积分！
+  <!-- 审核员在线状态 -->
+  <view class="auditor-status-card">
+    <view class="auditor-info">
+      <view class="auditor-item">
+        <text class="auditor-label">审核员</text>
+        <text class="auditor-count">{{auditorStatus.totalAuditors || 0}} 人</text>
+      </view>
+      <view class="auditor-divider"></view>
+      <view class="auditor-item">
+        <text class="auditor-label">在线</text>
+        <text class="auditor-count online">{{auditorStatus.onlineAuditors || 0}} 人</text>
       </view>
     </view>
   </view>
+
+  <!-- 公告栏（滚动显示多条公告） -->
+  <!-- <view class="announcement-container" wx:if="{{announcements.length > 0}}">
+    <view class="announcement-icon">📢</view>
+    <swiper class="announcement-swiper"
+      indicator-dots="{{false}}"
+      autoplay="{{true}}"
+      interval="3000"
+      duration="500"
+      circular="{{true}}"
+      vertical="{{true}}"
+      display-multiple-items="{{1}}">
+      <block wx:for="{{announcements}}" wx:key="id">
+        <swiper-item class="announcement-item" bindtap="handleAnnouncementTap" data-item="{{item}}">
+          <view class="announcement-title" style="color: {{item.textColor || '#ffffff'}}; font-size: {{item.fontSize || 28}}rpx;">{{item.title}}</view>
+          <view class="announcement-content" style="color: {{item.textColor || '#ffffff'}}; font-size: {{(item.fontSize || 28) - 4}}rpx;">{{item.content}}</view>
+        </swiper-item>
+      </block>
+    </swiper>
+  </view> -->
 
   <!-- 📋 设备审核状态卡片 -->
   <view class="device-review-card" wx:if="{{showDeviceReviewCard}}">
@@ -95,10 +100,33 @@
 
     <!-- 列表内容 -->
     <block wx:for="{{reviews}}" wx:key="_id">
-      <view class="review-card">
+
+      <!-- 持续检查奖励卡片 -->
+      <view class="review-card continuous-check-card" wx:if="{{item.isContinuousCheckReward}}">
+        <view class="card-thumb-container continuous-check-thumb">
+          <text class="continuous-check-icon">🎁</text>
+        </view>
+        <view class="card-content">
+          <view class="card-row">
+            <text class="task-type continuous-check-type">笔记持续存在</text>
+            <view class="status-tag completed">已完成</view>
+          </view>
+          <view class="card-row time-row">
+            <text class="submit-time">{{item.continuousCheckInfo.checkTime}}</text>
+            <text class="amount continuous-amount">+{{item.continuousCheckInfo.rewardPoints}} 积分</text>
+          </view>
+          <view class="continuous-check-badge">
+            <text>第 {{item.continuousCheckInfo.checkIndex}} 次检查奖励</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 普通审核卡片 -->
+      <view class="review-card" wx:else>
         <view class="card-thumb-container">
           <image class="card-thumb" src="{{item.imageUrl}}" mode="aspectFill"></image>
           <view class="completion-icon" wx:if="{{item.status === 'manager_approved' || item.status === 'completed'}}">✓</view>
+          <view class="rejection-icon" wx:if="{{item.status === 'rejected' || item.status === 'manager_rejected' || item.status === 'client_verification_failed'}}">✗</view>
         </view>
         <view class="card-content">
           <view class="card-row">
@@ -113,14 +141,35 @@
             </view>
           </view>
           <view class="card-row time-row">
-            <text class="submit-time">{{item.commentAuthor || item.deviceName}} · {{item.formattedTime}}</text>
+            <text class="submit-time">{{item.formattedTime}}</text>
             <text class="amount" wx:if="{{item.status === 'manager_approved' || item.status === 'completed'}}">+ {{item.snapshotPrice}}</text>
           </view>
 
+          <!-- 评论昵称和内容 -->
+          <view class="card-row info-row" wx:if="{{item.imageType === 'comment'}}">
+            <text class="info-label">昵称:</text>
+            <text class="info-value">{{item.commentAuthor || '未知'}}</text>
+          </view>
+          <view class="card-row info-row" wx:if="{{item.imageType === 'comment' && item.userNoteInfo.comment}}">
+            <text class="info-label">评论:</text>
+            <text class="info-value comment-content">{{item.userNoteInfo.comment}}</text>
+          </view>
+
+          <!-- 笔记标题和作者 -->
+          <view class="card-row info-row" wx:if="{{item.imageType === 'note'}}">
+            <text class="info-label">标题:</text>
+            <text class="info-value">{{item.userNoteInfo.title || '未知'}}</text>
+          </view>
+          <view class="card-row info-row" wx:if="{{item.imageType === 'note'}}">
+            <text class="info-label">作者:</text>
+            <text class="info-value">{{item.noteAuthor || '未知'}}</text>
+          </view>
+
+
           <!-- 驳回原因 -->
-          <view class="audit-failure-reason" wx:if="{{(item.aiReviewResult && item.aiReviewResult.passed === false) || item.status === 'rejected' || item.status === 'manager_rejected'}}">
+          <view class="audit-failure-reason" wx:if="{{(item.aiReviewResult && item.aiReviewResult.passed === false) || item.status === 'rejected' || item.status === 'manager_rejected' || item.status === 'client_verification_failed'}}">
             <text class="failure-label">审核失败原因：</text>
-            <text class="failure-reason">{{item.rejectionReason || (item.aiReviewResult && item.aiReviewResult.reasons && item.aiReviewResult.reasons.length > 0 ? item.aiReviewResult.reasons[item.aiReviewResult.reasons.length - 1] : '审核未通过')}}</text>
+            <text class="failure-reason">{{item.rejectionReason || item.clientVerification && item.clientVerification.firstResult && item.clientVerification.firstResult.comment || (item.aiReviewResult && item.aiReviewResult.reasons && item.aiReviewResult.reasons.length > 0 ? item.aiReviewResult.reasons[item.aiReviewResult.reasons.length - 1] : '审核未通过')}}</text>
           </view>
 
           <!-- AI审核结果展示 - 已注释 -->

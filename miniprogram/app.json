@@ -45,5 +45,5 @@
     "downloadFile": 10000
   },
   "requiredBackgroundModes": ["audio"],
-  "debug": true
+  "debug": false
 }

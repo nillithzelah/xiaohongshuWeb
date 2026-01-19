@@ -7,9 +7,11 @@ class TimeUtils {
    * @returns {Date} 北京时间对象
    */
   static getBeijingTime() {
+    // 使用正确的时区处理，避免手动加8小时
     const now = new Date();
-    // UTC时间加上8小时得到北京时间
-    return new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    // 创建一个表示当前时刻的北京时间Date对象
+    const beijingTimeStr = now.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' });
+    return new Date(beijingTimeStr + 'Z'); // 添加Z使其成为UTC时间
   }
 
   /**

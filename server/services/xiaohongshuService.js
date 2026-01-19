@@ -2,22 +2,53 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const CommentVerificationService = require('./CommentVerificationService');
+const cookiePoolService = require('./CookiePoolService');
+const rateLimiter = require('./RateLimiter');
+const { KEYWORD_CONFIGS } = require('../config/keywords');
+// 注意：不能在顶部导入asyncAiReviewService，否则会形成循环依赖
+// 在需要时使用延迟导入
 
 class XiaohongshuService {
   constructor() {
     this.baseUrl = 'https://www.xiaohongshu.com';
-    // 设置请求头模拟浏览器
+    // 设置请求头模拟浏览器（2025年最新Chrome配置）
     this.headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Sec-Ch-Ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
       'Upgrade-Insecure-Requests': '1',
+      'Connection': 'keep-alive'
     };
-    
+
     // 初始化评论验证服务
     this.commentVerifier = new CommentVerificationService();
+  }
+
+  /**
+   * 获取Cookie（从Cookie池轮询）
+   */
+  async getCookie() {
+    try {
+      // 优先使用Cookie池，如果没有则使用环境变量
+      const cookieFromPool = await cookiePoolService.getNextCookie();
+      if (cookieFromPool && cookieFromPool.cookie) {
+        return cookieFromPool.cookie;
+      }
+      return process.env.XIAOHONGSHU_COOKIE || '';
+    } catch (error) {
+      console.error('获取Cookie失败:', error);
+      return process.env.XIAOHONGSHU_COOKIE || '';
+    }
   }
 
   /**
@@ -56,11 +87,12 @@ class XiaohongshuService {
       }
 
       // 4. 检查笔记状态（是否存在、是否公开等）
-      const noteStatus = await this.getNoteStatus(noteId);
+      const noteStatus = await this.getNoteStatus(noteId, noteUrl);
       if (!noteStatus.exists) {
         return {
           valid: false,
-          reason: '笔记不存在或已被删除'
+          reason: noteStatus.reason || '笔记不存在或已被删除',
+          noteStatus: noteStatus
         };
       }
 
@@ -121,6 +153,18 @@ class XiaohongshuService {
         cookieString // 传递Cookie字符串用于登录状态
       );
 
+      // 🔥 数据一致性验证：检查是否存在 exists=true 但 foundComments 为空的不一致数据
+      if (commentVerification.exists === true && (!commentVerification.foundComments || commentVerification.foundComments.length === 0)) {
+        console.error('❌ [数据验证] verifyCommentExists 返回了不一致的数据: exists=true 但 foundComments 为空');
+        console.error('   noteUrl:', noteUrl);
+        console.error('   commentContent:', commentContent);
+        console.error('   authorNicknames:', authorNicknames);
+
+        // 强制修正：如果 foundComments 为空，exists 应该为 false
+        commentVerification.exists = false;
+        console.warn('⚠️ [数据修正] 自动将 commentVerification.exists 设为 false');
+      }
+
       if (commentVerification.error) {
         // 验证服务出错，由于要求内容完全一致，服务不可用时必须拒绝审核
         reviewResult.passed = false;
@@ -171,7 +215,8 @@ class XiaohongshuService {
           pageCommentCount: commentVerification.pageCommentCount || 0,
           scannedComments: commentVerification.scannedComments || 0,
           foundComments: commentVerification.foundComments || [],
-          pageComments: commentVerification.pageComments || []
+          pageComments: commentVerification.pageComments || [],
+          deviceNicknames: authorNicknames // 添加设备昵称，用于评论限制记录
         }
       };
 
@@ -275,8 +320,20 @@ class XiaohongshuService {
     try {
       // 构建请求头，如果有cookie则添加
       const requestHeaders = { ...this.headers };
-      if (process.env.XIAOHONGSHU_COOKIE) {
-        requestHeaders.Cookie = process.env.XIAOHONGSHU_COOKIE;
+      const cookie = await this.getCookie();
+      if (cookie) {
+        requestHeaders.Cookie = cookie;
+      }
+
+      // 检查请求限流
+      const rateLimiter = require('./RateLimiter');
+      const limitResult = await rateLimiter.checkLimit();
+      if (!limitResult.allowed) {
+        console.log('⚠️ [请求限流] 全局限流触发:', limitResult.reason);
+        return {
+          accessible: false,
+          reason: limitResult.reason || '请求过于频繁，请稍后重试'
+        };
       }
 
       const response = await axios.get(url, {
@@ -327,39 +384,141 @@ class XiaohongshuService {
   }
 
   /**
+   * 手动跟随重定向，确保Cookie不被丢失
+   * axios自动跟随跨域重定向时会丢失某些headers
+   */
+  async _followRedirectsWithCookie(url, cookie) {
+    const maxRedirects = 5;
+    let currentUrl = url;
+    let redirectCount = 0;
+
+    const requestHeaders = {
+      ...this.headers,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache'
+    };
+
+    if (cookie) {
+      requestHeaders.Cookie = cookie;
+    }
+
+    while (redirectCount < maxRedirects) {
+      const response = await axios.get(currentUrl, {
+        headers: requestHeaders,
+        maxRedirects: 0, // 手动处理重定向
+        validateStatus: (status) => status >= 200 && status < 400,
+        timeout: 10000
+      });
+
+      // 检查是否重定向
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers['location'] || response.headers['Location'];
+        if (!location) {
+          break;
+        }
+        // 处理相对路径
+        currentUrl = location.startsWith('http') ? location : new URL(location, currentUrl).href;
+        redirectCount++;
+        console.log(`🔄 [重定向] ${redirectCount}/${maxRedirects}: ${currentUrl.substring(0, 80)}...`);
+      } else {
+        // 返回最终响应
+        return response;
+      }
+    }
+
+    throw new Error('超过最大重定向次数');
+  }
+
+  /**
    * 解析笔记页面内容，提取昵称和标题
    */
   async parseNoteContent(url) {
     try {
       console.log('📄 开始解析笔记内容:', url);
 
-      // 构建请求头，如果有cookie则添加
-      const requestHeaders = {
-        ...this.headers,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
-      };
+      // 从Cookie池获取Cookie
+      const cookie = await this.getCookie();
+      console.log('🔍 [诊断] Cookie状态检查:', {
+        hasCookie: !!cookie,
+        cookieLength: cookie?.length || 0,
+        cookiePreview: cookie ? cookie.substring(0, 50) + '...' : '未设置'
+      });
 
-      if (process.env.XIAOHONGSHU_COOKIE) {
-        requestHeaders.Cookie = process.env.XIAOHONGSHU_COOKIE;
+      // 检查请求限流
+      const rateLimiter = require('./RateLimiter');
+      const limitResult = await rateLimiter.checkLimit();
+      if (!limitResult.allowed) {
+        console.log('⚠️ [请求限流] 全局限流触发:', limitResult.reason);
+        return {
+          success: false,
+          reason: limitResult.reason || '请求过于频繁，请稍后重试'
+        };
       }
 
-      const response = await axios.get(url, {
-        headers: requestHeaders,
-        timeout: 20000,
-        maxRedirects: 5
+      // 使用手动重定向方法，确保Cookie不被丢失
+      const response = await this._followRedirectsWithCookie(url, cookie);
+
+      // 【诊断日志】检查响应状态和内容
+      console.log('🔍 [诊断] HTTP响应:', {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers['content-type'],
+        contentLength: response.data?.length || 0
       });
 
       if (response.status !== 200) {
+        console.log('❌ [诊断] HTTP状态码非200:', response.status);
         return {
           success: false,
           reason: `HTTP ${response.status}`
         };
       }
 
-      const $ = cheerio.load(response.data);
+      // 【诊断日志】检查页面内容特征（严谨版）
+      const html = response.data;
+
+      // 【第一步】检查404页面状态（Cookie无关）
+      const has404 = html.includes('404') || html.includes('笔记不存在') || html.includes('内容已删除');
+
+      // 【第二步】新Cookie失效检测：检查完整登录界面
+      // 检测页面是否同时包含所有登录相关文本
+      const loginTexts = [
+        '登录后推荐更懂你的笔记',
+        '可用小红书或微信扫码',
+        '手机号登录',
+        '我已阅读并同意',
+        '新用户可直接登录'
+      ];
+
+      // 检查是否所有登录文本都存在
+      const hasAllLoginTexts = loginTexts.every(text => html.includes(text));
+      const hasLoginRequired = hasAllLoginTexts && !has404;
+
+      console.log('🔍 [诊断] 页面内容分析:', {
+        hasAllLoginTexts,
+        hasLoginRequired,
+        has404,
+        htmlLength: html.length,
+        loginTextsFound: loginTexts.filter(t => html.includes(t)).length + '/' + loginTexts.length
+      });
+
+      if (has404) {
+        console.log('🚫 [诊断] 检测到404页面 - 笔记不存在或已删除（与Cookie无关）');
+      }
+      if (hasLoginRequired) {
+        console.log('🚫 [诊断] 检测到完整登录界面 - Cookie已失效');
+        // 【Cookie过期处理】标记Cookie为失效
+        console.log('⚠️ [Cookie管理] Cookie已失效，标记为expired');
+        try {
+          await cookiePoolService.markCookieExpired(cookie);
+        } catch (error) {
+          console.error('标记Cookie失效失败:', error);
+        }
+      }
+
+      const $ = cheerio.load(html);
       const parsedData = {
         success: true,
         url: url,
@@ -376,6 +535,11 @@ class XiaohongshuService {
       // 1. 从页面标题提取（多种格式）
       const pageTitle = $('title').text();
       console.log('📄 页面标题:', pageTitle);
+      console.log('🔍 [诊断] 标题解析:', {
+        hasTitle: !!pageTitle,
+        titleLength: pageTitle?.length || 0,
+        titlePreview: pageTitle?.substring(0, 100) || '无标题'
+      });
 
       if (pageTitle) {
         // 尝试不同的标题格式
@@ -406,9 +570,18 @@ class XiaohongshuService {
 
       // 2. 从JSON-LD结构化数据提取
       const jsonLdScripts = $('script[type="application/ld+json"]');
+      console.log('🔍 [诊断] JSON-LD脚本数量:', jsonLdScripts.length);
       for (let i = 0; i < jsonLdScripts.length; i++) {
         try {
           const jsonLd = JSON.parse(jsonLdScripts.eq(i).html());
+          console.log('🔍 [诊断] JSON-LD解析:', {
+            index: i,
+            hasData: !!jsonLd,
+            type: jsonLd?.['@type'],
+            hasHeadline: !!jsonLd?.headline,
+            hasName: !!jsonLd?.name,
+            hasAuthor: !!jsonLd?.author
+          });
           if (jsonLd && (jsonLd['@type'] === 'Article' || jsonLd['@type'] === 'SocialMediaPosting')) {
             parsedData.title = parsedData.title || jsonLd.headline || jsonLd.name;
             if (jsonLd.author) {
@@ -421,8 +594,13 @@ class XiaohongshuService {
             if (jsonLd.datePublished) {
               parsedData.publishTime = jsonLd.datePublished;
             }
+            console.log('✅ [诊断] JSON-LD提取成功:', {
+              title: parsedData.title,
+              author: parsedData.author
+            });
           }
         } catch (e) {
+          console.log('⚠️ [诊断] JSON-LD解析失败:', e.message);
           // 忽略解析错误，继续下一个
         }
       }
@@ -431,8 +609,15 @@ class XiaohongshuService {
       const metaTitle = $('meta[property="og:title"]').attr('content') ||
                        $('meta[name="title"]').attr('content');
       const metaAuthor = $('meta[name="author"]').attr('content') ||
-                        $('meta[property="article:author"]').attr('content') ||
-                        $('meta[property="og:author"]').attr('content');
+                       $('meta[property="article:author"]').attr('content') ||
+                       $('meta[property="og:author"]').attr('content');
+
+      console.log('🔍 [诊断] Meta标签提取:', {
+        hasMetaTitle: !!metaTitle,
+        metaTitlePreview: metaTitle?.substring(0, 50) || '无',
+        hasMetaAuthor: !!metaAuthor,
+        metaAuthorPreview: metaAuthor?.substring(0, 30) || '无'
+      });
 
       parsedData.title = parsedData.title || metaTitle;
       parsedData.author = parsedData.author || metaAuthor;
@@ -530,7 +715,7 @@ class XiaohongshuService {
       }
 
       // 【新增】关键词检查 - 在返回结果前进行
-      const keywordCheck = this.checkContentKeywords($, pageTitle);
+      const keywordCheck = await this.checkContentKeywords($, pageTitle);
       parsedData.keywordCheck = keywordCheck;
 
       console.log('📄 解析结果:', {
@@ -541,6 +726,20 @@ class XiaohongshuService {
         pageTitle: pageTitle,
         keywordCheck: keywordCheck
       });
+
+      // 【诊断】总结解析失败原因
+      if (!parsedData.title && !parsedData.author) {
+        console.log('❌ [诊断] 解析完全失败 - 无法提取标题和作者');
+        console.log('🔍 [诊断] 可能原因:');
+        console.log('  1. 页面结构已改变，所有选择器失效');
+        console.log('  2. Cookie已过期，返回的是登录页面');
+        console.log('  3. 被反爬虫机制拦截');
+        console.log('  4. 页面使用JavaScript动态渲染，需要等待加载');
+      } else if (!parsedData.title) {
+        console.log('⚠️ [诊断] 标题解析失败');
+      } else if (!parsedData.author) {
+        console.log('⚠️ [诊断] 作者解析失败');
+      }
 
       return parsedData;
 
@@ -554,25 +753,115 @@ class XiaohongshuService {
   }
 
   /**
-   * 获取笔记状态信息
+   * 获取笔记状态信息（检查页面内容判断笔记是否真实存在）
+   * @param {String} noteId - 笔记ID
+   * @param {String} noteUrl - 笔记完整URL（用于页面内容检查）
    */
-  async getNoteStatus(noteId) {
+  async getNoteStatus(noteId, noteUrl = null) {
     try {
-      // 这里可以调用小红书的API或使用其他方式获取笔记信息
-      // 目前先返回基本信息
+      // 如果没有提供URL，尝试构建
+      if (!noteUrl) {
+        noteUrl = `https://www.xiaohongshu.com/explore/${noteId}`;
+      }
 
+      const requestHeaders = { ...this.headers };
+      const cookie = await this.getCookie();
+      if (cookie) {
+        requestHeaders.Cookie = cookie;
+      }
+
+      const response = await axios.get(noteUrl, {
+        headers: requestHeaders,
+        timeout: 10000,
+        maxRedirects: 5
+      });
+
+      // HTTP状态非200，笔记可能不存在
+      if (response.status !== 200) {
+        return {
+          exists: false,
+          noteId,
+          status: 'deleted',
+          httpStatus: response.status,
+          reason: `HTTP状态码: ${response.status}`
+        };
+      }
+
+      // 检查页面内容判断笔记是否真实存在
+      const pageData = response.data;
+      const $ = cheerio.load(pageData);
+      const title = $('title').text();
+
+      // 检测笔记不存在的情况
+      const notExistPatterns = [
+        '笔记不存在',
+        '内容已删除',
+        '内容违规',
+        '该内容已被作者删除',
+        '该内容暂不可见',
+        '404',
+        '页面不存在',
+        '抱歉，你访问的内容不见了',
+        '登录后推荐' // 如果页面只有登录提示，说明笔记可能不可访问
+      ];
+
+      const pageText = pageData.toLowerCase() + title.toLowerCase();
+      const hasNotExistPattern = notExistPatterns.some(pattern =>
+        pageText.includes(pattern.toLowerCase())
+      );
+
+      if (hasNotExistPattern) {
+        return {
+          exists: false,
+          noteId,
+          status: 'deleted',
+          reason: '页面显示笔记不存在或已被删除'
+        };
+      }
+
+      // 检查页面是否有实际的笔记内容
+      const hasNoteContent = pageData.includes('note-text') ||
+                             pageData.includes('content') ||
+                             pageData.includes('desc') ||
+                             title.includes('小红书') && !title.includes('登录');
+
+      if (!hasNoteContent && pageData.length < 5000) {
+        // 页面内容过短且没有笔记内容，可能是错误页面
+        return {
+          exists: false,
+          noteId,
+          status: 'invalid',
+          reason: '页面内容异常，可能笔记不存在'
+        };
+      }
+
+      // 笔记存在
       return {
         exists: true,
         noteId,
-        status: 'public', // public, private, deleted
-        // 可以添加更多信息：点赞数、评论数、发布时间等
+        status: 'public',
+        title: title,
+        pageLength: pageData.length
       };
 
     } catch (error) {
       console.error('获取笔记状态失败:', error);
+      // 网络错误不直接判定为笔记不存在
+      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+        return {
+          exists: true, // 超时不确定，假设存在
+          noteId,
+          status: 'unknown',
+          error: 'timeout',
+          reason: '请求超时，无法确定笔记状态'
+        };
+      }
       return {
         exists: false,
-        error: error.message
+        noteId,
+        status: 'error',
+        error: error.message,
+        reason: `检查失败: ${error.message}`
       };
     }
   }
@@ -600,45 +889,9 @@ class XiaohongshuService {
    * @param {string} pageTitle - 页面标题
    * @returns {Object} 关键词检查结果
    */
-  checkContentKeywords($, pageTitle) {
-    // 定义关键词配置，包含权重和变体
-    const keywordConfigs = [
-      {
-        keywords: ['减肥被骗', '减肥被骗经历', '减肥受骗', '减肥诈骗'],
-        weight: 1.0,
-        category: '减肥诈骗'
-      },
-      {
-        keywords: ['护肤被骗', '护肤受骗', '护肤诈骗', '护肤被骗经历'],
-        weight: 1.0,
-        category: '护肤诈骗'
-      },
-      {
-        keywords: ['祛斑被骗', '祛斑受骗', '祛斑诈骗', '祛斑被骗经历'],
-        weight: 1.0,
-        category: '祛斑诈骗'
-      },
-      {
-        keywords: ['丰胸被骗', '丰胸受骗', '丰胸诈骗', '丰胸被骗经历'],
-        weight: 1.0,
-        category: '丰胸诈骗'
-      },
-      {
-        keywords: ['医美被骗', '医美受骗', '医美诈骗', '医美被骗经历'],
-        weight: 1.0,
-        category: '医美诈骗'
-      },
-      {
-        keywords: ['白发转黑被骗', '白发转黑受骗', '白发转黑诈骗', '白发变黑被骗'],
-        weight: 1.0,
-        category: '白发转黑诈骗'
-      },
-      {
-        keywords: ['手镯定制被骗', '手镯定制受骗', '手镯定制诈骗', '定制手镯被骗'],
-        weight: 1.0,
-        category: '手镯定制诈骗'
-      }
-    ];
+  async checkContentKeywords($, pageTitle) {
+    // 使用统一的关键词配置（从 config/keywords.js 导入）
+    const keywordConfigs = KEYWORD_CONFIGS;
 
     const sources = {
       title: { text: pageTitle || '', weight: 3.0 }, // 标题权重最高
@@ -684,24 +937,27 @@ class XiaohongshuService {
             continue;
           }
 
-          // 模糊匹配：关键词的部分匹配
-          const words = keywordLower.split('');
-          let matchCount = 0;
-          for (const word of words) {
-            if (sourceText.includes(word)) {
-              matchCount++;
+          // 模糊匹配：关键词的连续词组匹配（改进版）
+          // 将关键词按词分割（假设词之间有空格或特定分隔符）
+          const keywordWords = keywordLower.split(/\s+/);
+          let wordMatchCount = 0;
+
+          for (const kwWord of keywordWords) {
+            // 检查关键词中的词是否在文本中出现
+            if (sourceText.includes(kwWord)) {
+              wordMatchCount++;
             }
           }
 
-          if (matchCount >= Math.max(2, words.length * 0.6)) { // 至少匹配60%的词
-            const fuzzyScore = config.weight * sourceData.weight * (matchCount / words.length) * 0.7; // 模糊匹配分数较低
+          if (wordMatchCount >= Math.max(1, keywordWords.length * 0.7)) { // 至少匹配70%的词
+            const fuzzyScore = config.weight * sourceData.weight * (wordMatchCount / keywordWords.length) * 0.8; // 模糊匹配分数
             if (fuzzyScore > bestMatch.score) {
               bestMatch = {
                 score: fuzzyScore,
                 matchedKeyword: keyword,
                 source: sourceName,
                 category: config.category,
-                matches: [{ keyword, type: 'fuzzy', source: sourceName, score: fuzzyScore, matchRatio: matchCount / words.length }]
+                matches: [{ keyword, type: 'fuzzy', source: sourceName, score: fuzzyScore, matchRatio: wordMatchCount / keywordWords.length }]
               };
             }
           }
@@ -710,7 +966,7 @@ class XiaohongshuService {
     }
 
     // 根据匹配分数决定是否通过
-    const passThreshold = 1.5; // 通过阈值
+    const passThreshold = 1.0; // 通过阈值（降低阈值以增加覆盖率）
 
     if (bestMatch.score >= passThreshold) {
       return {

@@ -13,101 +13,72 @@
 
 ## 🔑 访问方法
 
-### 1. 通过MCP服务器访问（推荐用于AI助手）
-
-MCP（Model Context Protocol）允许AI助手直接访问数据库，无需手动查询。
-
-#### 配置步骤：
-
-1. **安装MCP服务器**：
-   ```bash
-   npm install -g @modelcontextprotocol/server-mongodb
-   ```
-
-2. **配置MCP设置**：
-   编辑 Windsurf 编辑器的MCP配置文件：
-   ```
-   c:/Users/Administer/AppData/Roaming/Windsurf/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json
-   ```
-
-   添加以下配置：
-   ```json
-   {
-     "mcpServers": {
-       "mongodb-xiaohongshu": {
-         "command": "npx",
-         "args": [
-           "-y",
-           "@modelcontextprotocol/server-mongodb",
-           "mongodb://127.0.0.1:27017/xiaohongshu_audit"
-         ]
-       }
-     }
-   }
-   ```
-
-3. **使用方法**：
-   - 在Windsurf编辑器中，AI助手可以直接查询数据库
-   - 支持自然语言查询，如"查看所有用户"、"统计审核状态"等
-   - 无需手动编写MongoDB查询语句
-
-#### 注意事项：
-- 确保SSH隧道已建立（见方法2）
-- MCP配置需要重启Windsurf编辑器才能生效
-- 仅在开发环境使用，避免生产环境数据泄露
-
-### 2. 通过SSH隧道访问
-
-```bash
-# 在本地终端执行以下命令创建SSH隧道
-ssh -i ~/.ssh/id_rsa_new_server -L 27017:127.0.0.1:27017 wubug
-
-# 然后在本地使用MongoDB客户端连接
-mongosh mongodb://127.0.0.1:27017/xiaohongshu_audit
-```
-
-### 3. 直接在服务器上访问
+### 方法1：直接在服务器上访问（推荐）
 
 ```bash
 # SSH登录到服务器
-ssh -i ~/.ssh/id_rsa_new_server wubug
+ssh wubug
 
 # 进入项目目录
 cd /var/www/xiaohongshu-web/server
 
 # 使用mongosh连接数据库
 mongosh mongodb://127.0.0.1:27017/xiaohongshu_audit
+
+# 或者使用mongo（旧版）
+mongo mongodb://127.0.0.1:27017/xiaohongshu_audit
 ```
 
-### 4. 使用MongoDB Compass（图形界面）
+### 方法2：通过SSH隧道本地访问
 
-1. 创建SSH隧道（如方法2所述）
-2. 在MongoDB Compass中连接到：`mongodb://127.0.0.1:27017`
-3. 选择数据库：`xiaohongshu_audit`
+```bash
+# 在本地终端执行以下命令创建SSH隧道
+ssh -L 27017:127.0.0.1:27017 wubug -N
+
+# 然后在本地使用MongoDB客户端连接
+mongosh mongodb://127.0.0.1:27017/xiaohongshu_audit
+
+# 或使用MongoDB Compass（图形界面）
+# 连接字符串：mongodb://127.0.0.1:27017
+```
+
+### 方法3：编写Node.js脚本查询
+
+```bash
+# 在服务器上创建并执行查询脚本
+ssh wubug "cd /var/www/xiaohongshu-web/server && node -e '
+const mongoose = require(\"mongoose\");
+mongoose.connect(\"mongodb://127.0.0.1:27017/xiaohongshu_audit\").then(async () => {
+  const count = await mongoose.connection.db.collection(\"imagereviews\").countDocuments();
+  console.log(\"总审核记录数:\", count);
+  mongoose.connection.close();
+}).catch(err => console.error(err));'"
+```
 
 ## 📊 主要集合
 
-- **users**：用户信息（兼职用户、带教老师、HR等）
-- **imagereviews**：图片审核记录（包含OSS图片URL）
-- **devices**：设备信息
-- **transactions**：交易记录
+- **users**：用户信息（兼职用户、带教老师、HR、经理、财务、老板）
+- **imagereviews**：图片审核记录（笔记、评论、客资）
+- **devices**：小红书账号设备信息
+- **transactions**：交易记录（积分、提现、佣金）
+- **taskconfigs**：任务配置（单价、积分等）
+- **complaints**：用户投诉记录
 
-## 🔧 常用操作
+## 🔧 常用操作示例
 
 ### 查看所有图片审核记录
 
 ```javascript
-// 在mongosh中执行
-db.imagereviews.find().pretty()
+db.imagereviews.find().limit(10).pretty()
 ```
 
-### 查看特定用户的图片
+### 查看特定状态的审核记录
 
 ```javascript
-db.imagereviews.find({ userId: ObjectId("用户ID") }).pretty()
+db.imagereviews.find({ status: "pending" }).pretty()
 ```
 
-### 统计不同状态的图片数量
+### 统计不同状态的数量
 
 ```javascript
 db.imagereviews.aggregate([
@@ -115,23 +86,61 @@ db.imagereviews.aggregate([
 ])
 ```
 
-## 📝 注意事项
+### 查看特定用户的审核记录
 
-1. **数据安全**：请勿直接删除生产数据，如需修改请先备份
-2. **连接稳定性**：SSH隧道可能会断开，建议使用持久连接工具
-3. **性能考虑**：复杂查询请添加适当的索引
-4. **权限管理**：当前数据库无密码保护，仅允许本地连接
+```javascript
+db.imagereviews.find({
+  userId: ObjectId("用户ID")
+}).pretty()
+```
 
-## 🔍 查看实时数据
+### 查看最近的审核记录
 
-可以通过管理后台查看数据：
-- 管理后台地址：`http://wubug/xiaohongshu`
-- 使用管理员账号登录后查看审核记录
+```javascript
+db.imagereviews.find().sort({ createdAt: -1 }).limit(10).pretty()
+```
+
+## ⚠️ 数据安全注意事项
+
+1. **备份优先**：执行任何写操作（update、delete等）前必须先备份数据库
+   ```bash
+   ssh wubug "mongodump --db=xiaohongshu_audit --out=/var/backups/mongo/$(date +%Y%m%d_%H%M%S)"
+   ```
+
+2. **禁止危险操作**：
+   - ❌ 禁止执行 `dropDatabase()`
+   - ❌ 禁止直接 `deleteMany()` 不带查询条件
+   - ❌ 禁止修改用户积分/余额（应通过后端API）
+
+3. **查询优化**：
+   - 查询时使用 `limit()` 限制返回数量
+   - 复杂查询使用 `aggregate()` 而非多次查询
+   - 必要时先创建索引
+
+## 📝 补充说明
+
+### 本地开发环境连接
+
+如果需要在本地开发环境连接服务器数据库：
+
+1. 确保SSH密钥已配置（`~/.ssh/id_rsa_new_server`）
+2. 在 `server/.env` 中配置数据库连接：
+   ```
+   MONGODB_URI=mongodb://127.0.0.1:27017/xiaohongshu_audit
+   ```
+3. 启动本地后端服务会自动连接服务器数据库（通过SSH隧道）
+
+### 数据库备份位置
+
+服务器上的备份目录：`/var/backups/mongo/`
+
+查看备份文件：
+```bash
+ssh wubug "ls -lht /var/backups/mongo/ | head -10"
+```
 
 ## 📚 相关文档
 
-- [REFACTOR_COMPLETION_REPORT.md](REFACTOR_COMPLETION_REPORT.md) - 系统重构详细信息
-- [architecture.md](architecture.md) - 系统架构文档
-- [USER_ACCOUNTS_GUIDE.md](USER_ACCOUNTS_GUIDE.md) - 用户账号管理指南
-
-如有任何问题，请随时联系技术支持！
+- [CLAUDE.md](./CLAUDE.md) - 开发规范和运维规则
+- [COOKIE_UPDATE_GUIDE.md](./COOKIE_UPDATE_GUIDE.md) - Cookie更新指南
+- [UPDATE_LOG.md](./UPDATE_LOG.md) - 更新日志

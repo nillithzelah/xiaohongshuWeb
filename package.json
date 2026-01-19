@@ -8,7 +8,11 @@
     "admin": "cd admin && npm start",
     "finance": "cd finance && npm start",
     "dev": "concurrently \"npm run server\" \"npm run admin\" \"npm run finance\"",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "deploy:backend": "bash scripts/deploy-backend.sh",
+    "deploy:frontend": "bash scripts/deploy-frontend.sh",
+    "deploy:all": "bash scripts/deploy-all.sh",
+    "logs": "bash scripts/logs.sh"
   },
   "keywords": [],
   "author": "",

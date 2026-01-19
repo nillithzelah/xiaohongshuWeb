@@ -341,7 +341,15 @@ class CommentVerificationService {
       console.log(`📄 使用CSS选择器获取到 ${commentData.length} 个可能的评论文本`);
 
       // 清理和准备搜索内容（保持原始格式，包括标点符号）
-      const searchContent = commentContent.trim();
+      let searchContent = commentContent.trim();
+
+      // 处理回复格式：提取实际评论内容
+      // 例如：回复 @某人 : 实际内容 -> 实际内容
+      const replyMatch = searchContent.match(/^回复\s+@\S+\s*[:：]\s*(.+)$/);
+      if (replyMatch && replyMatch[1]) {
+        searchContent = replyMatch[1].trim();
+        console.log(`[CommentExtract] 检测到回复格式，提取实际内容: ${searchContent}`);
+      }
 
       // 处理作者参数：支持字符串或数组
       let authorList = [];

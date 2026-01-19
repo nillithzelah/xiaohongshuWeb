@@ -36,8 +36,29 @@ page {
 
 .device-card.selected {
   background: linear-gradient(135deg, #f0f2ff 0%, #e8f2ff 100%);
-  border: 1rpx solid #667eea;
-  box-shadow: 0 4rpx 16rpx rgba(102, 126, 234, 0.1);
+  border: 2rpx solid #1890ff;
+  box-shadow: 0 4rpx 16rpx rgba(24, 144, 255, 0.15);
+}
+
+/* 选中标记 */
+.select-mark {
+  position: absolute;
+  top: 16rpx;
+  right: 16rpx;
+  width: 40rpx;
+  height: 40rpx;
+  background: #1890ff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.check-icon {
+  color: #fff;
+  font-size: 24rpx;
+  font-weight: bold;
 }
 
 .device-card.disabled {
@@ -673,4 +694,29 @@ page {
 .add-account-btn:active {
   transform: scale(0.95);
   box-shadow: 0 2rpx 8rpx rgba(82, 196, 26, 0.4);
+}
+
+/* 笔记限制警告样式 */
+.note-limit-warning {
+  padding: 24rpx;
+  background: linear-gradient(135deg, #fff7e6 0%, #ffe8cc 100%);
+  border-radius: 16rpx;
+  border-left: 8rpx solid #faad14;
+  box-shadow: 0 4rpx 16rpx rgba(250, 173, 20, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  margin-bottom: 24rpx;
+}
+
+.warning-icon {
+  font-size: 40rpx;
+  flex-shrink: 0;
+}
+
+.warning-text {
+  font-size: 28rpx;
+  color: #d46b08;
+  line-height: 1.5;
+  flex: 1;
 }

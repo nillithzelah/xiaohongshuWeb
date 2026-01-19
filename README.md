@@ -1,290 +1,153 @@
-# 素人分发系统
+# 小红书内容审核管理系统
 
-一个完整的素人分发审核管理系统，支持兼职用户提交内容，经过多级审核流程（带教老师→经理→HR→财务）后进行积分发放。
+## 📋 项目简介
 
-## 🏗️ 系统架构
+这是一个完整的小红书任务审核管理系统，用于"素人分发"业务的兼职用户内容审核与积分管理。
 
-### 技术栈
-- **前端**: React.js (管理后台) + 微信小程序 (用户端)
-- **后端**: Node.js + Express
-- **数据库**: MongoDB
-- **图片存储**: 阿里云OSS
-- **认证**: JWT
+### 核心功能
+- **内容审核**：AI辅助的小红书笔记和评论审核
+- **用户管理**：多角色用户体系（兼职、带教老师、HR、经理、财务、老板）
+- **积分系统**：任务完成奖励积分，可兑换现金
+- **设备管理**：小红书账号设备绑定与审核
+- **财务管理**：用户提现、支付宝转账、佣金计算
 
-### 系统组成
-1. **微信小程序**: 用户端，用于上传图片和自动注册
-2. **管理后台**: React应用，客服、老板、财务使用
-3. **后端API**: Express服务器，提供RESTful API
+## 🏗️ 技术架构
+
+### 前端
+- **微信小程序**：`miniprogram/` - 兼职用户端
+- **管理后台**：`admin/` - React + Ant Design
+- **财务系统**：`finance/` - 财务管理
+
+### 后端
+- **API服务**：`server/` - Node.js + Express
+- **数据库**：MongoDB
+- **AI审核**：DeepSeek API
 
 ## 🚀 快速开始
 
 ### 环境要求
-- Node.js >= 14
-- MongoDB >= 4.0 (可选，系统支持模拟数据模式)
-- Docker & Docker Compose (推荐，用于数据库管理)
+- Node.js 16+
+- MongoDB 4.4+
+- PM2（生产环境）
 
-### 安装步骤
-
-#### 方式一：使用 Docker Compose (推荐)
-
-1. **克隆项目**
-```bash
-git clone <repository-url>
-cd suren-distribution-system
-```
-
-2. **启动数据库**
-```bash
-# 使用 Docker Compose 启动 MongoDB
-docker-compose up -d
-
-# 查看启动状态
-docker-compose ps
-```
-
-3. **安装依赖**
-```bash
-# 安装根目录依赖
-npm install
-
-# 安装后端依赖
-cd server
-npm install
-
-# 安装管理后台依赖
-cd ../admin
-npm install
-```
-
-4. **配置环境变量**
-```bash
-cd server
-cp .env.example .env
-# 编辑 .env 文件，配置数据库和OSS信息
-```
-
-5. **启动服务**
-```bash
-# 启动后端服务
-cd server
-npm start
-
-# 启动管理后台 (新终端)
-cd admin
-npm start
-
-# 启动微信小程序 (使用微信开发者工具)
-# 打开 miniprogram 目录
-```
-
-#### 方式二：传统方式
-
-如果不使用 Docker，可以直接安装 MongoDB 并按上述步骤操作。
-
-#### Docker 管理命令
+### 本地开发
 
 ```bash
-# 启动数据库
-docker-compose up -d
+# 安装依赖
+cd server && npm install
+cd ../admin && npm install
+cd ../miniprogram && npm install
 
-# 停止数据库
-docker-compose down
+# 配置环境变量
+cp server/.env.example server/.env
+# 编辑 server/.env 填入必要配置
 
-# 查看状态
-docker-compose ps
+# 启动后端
+cd server && npm run dev
 
-# 查看日志
-docker-compose logs -f mongo
+# 启动前端（开发模式）
+cd admin && npm start
+
+# 启动小程序
+# 使用微信开发者工具打开 miniprogram 目录
 ```
 
-## 📱 功能特性
+### 生产部署
 
-### 用户端 (微信小程序)
-- ✅ 自动注册登录
-- ✅ 内容提交 (支持多种内容类型)
-- ✅ 审核进度查看
-- ✅ 个人积分查看
-
-### 管理后台
-- ✅ 多角色权限管理 (带教老师、HR、经理、财务)
-- ✅ 内容审核工作流
-- ✅ 兼职用户管理
-- ✅ 统计数据看板
-- ✅ 积分发放处理
-
-### 审核流程
-1. **兼职用户提交** → 内容提交
-2. **带教老师审核** → 通过/拒绝
-3. **经理确认** → 通过/拒绝
-4. **财务处理** → 发放积分并分配佣金
-
-## 🔐 用户角色
-
-| 角色 | 权限 | 说明 |
-|------|------|------|
-| part_time | 提交内容、查看进度 | 兼职用户 |
-| mentor | 审核内容 | 带教老师 |
-| hr | 管理兼职用户 | HR (人事) |
-| manager | 确认审核结果 | 经理 |
-| boss | 系统管理 | 老板 |
-| finance | 处理积分发放 | 财务人员 |
-
-## 📊 API 接口
-
-### 认证相关
-- `POST /api/auth/wechat-login` - 微信小程序登录
-- `POST /api/auth/login` - 管理后台登录
-
-### 用户管理
-- `GET /api/users/profile` - 获取用户资料
-- `GET /api/users` - 获取用户列表 (管理员)
-
-### 审核管理
-- `GET /api/reviews` - 获取审核列表
-- `PUT /api/reviews/:id/mentor-review` - 带教老师审核
-- `PUT /api/reviews/:id/manager-approve` - 经理确认
-- `PUT /api/reviews/:id/finance-process` - 财务处理
-
-### 文件上传
-- `POST /api/upload/image` - 上传图片
-
-## 🧪 测试
-
-运行完整系统测试：
 ```bash
-node test-full-system.js
-```
+# 构建前端
+cd admin && npm run build
 
-运行单个API测试：
-```bash
-node test-reviews-direct.js
-```
+# 部署到服务器
+scp -r admin/build/* wubug:/var/www/xiaohongshu-web/admin/public/
+scp server/routes/*.js wubug:/var/www/xiaohongshu-web/server/routes/
+scp server/services/*.js wubug:/var/www/xiaohongshu-web/server/services/
 
-### MCP 数据库接口 (AI 专用)
-
-项目集成了 Model Context Protocol (MCP)，允许 AI 助手直接与数据库交互：
-
-启动 MCP 服务器：
-```bash
-cd server
-node mcp-server.js
-```
-
-MCP 工具功能：
-- `list_collections` - 列出所有数据库集合
-- `run_query` - 执行 MongoDB 查询
-- `run_update` - 更新数据库记录
-
-配置 Windsurf/Cursor 使用 MCP：
-```json
-{
-  "mcpServers": {
-    "suren-db": {
-      "command": "node",
-      "args": ["D:/Desktop/suren-distribution-system/server/mcp-server.js"]
-    }
-  }
-}
+# 重启服务
+ssh wubug "pm2 restart xiaohongshu-api"
 ```
 
 ## 📁 项目结构
 
 ```
-suren-distribution-system/
-├── docker-compose.yml          # Docker Compose 配置
-├── mcp-config-example.json     # MCP 配置示例
-├── miniprogram/                # 微信小程序
-│   ├── app.js
-│   ├── app.json
-│   ├── pages/
-│   │   ├── index/        # 首页
-│   │   ├── upload/       # 上传页面
-│   │   └── profile/      # 个人中心
-│   └── ...
-├── admin/                # 管理后台 (React)
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── contexts/
-│   └── ...
-├── server/               # 后端服务
-│   ├── models/           # 数据模型
-│   ├── routes/           # API路由
-│   ├── middleware/       # 中间件
-│   ├── mcp-server.js     # MCP 数据库接口 (AI 专用)
-│   └── server.js
-├── architecture.md       # 系统架构文档
-└── README.md
+xiaohongshuWeb/
+├── admin/              # 管理后台前端
+├── finance/            # 财务系统前端
+├── miniprogram/        # 微信小程序
+├── server/             # 后端API服务
+│   ├── routes/         # API路由
+│   ├── services/       # 业务服务
+│   ├── models/         # 数据模型
+│   └── middleware/     # 中间件
+├── CLAUDE.md           # AI助手使用指南
+├── UPDATE_LOG.md       # 更新日志
+└── README.md           # 项目说明
 ```
 
-## 🔧 配置说明
+## 🔧 常用命令
 
-### 环境变量 (.env)
-```env
-MONGODB_URI=mongodb://localhost:27017/xiaohongshu
-JWT_SECRET=your_jwt_secret_key
-PORT=5000
-
-# 阿里云OSS配置
-OSS_ACCESS_KEY_ID=your_access_key_id
-OSS_ACCESS_KEY_SECRET=your_access_key_secret
-OSS_BUCKET=your_bucket_name
-OSS_REGION=your_region
-
-# 微信小程序配置
-WX_APP_ID=your_app_id
-WX_APP_SECRET=your_app_secret
-```
-
-## 🚀 部署
-
-### 后端部署
+### 后端服务
 ```bash
-cd server
-npm run build  # 如果需要
-npm start
+# 开发模式
+cd server && npm run dev
+
+# 生产模式（PM2）
+pm2 start ecosystem.config.js
+pm2 restart xiaohongshu-api
+pm2 logs xiaohongshu-api --lines 50
 ```
 
-### 前端部署
+### 数据库
 ```bash
-# 管理后台
-cd admin
-npm run build
-# 将 build 目录部署到静态服务器
+# 连接数据库
+ssh wubug "mongosh mongodb://127.0.0.1:27017/xiaohongshu_audit"
 
-# 微信小程序
-# 使用微信开发者工具构建发布
+# 备份数据库
+ssh wubug "mongodump --db=xiaohongshu_audit --out=/var/backups/mongo/$(date +%Y%m%d_%H%M%S)"
 ```
 
-## 📈 性能优化
+## 📖 相关文档
 
-- 图片懒加载
-- API响应缓存
-- 数据库查询优化
-- 前端代码分割
+- [CLAUDE.md](./CLAUDE.md) - AI助手使用指南（详细开发文档）
+- [UPDATE_LOG.md](./UPDATE_LOG.md) - 更新日志
+- [COOKIE_UPDATE_GUIDE.md](./COOKIE_UPDATE_GUIDE.md) - Cookie更新指南
+- [DATABASE_ACCESS_GUIDE.md](./DATABASE_ACCESS_GUIDE.md) - 数据库访问指南
+- [DICTIONARY.md](./DICTIONARY.md) - 业务术语表
 
-## 🔒 安全考虑
+## ⚠️ 重要注意事项
 
-- JWT token认证
-- 密码加密存储
-- API限流控制
-- XSS防护
-- 文件上传安全检查
+### 运维规则
+- ❌ 严禁执行 `pm2 logs`，会导致超时卡死
+- ✅ 必须使用 `tail -n 50 ~/.pm2/logs/xiaohongshu-api-out.log` 查看日志
+- 破坏性操作前必须 `mongodump` 备份数据库
 
-## 🤝 贡献指南
+### 金额计算
+- ❌ 严禁直接使用浮点数计算
+- ✅ 所有金额先 ×100 转为整数（分），计算完再 ÷100
 
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+### 代码规范
+- 后端异步操作必须包裹在 try-catch 中
+- catch 块必须返回 `{success: false, message: "..."}`
+- 修改代码后必须记录到 `UPDATE_LOG.md`
 
-## 📄 许可证
+## 🐛 常见问题
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
+### 后端服务502错误
+```bash
+# 检查PM2进程状态
+ssh wubug "pm2 list"
 
-## 📞 联系方式
+# 如果进程不在，重启服务
+ssh wubug "pm2 start ecosystem.config.js"
+```
 
-项目维护者 - your-email@example.com
+### 小红书Cookie过期
+- 错误现象：评论验证100%失败
+- 解决：参考 [COOKIE_UPDATE_GUIDE.md](./COOKIE_UPDATE_GUIDE.md) 更新Cookie
 
-项目链接: [https://github.com/your-username/suren-distribution-system](https://github.com/your-username/suren-distribution-system)
+## 📞 技术支持
+
+如遇问题，请查看：
+1. [CLAUDE.md](./CLAUDE.md) - 详细开发文档
+2. [UPDATE_LOG.md](./UPDATE_LOG.md) - 更新日志和问题修复记录
+3. 后端日志：`~/.pm2/logs/xiaohongshu-api-out.log`

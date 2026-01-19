@@ -49,20 +49,12 @@ const commentLimitSchema = new mongoose.Schema({
   // 创建时间
   createdAt: {
     type: Date,
-    default: () => {
-      const now = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
-      return new Date(now.getTime() + beijingOffset);
-    }
+    default: Date.now // 使用UTC时间存储
   },
   // 更新时间
   updatedAt: {
     type: Date,
-    default: () => {
-      const now = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000; // 北京时间偏移量（毫秒）
-      return new Date(now.getTime() + beijingOffset);
-    }
+    default: Date.now // 使用UTC时间存储
   }
 });
 
@@ -100,44 +92,95 @@ function normalizeUrl(url) {
 }
 
 /**
+ * 转义URL中的正则特殊字符，用于精确匹配
+ */
+function escapeRegexForUrl(url) {
+  return url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * 清理作者名字：移除常见的关注相关后缀，与CommentVerificationService保持一致
  */
 function cleanAuthorName(name) {
   if (!name) return '';
   // 移除常见的关注相关后缀（关注、作者、等）
-  return name.replace(/\s*(关注|作者|等)$/, '').trim();
+  let cleaned = name.replace(/\s*(关注|作者|等)$/, '').trim();
+  // 移除全角空格
+  cleaned = cleaned.replace(/[\u3000\u00A0]/g, ' ');
+  // 合并多个空格为一个
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  // 移除常见特殊符号后缀（如波浪号、星号等）
+  cleaned = cleaned.replace(/[～~*★☆]+$/, '').trim();
+  return cleaned;
 }
 
 /**
- * 检查评论是否可以审核通过
- * 只检查已审核通过的记录，避免与提交时的检查冲突
+ * 检查评论是否可以提交/审核通过
+ * @param {String} noteUrl - 笔记链接
+ * @param {String} authorNickname - 评论者昵称
+ * @param {String} commentContent - 评论内容
+ * @param {Object} options - 选项 { checkPending: boolean, ImageReviewModel: Model }
+ * @description
+ * - checkPending=true: 提交时检查，包括待审核中的评论（防止超过2条限制）
+ * - checkPending=false: 审核时检查，只检查已通过的评论
  */
-commentLimitSchema.statics.checkCommentApproval = async function(noteUrl, authorNickname, commentContent) {
+commentLimitSchema.statics.checkCommentApproval = async function(noteUrl, authorNickname, commentContent, options = {}) {
   try {
+    const { checkPending = false, ImageReviewModel } = options;
     const normalizedUrl = normalizeUrl(noteUrl);
     const cleanedAuthor = cleanAuthorName(authorNickname);
+
+    console.log(`🔍 [CommentLimit检查] 输入参数: noteUrl="${noteUrl}", authorNickname="${authorNickname}"`);
+    console.log(`🔍 [CommentLimit检查] 标准化后: normalizedUrl="${normalizedUrl}", cleanedAuthor="${cleanedAuthor}"`);
 
     const limitRecord = await this.findOne({
       noteUrl: normalizedUrl,
       authorNickname: cleanedAuthor
     });
 
-    if (!limitRecord) {
-      // 还没有记录，返回可以审核通过
-      return {
-        canApprove: true,
-        currentCount: 0,
-        maxAllowed: 2,
-        isContentDuplicate: false,
-        reason: null
-      };
+    console.log(`🔍 [CommentLimit检查] CommentLimit记录:`, limitRecord ? `存在, approvedCommentCount=${limitRecord.approvedCommentCount}` : '不存在');
+
+    // 基础计数：已审核通过的评论数
+    let approvedCount = limitRecord ? limitRecord.approvedCommentCount : 0;
+
+    // 如果需要检查待审核中的评论（提交时检查）
+    let pendingCount = 0;
+    if (checkPending && ImageReviewModel) {
+      try {
+        // 转义昵称中的正则特殊字符
+        const escapedAuthor = cleanedAuthor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // 转义URL中的正则特殊字符，用于精确匹配（避免 abc123 匹配 abc123456）
+        const escapedUrl = escapeRegexForUrl(normalizedUrl);
+
+        // 计算该链接+昵称下待审核中的评论数
+        // 需要匹配 aiParsedNoteInfo.author 或 userNoteInfo.author
+        // 注意：userNoteInfo.author 可能是用逗号分隔的多个昵称，需要用正则匹配
+        // URL使用 ^...$ 锚点进行精确匹配，避免部分匹配
+        const pendingQuery = {
+          imageType: 'comment',
+          noteUrl: { $regex: `^${escapedUrl}$`, $options: 'i' },
+          status: { $in: ['pending', 'processing', 'client_verification_pending', 'client_verification_failed'] }, // 所有非rejected状态
+          $or: [
+            { 'aiParsedNoteInfo.author': cleanedAuthor },
+            { 'userNoteInfo.author': new RegExp(`(^|[,，])${escapedAuthor}([,，]|$)`) }  // 匹配逗号分隔字符串中的昵称
+          ]
+        };
+
+        console.log(`🔍 [CommentLimit检查] 待审核查询:`, JSON.stringify(pendingQuery, null, 2));
+
+        pendingCount = await ImageReviewModel.countDocuments(pendingQuery);
+        console.log(`🔍 [CommentLimit检查] 待审核数量: pendingCount=${pendingCount}`);
+      } catch (err) {
+        console.warn('⚠️ [CommentLimit] 查询待审核评论失败:', err.message);
+      }
     }
 
-    // 检查评论次数限制（最多2条）
-    const canApproveByCount = limitRecord.approvedCommentCount < 2;
+    // 总数 = 已通过 + 待审核中
+    const totalCount = approvedCount + pendingCount;
+    const canApproveByCount = totalCount < 2;
 
-    // 检查内容是否重复
-    const isContentDuplicate = limitRecord.approvedComments.some(comment =>
+    // 检查内容是否重复（只检查已通过的评论）
+    const isContentDuplicate = limitRecord && limitRecord.approvedComments.some(comment =>
       comment.content.trim().toLowerCase() === commentContent.trim().toLowerCase()
     );
 
@@ -145,9 +188,11 @@ commentLimitSchema.statics.checkCommentApproval = async function(noteUrl, author
 
     let reasons = [];
     if (!canApproveByCount) {
-      reasons.push(`"在该链接下已发布${limitRecord.approvedCommentCount}条评论，已达到最大允许数量2条`);
-
-      // reasons.push(`昵称"${authorNickname}"在该链接下已发布${limitRecord.approvedCommentCount}条评论，已达到最大允许数量2条`);
+      if (pendingCount > 0) {
+        reasons.push(`昵称"${cleanedAuthor}"在该链接下已有${approvedCount}条通过审核 + ${pendingCount}条待审核，共${totalCount}条评论，已达到最大允许数量2条`);
+      } else {
+        reasons.push(`昵称"${cleanedAuthor}"在该链接下已发布${approvedCount}条评论，已达到最大允许数量2条`);
+      }
     }
     if (isContentDuplicate) {
       reasons.push('评论内容不能与该链接下的其他评论完全相同');
@@ -156,7 +201,9 @@ commentLimitSchema.statics.checkCommentApproval = async function(noteUrl, author
 
     return {
       canApprove,
-      currentCount: limitRecord.approvedCommentCount,
+      currentCount: approvedCount,
+      pendingCount: pendingCount,
+      totalCount: totalCount,
       maxAllowed: 2,
       isContentDuplicate,
       reason
@@ -167,6 +214,8 @@ commentLimitSchema.statics.checkCommentApproval = async function(noteUrl, author
     return {
       canApprove: true,
       currentCount: 0,
+      pendingCount: 0,
+      totalCount: 0,
       maxAllowed: 2,
       isContentDuplicate: false,
       reason: null,
@@ -182,35 +231,76 @@ commentLimitSchema.statics.checkCommentApproval = async function(noteUrl, author
 commentLimitSchema.statics.recordCommentApproval = async function(noteUrl, authorNickname, commentContent, reviewId) {
   try {
     const normalizedUrl = normalizeUrl(noteUrl);
-    const cleanedAuthor = cleanAuthorName(authorNickname);
 
-    const result = await this.findOneAndUpdate(
-      {
-        noteUrl: normalizedUrl,
-        authorNickname: cleanedAuthor
-      },
-      {
-        $inc: { approvedCommentCount: 1 },
-        $push: {
-          approvedComments: {
-            content: commentContent.trim(),
-            reviewId: reviewId,
-            approvedAt: new Date()
-          }
-        },
-        $set: { lastApprovedAt: new Date() }
-      },
-      {
-        upsert: true, // 如果不存在则创建
-        new: true,    // 返回更新后的文档
-        setDefaultsOnInsert: true
+    console.log(`📝 [CommentLimit记录] 输入参数: noteUrl="${noteUrl}", authorNickname="${authorNickname}", reviewId="${reviewId}"`);
+    console.log(`📝 [CommentLimit记录] 标准化后: normalizedUrl="${normalizedUrl}"`);
+
+    // 处理作者昵称：如果是逗号分隔的多个昵称，需要分别记录
+    // 例如："张三, 李四" 需要为 "张三" 和 "李四" 各记录一次
+    const authorsToRecord = [];
+    if (typeof authorNickname === 'string' && (authorNickname.includes(',') || authorNickname.includes('，'))) {
+      // 按中英文逗号分割
+      const parts = authorNickname.split(/[,，]/);
+      for (const part of parts) {
+        const cleaned = cleanAuthorName(part);
+        if (cleaned) {
+          authorsToRecord.push(cleaned);
+        }
       }
-    );
+    } else {
+      const cleaned = cleanAuthorName(authorNickname);
+      if (cleaned) {
+        authorsToRecord.push(cleaned);
+      }
+    }
 
-    console.log(`✅ 评论审核记录更新成功: 昵称"${authorNickname}", 链接${normalizedUrl}, 当前审核通过次数: ${result.approvedCommentCount}`);
-    return result;
+    console.log(`📝 [CommentLimit记录] 需要记录的昵称列表:`, authorsToRecord);
+
+    // 为每个昵称记录（如果有多个昵称，每个都计数）
+    let results = [];
+    for (const author of authorsToRecord) {
+      // 【幂等性检查】防止重复记录同一个 reviewId
+      const existingRecord = await this.findOne({
+        noteUrl: normalizedUrl,
+        authorNickname: author,
+        'approvedComments.reviewId': reviewId
+      });
+
+      if (existingRecord) {
+        console.log(`⚠️ 评论审核记录已存在，跳过重复记录: 昵称"${author}", reviewId: ${reviewId}`);
+        results.push(existingRecord);
+        continue;
+      }
+
+      const result = await this.findOneAndUpdate(
+        {
+          noteUrl: normalizedUrl,
+          authorNickname: author
+        },
+        {
+          $inc: { approvedCommentCount: 1 },
+          $push: {
+            approvedComments: {
+              content: commentContent?.trim() || '',
+              reviewId: reviewId,
+              approvedAt: new Date()
+            }
+          },
+          $set: { lastApprovedAt: new Date() }
+        },
+        {
+          upsert: true, // 如果不存在则创建
+          new: true,    // 返回更新后的文档
+          setDefaultsOnInsert: true
+        }
+      );
+      results.push(result);
+      console.log(`✅ [CommentLimit记录] 更新成功: 昵称="${author}", 链接="${normalizedUrl}", 当前次数: ${result.approvedCommentCount}`);
+    }
+
+    return results;
   } catch (error) {
-    console.error('记录评论审核成功失败:', error);
+    console.error('❌ [CommentLimit记录] 失败:', error);
     throw error;
   }
 };

@@ -1,28 +1,29 @@
 const DeviceNoteHistory = require('../models/DeviceNoteHistory');
+const Device = require('../models/Device');
 
 class DeviceNoteService {
   /**
-   * 检查设备在过去7天内是否已经发布过笔记
+   * 检查设备在过去1天内是否已经发布过笔记
    * @param {string} deviceId - 设备ID
    * @returns {Promise<{canSubmit: boolean, lastNoteDate: Date|null, message: string}>}
    */
   async checkDeviceNoteSubmission(deviceId) {
     try {
-      // 计算7天前的日期
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      // 计算1天前的日期
+      const oneDayAgo = new Date();
+      oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-      // 查找该设备在过去7天内的笔记发布记录
+      // 查找该设备在过去1天内的笔记发布记录
       const recentNote = await DeviceNoteHistory.findOne({
         deviceId: deviceId,
-        createdAt: { $gte: sevenDaysAgo }
+        createdAt: { $gte: oneDayAgo }
       }).sort({ createdAt: -1 });
 
       if (recentNote) {
         return {
           canSubmit: false,
           lastNoteDate: recentNote.createdAt,
-          message: `该设备在${recentNote.createdAt.toLocaleString()}已经发布过笔记，7天内不能重复发布`
+          message: `该设备在${recentNote.createdAt.toLocaleString()}已经发布过笔记，1天内不能重复发布`
         };
       }
 
@@ -43,18 +44,31 @@ class DeviceNoteService {
 
   /**
    * 记录设备笔记发布历史
-   * @param {string} deviceId - 设备ID
+   * @param {string} accountName - 设备账号名称（将通过查找转换为deviceId）
    * @param {string} userId - 用户ID
    * @param {string} noteUrl - 笔记URL
    * @param {string} noteTitle - 笔记标题
    * @param {string} noteAuthor - 笔记作者
    * @param {string} imageReviewId - 图片审核ID
-   * @returns {Promise<DeviceNoteHistory>}
+   * @returns {Promise<DeviceNoteHistory|null>}
    */
-  async recordDeviceNoteSubmission(deviceId, userId, noteUrl, noteTitle, noteAuthor, imageReviewId) {
+  async recordDeviceNoteSubmission(accountName, userId, noteUrl, noteTitle, noteAuthor, imageReviewId) {
     try {
+      // 跳过虚拟设备或无效的设备名称
+      if (!accountName || accountName === 'unknown' || accountName === 'virtual_device') {
+        console.log(`⚠️ [DeviceNoteService] 跳过虚拟设备记录: accountName="${accountName}"`);
+        return null;
+      }
+
+      // 通过 accountName 查找 Device 获取 ObjectId
+      const device = await Device.findOne({ accountName });
+      if (!device) {
+        console.log(`⚠️ [DeviceNoteService] 未找到设备: accountName="${accountName}"，跳过记录`);
+        return null;
+      }
+
       const noteHistory = new DeviceNoteHistory({
-        deviceId,
+        deviceId: device._id,
         userId,
         noteUrl,
         noteTitle,

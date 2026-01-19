@@ -45,6 +45,14 @@ jspm_packages/
 # dotenv environment variables file
 .env
 
+# PM2 ecosystem configuration (contains production secrets)
+ecosystem.config.js
+ecosystem.config.prod.js
+
+# Server configuration with sensitive data
+server/config/cookie-pool.js
+server/config/*.local.js
+
 # IDE files
 .vscode/
 .idea/
@@ -81,3 +89,10 @@ project.private.config.json
 *.rar
 *.zip
 *.tar.gz
+
+# Python service
+python-service/venv/
+python-service/__pycache__/
+python-service/.env
+python-service/*.pyc
+python-service/.pytest_cache/

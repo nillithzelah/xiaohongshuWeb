@@ -1,7 +1,8 @@
-// 持续检查服务：每天检查笔记存在性并奖励积分（持续7天，与昵称提交限制一致）
+// 持续检查服务：每天检查笔记存在性并奖励积分（持续7天检查周期，昵称提交限制已改为1天）
 const schedule = require('node-schedule');
 const ImageReview = require('../models/ImageReview');
 const User = require('../models/User');
+const Transaction = require('../models/Transaction');
 const XiaohongshuService = require('./xiaohongshuService');
 
 class ContinuousCheckService {
@@ -63,7 +64,7 @@ class ContinuousCheckService {
          'continuousCheck.nextCheckTime': { $lte: now },
          imageType: 'note', // 只检查笔记类型
          noteUrl: { $ne: null }, // 必须有笔记链接
-         status: 'completed' // 只检查已完成的审核
+         status: 'manager_approved' // 只检查人工复审通过的记录
        });
 
        // 获取持续检查天数配置
@@ -102,11 +103,11 @@ class ContinuousCheckService {
       let totalRewardPoints = 0;
 
       for (let i = 0; i < validReviewsToCheck.length; i++) {
-        const review = reviewsToCheck[i];
+        const review = validReviewsToCheck[i];
         const noteStartTime = Date.now();
 
         try {
-          console.log(`📋 [持续检查] 处理第 ${i + 1}/${reviewsToCheck.length} 条笔记 (ID: ${review._id})`);
+          console.log(`📋 [持续检查] 处理第 ${i + 1}/${validReviewsToCheck.length} 条笔记 (ID: ${review._id})`);
           const result = await this.checkSingleNote(review);
 
           if (result.success) {
@@ -120,7 +121,7 @@ class ContinuousCheckService {
           console.log(`✅ [持续检查] 笔记 ${review._id} 处理完成，耗时: ${noteDuration}ms`);
 
           // 添加延迟避免请求过快
-          if (i < reviewsToCheck.length - 1) { // 不是最后一条时才延迟
+          if (i < validReviewsToCheck.length - 1) { // 不是最后一条时才延迟
             await new Promise(resolve => setTimeout(resolve, 2000));
           }
 
@@ -149,160 +150,212 @@ class ContinuousCheckService {
   }
 
   /**
-   * 检查单个笔记
+   * 检查单个笔记（带重试机制）
    */
   async checkSingleNote(review) {
     const startTime = Date.now();
-    try {
-      console.log(`🔍 [持续检查] 开始检查笔记: ${review.noteUrl} (用户: ${review.userId}, 审核ID: ${review._id})`);
+    const maxRetries = 2;
+    let lastError = null;
 
-      // 使用XiaohongshuService验证笔记链接
-      const validationResult = await XiaohongshuService.validateNoteUrl(review.noteUrl);
-      const checkDuration = Date.now() - startTime;
+    // 重试逻辑：网络错误重试，笔记不存在不重试
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔍 [持续检查] 开始检查笔记: ${review.noteUrl} (尝试 ${attempt}/${maxRetries}, 用户: ${review.userId}, 审核ID: ${review._id})`);
 
-      const noteExists = validationResult.valid;
-      let rewardPoints = 0;
+        // 使用XiaohongshuService验证笔记链接
+        const validationResult = await XiaohongshuService.validateNoteUrl(review.noteUrl);
+        const checkDuration = Date.now() - startTime;
 
-      if (noteExists) {
-        // 从笔记任务配置中获取每日奖励积分
-        const TaskConfig = require('../models/TaskConfig');
-        const noteConfig = await TaskConfig.findOne({ type_key: 'note' });
-        rewardPoints = noteConfig ? noteConfig.daily_reward_points : 0;
+        const noteExists = validationResult.valid;
+        let rewardPoints = 0;
 
-        console.log(`✅ [持续检查] 笔记存在，奖励用户 ${review.userId} ${rewardPoints} 积分，检查耗时: ${checkDuration}ms`);
+        if (noteExists) {
+          // 从笔记任务配置中获取每日奖励积分
+          const TaskConfig = require('../models/TaskConfig');
+          const noteConfig = await TaskConfig.findOne({ type_key: 'note' });
+          rewardPoints = noteConfig?.daily_reward_points ?? 30; // 使用 ?? 确保至少为30，而非undefined
 
-        // 更新用户积分
-        const user = await User.findById(review.userId);
-        if (user) {
-          // 确保用户有有效的积分字段
-          const currentPoints = user.points || 0;
-          const newPoints = currentPoints + rewardPoints;
+          // 【防重复发放】检查今天是否已发放过该笔记的每日奖励
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const todayEnd = new Date();
+          todayEnd.setHours(23, 59, 59, 999);
 
-          await User.findByIdAndUpdate(review.userId, {
-            $set: { points: newPoints }
+          const existingReward = await Transaction.findOne({
+            imageReview_id: review._id,
+            type: 'task_reward',
+            description: /每日存在性检查奖励/,
+            createdAt: { $gte: todayStart, $lte: todayEnd }
           });
+
+          if (existingReward) {
+            console.log(`⚠️ [持续检查] 该笔记今天已发放过积分，跳过重复发放: ${review._id}`);
+            // 不发放积分，但仍记录检查结果并更新下次检查时间
+            await this.recordCheckResult(review._id, {
+              result: 'success',
+              noteExists: true,
+              rewardPoints: 0,
+              checkDuration: checkDuration,
+              attempt: attempt,
+              skipped: true,
+              reason: '今日已发放'
+            });
+            return { success: true, rewardPoints: 0, skipped: true };
+          }
 
           console.log(`✅ [持续检查] 笔记存在，奖励用户 ${review.userId} ${rewardPoints} 积分，检查耗时: ${checkDuration}ms`);
 
-          // 计算并发放上级佣金（按比例）
-          // 一级佣金：直接上级
-          if (user.parent_id && review.snapshotCommission1 > 0) {
-            const parentUser = await User.findById(user.parent_id);
-            if (parentUser) {
-              const parentCommission = rewardPoints * (review.snapshotCommission1 / review.snapshotPrice); // 按比例计算佣金
-              await User.findByIdAndUpdate(user.parent_id, {
-                $inc: { points: parentCommission }
-              });
+          // 更新用户积分（直接使用$inc避免重复查询）
+          await User.findByIdAndUpdate(review.userId, {
+            $inc: { points: rewardPoints }
+          });
 
-              console.log(`💰 [持续检查] 发放一级佣金: ${parentUser._id} 获得 ${parentCommission} 积分`);
+          // 创建每日检查奖励交易记录
+          await new Transaction({
+            user_id: review.userId,
+            type: 'task_reward',
+            amount: rewardPoints,
+            description: `每日存在性检查奖励`,
+            status: 'completed',
+            imageReview_id: review._id,
+            createdAt: new Date()
+          }).save();
 
-              // 记录一级佣金发放事务
-              const Transaction = require('../models/Transaction');
-              await new Transaction({
-                imageReview_id: review._id,
-                user_id: parentUser._id,
-                amount: parentCommission,
-                type: 'continuous_check_commission_1',
-                description: `持续检查一级推荐佣金 - 来自用户 ${user.username || user.nickname}`
-              }).save();
-            }
-          }
+          // 记录成功检查
+          await this.recordCheckResult(review._id, {
+            result: 'success',
+            noteExists: true,
+            rewardPoints: rewardPoints,
+            checkDuration: checkDuration,
+            attempt: attempt
+          });
 
-          // 二级佣金：上级的上级
-          if (user.parent_id && review.snapshotCommission2 > 0) {
-            const parentUser = await User.findById(user.parent_id);
-            if (parentUser && parentUser.parent_id) {
-              const grandParentUser = await User.findById(parentUser.parent_id);
-              if (grandParentUser) {
-                const grandParentCommission = rewardPoints * (review.snapshotCommission2 / review.snapshotPrice); // 按比例计算佣金
-                await User.findByIdAndUpdate(parentUser.parent_id, {
-                  $inc: { points: grandParentCommission }
-                });
-
-                console.log(`💰 [持续检查] 发放二级佣金: ${grandParentUser._id} 获得 ${grandParentCommission} 积分`);
-
-                // 记录二级佣金发放事务
-                const Transaction = require('../models/Transaction');
-                await new Transaction({
-                  imageReview_id: review._id,
-                  user_id: grandParentUser._id,
-                  amount: grandParentCommission,
-                  type: 'continuous_check_commission_2',
-                  description: `持续检查二级推荐佣金 - 来自用户 ${user.username || user.nickname}`
-                }).save();
+          // 添加审核历史（优化：使用$push而非查询+保存）
+          await ImageReview.findByIdAndUpdate(review._id, {
+            $push: {
+              auditHistory: {
+                operator: null,
+                operatorName: '系统',
+                action: 'daily_check_passed',
+                comment: `每日存在性检查通过，奖励 ${rewardPoints} 积分`,
+                timestamp: new Date()
               }
             }
-          }
+          });
+
+          return { success: true, rewardPoints };
+
+        } else {
+          // 笔记不存在，停止后续检查（不重试）
+          const reason = validationResult.reason || '笔记不存在或已被删除';
+          console.log(`❌ [持续检查] 笔记不存在，停止后续检查: ${review.noteUrl} (用户: ${review.userId})，原因: ${reason}，检查耗时: ${checkDuration}ms`);
+
+          // 更新状态为deleted并记录失败检查（合并操作）
+          await ImageReview.findByIdAndUpdate(review._id, {
+            'continuousCheck.status': 'deleted',
+            'continuousCheck.endReason': reason
+          });
+
+          // 记录失败检查
+          await this.recordCheckResult(review._id, {
+            result: 'failed',
+            noteExists: false,
+            rewardPoints: 0,
+            errorMessage: reason,
+            checkDuration: checkDuration
+          });
+
+          // 添加审核历史（优化：使用$push而非查询+保存）
+          await ImageReview.findByIdAndUpdate(review._id, {
+            $push: {
+              auditHistory: {
+                operator: null,
+                operatorName: '系统',
+                action: 'note_deleted',
+                comment: `笔记不存在，停止持续检查。原因: ${reason}`,
+                timestamp: new Date()
+              }
+            }
+          });
+
+          return { success: false, rewardPoints: 0 };
         }
 
-        // 记录成功检查
-        await this.recordCheckResult(review._id, {
-          result: 'success',
-          noteExists: true,
-          rewardPoints: rewardPoints
-        });
+      } catch (error) {
+        lastError = error;
+        const checkDuration = Date.now() - startTime;
 
-        // 添加审核历史
-        review.auditHistory.push({
-          operator: null,
-          operatorName: '系统',
-          action: 'daily_check_passed',
-          comment: `每日存在性检查通过，奖励 ${rewardPoints} 积分，检查耗时: ${checkDuration}ms`,
-          timestamp: new Date()
-        });
+        // 判断是否为可重试的错误
+        const isRetryableError = this.isRetryableError(error);
 
-      } else {
-        // 笔记不存在，停止后续检查
-        console.log(`❌ [持续检查] 笔记不存在，停止后续检查: ${review.noteUrl} (用户: ${review.userId})，检查耗时: ${checkDuration}ms`);
+        console.error(`❌ [持续检查] 检查笔记失败 (尝试 ${attempt}/${maxRetries}, 耗时: ${checkDuration}ms):`, error.message);
 
-        // 更新状态为deleted
-        await ImageReview.findByIdAndUpdate(review._id, {
-          'continuousCheck.status': 'deleted'
-        });
-
-        // 记录失败检查
-        await this.recordCheckResult(review._id, {
-          result: 'failed',
-          noteExists: false,
-          rewardPoints: 0,
-          errorMessage: '笔记不存在或已被删除'
-        });
-
-        // 添加审核历史
-        review.auditHistory.push({
-          operator: null,
-          operatorName: '系统',
-          action: 'note_deleted',
-          comment: '笔记不存在，停止持续检查',
-          timestamp: new Date()
-        });
+        if (isRetryableError && attempt < maxRetries) {
+          // 等待后重试
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          continue;
+        } else if (!isRetryableError) {
+          // 不可重试的错误（如笔记确实不存在），直接返回
+          console.log(`⚠️ [持续检查] 不可重试的错误，停止检查: ${error.message}`);
+          await this.recordCheckResult(review._id, {
+            result: 'error',
+            noteExists: false,
+            rewardPoints: 0,
+            errorMessage: error.message,
+            errorType: 'non_retryable'
+          });
+          return { success: false, rewardPoints: 0, error: error.message };
+        }
       }
-
-      await review.save();
-
-      console.log(`📊 [持续检查] 检查完成 - 结果: ${noteExists ? '存在' : '不存在'}, 奖励: ${rewardPoints}积分，耗时: ${checkDuration}ms`);
-      return { success: noteExists, rewardPoints };
-
-    } catch (error) {
-      const checkDuration = Date.now() - startTime;
-      console.error(`❌ [持续检查] 检查笔记失败 (耗时: ${checkDuration}ms):`, {
-        reviewId: review._id,
-        userId: review.userId,
-        noteUrl: review.noteUrl,
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
     }
+
+    // 所有重试都失败
+    console.error(`❌ [持续检查] 检查笔记失败，已重试${maxRetries}次:`, {
+      reviewId: review._id,
+      userId: review.userId,
+      noteUrl: review.noteUrl,
+      error: lastError?.message
+    });
+
+    // 记录错误但不停止检查（下次继续尝试）
+    await this.recordCheckResult(review._id, {
+      result: 'error',
+      noteExists: false,
+      rewardPoints: 0,
+      errorMessage: lastError?.message || '未知错误',
+      errorType: 'retry_exhausted'
+    });
+
+    return { success: false, rewardPoints: 0, error: lastError?.message };
   }
 
   /**
-   * 记录检查结果
+   * 判断错误是否可重试
+   */
+  isRetryableError(error) {
+    const retryablePatterns = [
+      'ECONNRESET',
+      'ETIMEDOUT',
+      'ECONNABORTED',
+      'ENOTFOUND',
+      'timeout',
+      '网络错误',
+      '请求超时',
+      'ECONNREFUSED'
+    ];
+
+    const errorMessage = error.message || error.code || '';
+    return retryablePatterns.some(pattern =>
+      errorMessage.toLowerCase().includes(pattern.toLowerCase())
+    );
+  }
+
+  /**
+   * 记录检查结果（优化：不再查询完整review对象）
    */
   async recordCheckResult(reviewId, checkResult) {
-    // 获取当前笔记的下次检查时间
-    const review = await ImageReview.findById(reviewId);
-    const nextCheckTime = this.getNextCheckTime(review.continuousCheck.nextCheckTime);
+    // 使用当前时间计算下次检查时间（从明天00:00开始）
+    const nextCheckTime = this.getNextCheckTime();
 
     const updateData = {
       'continuousCheck.lastCheckTime': new Date(),
@@ -319,11 +372,13 @@ class ContinuousCheckService {
   }
 
   /**
-   * 获取下次检查时间（24小时后，每天检查一次）
+   * 获取下次检查时间（从当前时间起24小时后，每天检查一次）
+   * 修复：使用当前时间而非传入的lastCheckTime，避免服务停机后累积延迟
    */
-  getNextCheckTime(lastCheckTime) {
-    const nextCheck = new Date(lastCheckTime);
+  getNextCheckTime() {
+    const nextCheck = new Date();
     nextCheck.setDate(nextCheck.getDate() + 1); // 加1天，每天检查一次
+    nextCheck.setHours(0, 0, 0, 0); // 设置为当天00:00:00，确保每天只检查一次
     return nextCheck;
   }
 

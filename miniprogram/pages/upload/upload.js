@@ -15,10 +15,18 @@ console.log(`🚀 小程序环境: ${CONFIG.ENV}`);
 console.log(`📡 API地址: ${CONFIG.API_BASE_URL}`);
 
 Page({
+  // 实例变量，用于防止重复提交（立即生效，不受setData异步影响）
+  isSubmitting: false,
+  // 记录上次提交时间，防止短时间内重复提交
+  lastSubmitTime: 0,
+  // 提交冷却时间（毫秒）
+  SUBMIT_COOLDOWN: 3000, // 3秒
+
   data: {
     // 任务类型配置 (从后端动态获取)
     taskTypes: [],
     devices: [], // 用户的设备列表（用于展示）
+    selectedDevice: null, // 选中的发布账号
     selectedType: null, // 当前选中的类型对象
     imageUrls: [], // 多张图片地址数组
     imageMd5s: [], // 多张图片的MD5数组
@@ -30,10 +38,12 @@ Page({
     customerPhone: '', // 客户电话（客资类型专用）
     customerWechat: '', // 客户微信（客资类型专用）
     uploading: false, // 上传状态
+    isSubmitting: false, // 提交状态（用于防止重复点击，立即响应）
     uploadProgress: 0, // 上传进度 (0-100)
     uploadStatus: '', // 上传状态文本
     processingMd5: false, // MD5计算状态
     noDevicesMessage: null, // 无设备时的提示信息
+    noteLimitStatus: null, // 笔记限制状态 { canSubmit: boolean, message: string, remainingHours: number }
   },
 
   onLoad() {
@@ -228,6 +238,31 @@ Page({
     });
   },
 
+  // 选择发布账号（点击卡片）
+  selectDeviceByTap(e) {
+    const device = e.currentTarget.dataset.device;
+    this.setData({
+      selectedDevice: device,
+      noteLimitStatus: null // 清空之前的限制状态
+    });
+    console.log('✅ 已选择发布账号:', device.accountName);
+
+    // 如果当前选中的是笔记类型，检查笔记限制
+    if (this.data.selectedType && this.data.selectedType.value === 'note') {
+      this.checkNoteLimit();
+    }
+  },
+
+  // 选择发布账号（picker方式，已废弃但保留兼容）
+  selectDevice(e) {
+    const index = e.detail.value;
+    const device = this.data.devices[index];
+    this.setData({
+      selectedDevice: device
+    });
+    console.log('✅ 已选择发布账号:', device.accountName);
+  },
+
 
   // 选择任务类型
   selectType(e) {
@@ -239,8 +274,14 @@ Page({
       noteTitle: '', // 清空标题
       commentContent: '', // 清空评论内容
       customerPhone: '', // 清空客户电话
-      customerWechat: '' // 清空客户微信
+      customerWechat: '', // 清空客户微信
+      noteLimitStatus: null // 清空笔记限制状态
     });
+
+    // 如果选择的是笔记类型，检查笔记限制
+    if (type.value === 'note' && this.data.selectedDevice) {
+      this.checkNoteLimit();
+    }
   },
 
   // 输入笔记链接
@@ -250,14 +291,133 @@ Page({
     });
   },
 
-  // 粘贴分享文本并提取小红书链接
+  // 检查笔记限制（1天内是否已通过笔记）
+  checkNoteLimit: function() {
+    const selectedDevice = this.data.selectedDevice;
+    if (!selectedDevice || !selectedDevice.accountName) {
+      return;
+    }
+
+    const that = this;
+    wx.request({
+      url: CONFIG.API_BASE_URL + '/xiaohongshu/api/client/check-note-limit',
+      method: 'GET',
+      header: {
+        'Authorization': 'Bearer ' + wx.getStorageSync('token')
+      },
+      data: {
+        nickname: selectedDevice.accountName
+      },
+      success: function(res) {
+        if (res.data.success && res.data.hasLimit) {
+          // 有笔记限制
+          that.setData({
+            noteLimitStatus: {
+              canSubmit: false,
+              message: res.data.message,
+              remainingHours: res.data.remainingHours
+            }
+          });
+          wx.showModal({
+            title: '笔记发布限制',
+            content: res.data.message,
+            showCancel: false,
+            confirmText: '我知道了'
+          });
+        } else {
+          // 没有限制
+          that.setData({
+            noteLimitStatus: {
+              canSubmit: true,
+              message: ''
+            }
+          });
+        }
+      },
+      fail: function(err) {
+        console.error('检查笔记限制失败:', err);
+        // 失败时不限制提交
+        that.setData({
+          noteLimitStatus: {
+            canSubmit: true,
+            message: ''
+          }
+        });
+      }
+    });
+  },
+
+  // 同步检查笔记限制（用于提交前验证，返回Promise）
+  checkNoteLimitSync: function() {
+    const selectedDevice = this.data.selectedDevice;
+    if (!selectedDevice || !selectedDevice.accountName) {
+      // 没有选择设备，允许提交（后续验证会拦截）
+      return Promise.resolve(true);
+    }
+
+    const that = this;
+    return new Promise((resolve) => {
+      wx.request({
+        url: CONFIG.API_BASE_URL + '/xiaohongshu/api/client/check-note-limit',
+        method: 'GET',
+        header: {
+          'Authorization': 'Bearer ' + wx.getStorageSync('token')
+        },
+        data: {
+          nickname: selectedDevice.accountName
+        },
+        success: function(res) {
+          // 更新状态到页面数据
+          if (res.data.success && res.data.hasLimit) {
+            // 有笔记限制
+            that.setData({
+              noteLimitStatus: {
+                canSubmit: false,
+                message: res.data.message,
+                remainingHours: res.data.remainingHours,
+                limitType: res.data.limitType
+              }
+            });
+            // 显示提示
+            wx.showModal({
+              title: '笔记发布限制',
+              content: res.data.message,
+              showCancel: false,
+              confirmText: '我知道了'
+            });
+            resolve(false); // 不允许提交
+          } else {
+            // 没有限制
+            that.setData({
+              noteLimitStatus: {
+                canSubmit: true,
+                message: ''
+              }
+            });
+            resolve(true); // 允许提交
+          }
+        },
+        fail: function(err) {
+          console.error('检查笔记限制失败:', err);
+          // 失败时默认不允许提交，避免绕过限制
+          wx.showToast({
+            title: '检查笔记限制失败，请重试',
+            icon: 'none'
+          });
+          resolve(false); // 不允许提交
+        }
+      });
+    });
+  },
+
+  // 粘贴分享文本并提取链接
   pasteShareText: function() {
     const that = this;
     wx.showModal({
       title: '粘贴分享文本',
-      placeholderText: '请粘贴小红书分享的完整文本，系统将自动提取链接',
+      placeholderText: '请粘贴小红薯分享的完整文本，系统将自动提取链接',
       editable: true,
-      // placeholderText: '例如：玩ai聊天有哪些伤身体的行为 http://xhslink.com/o/2rV8kDR9MxK 复制后打开【小红书】查看笔记！',
+      // placeholderText: '例如：玩ai聊天有哪些伤身体的行为 http://xhslink.com/o/2rV8kDR9MxK 复制后打开App查看笔记！',
       success: function(res) {
         if (res.confirm && res.content) {
           const extractedUrl = that.extractXiaohongshuUrl(res.content);
@@ -272,7 +432,7 @@ Page({
             });
           } else {
             wx.showToast({
-              title: '未找到小红书链接',
+              title: '未找到小红薯链接',
               icon: 'none',
               duration: 2000
             });
@@ -282,10 +442,10 @@ Page({
     });
   },
 
-  // 提取小红书链接的工具方法
+  // 提取链接的工具方法
   extractXiaohongshuUrl: function(text) {
-    // 匹配小红书链接的正则表达式
-    // 支持 xhslink.com 和其他小红书域名
+    // 匹配链接的正则表达式
+    // 支持 xhslink.com 和其他相关域名
     const xiaohongshuUrlRegex = /(https?:\/\/(?:[a-zA-Z0-9-]+\.)*(?:xiaohongshu|xhslink)\.com\/(?:[a-zA-Z0-9]+\/)?[a-zA-Z0-9]+)/i;
 
     const match = text.match(xiaohongshuUrlRegex);
@@ -415,9 +575,8 @@ Page({
   uploadImage(filePath) {
     this.setData({ uploading: true });
 
-    // 优先使用从profile页面切换的测试用户token
-    const testUserToken = wx.getStorageSync('testUserToken');
-    const token = testUserToken || wx.getStorageSync('token');
+    // 使用统一的token获取方法（已支持testUserToken）
+    const token = app.getCurrentToken();
 
     // 使用wx.uploadFile直接上传文件，避免base64大小问题
     wx.uploadFile({
@@ -626,8 +785,8 @@ Page({
     });
 
     const totalImages = this.data.imageUrls.length;
-    const testUserToken = wx.getStorageSync('testUserToken');
-    const token = testUserToken || wx.getStorageSync('token');
+    // 使用统一的token获取方法（已支持testUserToken）
+    const token = app.getCurrentToken();
 
     // 优先使用批量上传接口（如果图片数量 >= 2）
     if (totalImages >= 2) {
@@ -910,25 +1069,68 @@ Page({
         }
       });
     }).finally(() => {
-      setTimeout(() => {
-        this.setData({
-          uploading: false,
-          uploadProgress: 0,
-          uploadStatus: '',
-          processingMd5: false
-        });
-      }, 2000);
+      // 如果正在提交任务中，不要重置 uploading 状态，由 submitTask 的 finally 块处理
+      if (!this.isSubmitting) {
+        setTimeout(() => {
+          this.setData({
+            uploading: false,
+            uploadProgress: 0,
+            uploadStatus: '',
+            processingMd5: false
+          });
+        }, 2000);
+      }
     });
   },
 
   // 提交任务（使用批量提交接口）
   async submitTask() {
-    const { selectedType, imageUrls, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat } = this.data;
+    const { selectedType, imageUrls, noteUrl, noteAuthor, noteTitle, commentContent, customerPhone, customerWechat, selectedDevice } = this.data;
 
-    // 设备选择已移除，审核时会自动对比账号昵称
+    console.log('🔍 submitTask 被调用，isSubmitting:', this.isSubmitting);
+
+    // 🛡️ 多重防重复提交检查（立即生效，不受setData异步影响）
+    
+    // 1. 检查是否正在提交
+    if (this.isSubmitting) {
+      console.log('⚠️ 检测到重复提交（isSubmitting），已拦截');
+      wx.showToast({ title: '正在提交中，请勿重复点击', icon: 'none' });
+      return;
+    }
+
+    // 2. 检查提交冷却时间（防止短时间内重复提交）
+    const now = Date.now();
+    const timeSinceLastSubmit = now - this.lastSubmitTime;
+    if (timeSinceLastSubmit < this.SUBMIT_COOLDOWN) {
+      const remainingTime = Math.ceil((this.SUBMIT_COOLDOWN - timeSinceLastSubmit) / 1000);
+      console.log(`⚠️ 检测到冷却期内重复提交，剩余时间: ${remainingTime}秒`);
+      wx.showToast({
+        title: `请勿频繁提交，${remainingTime}秒后再试`,
+        icon: 'none'
+      });
+      return;
+    }
+
+    // 3. 立即设置提交状态和时间戳（实例变量立即生效，同步到data）
+    console.log('✅ 开始提交任务，设置 isSubmitting = true，记录提交时间');
+    this.isSubmitting = true;
+    this.lastSubmitTime = now;
+    this.setData({ uploading: true, isSubmitting: true });
+
+    // 验证是否选择了发布账号
+    if (!selectedDevice) {
+      console.log('❌ 验证失败：未选择发布账号');
+      wx.showToast({ title: '请选择发布账号', icon: 'none' });
+      this.isSubmitting = false;
+      this.setData({ isSubmitting: false, uploading: false });
+      return;
+    }
 
     if (!selectedType) {
+      console.log('❌ 验证失败：未选择任务类型');
       wx.showToast({ title: '请选择任务类型', icon: 'none' });
+      this.isSubmitting = false;
+      this.setData({ isSubmitting: false, uploading: false });
       return;
     }
 
@@ -942,20 +1144,37 @@ Page({
     if (selectedType.value === 'note') {
       if (!noteUrl || noteUrl.trim() === '') {
         wx.showToast({ title: '笔记类型必须填写笔记链接', icon: 'none' });
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
         return;
       }
       if (!noteTitle || noteTitle.trim() === '') {
         wx.showToast({ title: '笔记类型必须填写笔记标题', icon: 'none' });
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
+        return;
+      }
+
+      // 【重要】提交前同步检查笔记限制（等待API响应完成）
+      const canProceed = await this.checkNoteLimitSync();
+      if (!canProceed) {
+        // checkNoteLimitSync 已经显示过提示，直接返回
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
         return;
       }
     } else if (selectedType.value === 'comment') {
       if (!noteUrl || noteUrl.trim() === '') {
         wx.showToast({ title: '评论类型必须填写笔记链接', icon: 'none' });
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
         return;
       }
       // 评论类型不再需要手动填写作者昵称，系统会自动比对设备账号
       if (!commentContent || commentContent.trim() === '') {
         wx.showToast({ title: '评论类型必须填写评论内容', icon: 'none' });
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
         return;
       }
     } else if (selectedType.value === 'customer_resource') {
@@ -965,6 +1184,8 @@ Page({
 
       if (!hasPhone && !hasWechat) {
         wx.showToast({ title: '客资类型必须填写客户电话或微信号', icon: 'none' });
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
         return;
       }
     }
@@ -974,11 +1195,11 @@ Page({
       const xiaohongshuUrlPattern = /^https?:\/\/(www\.)?(xiaohongshu|xiaohongshu\.com|xhslink\.com)\/[a-zA-Z0-9]+(?:\/[a-zA-Z0-9]+)+/i;
       if (!xiaohongshuUrlPattern.test(noteUrl)) {
         wx.showToast({ title: '笔记链接格式不正确', icon: 'none' });
+        this.isSubmitting = false;
+        this.setData({ isSubmitting: false, uploading: false });
         return;
       }
     }
-
-    this.setData({ uploading: true });
 
     // 获取token：使用全局token获取函数
     const token = app.getCurrentToken();
@@ -995,16 +1216,16 @@ Page({
       const urls = uploadResults.map(result => result.url);
       const md5s = uploadResults.map(result => result.md5);
 
-      // 获取用户的设备昵称数组，作为noteAuthor传递
-      const deviceNicknames = this.data.devices.map(device => device.accountName);
+      // 使用选中的设备昵称（单个昵称字符串，而非数组）
+      const selectedNickname = selectedDevice.accountName;
 
-      // 准备提交数据（noteAuthor传递设备昵称数组，审核时遍历比对）
+      // 准备提交数据（noteAuthor传递选中的设备昵称，审核时只比对这一个昵称）
       const submitData = {
         imageType: selectedType.value,
         imageUrls: urls,
         imageMd5s: md5s,
         noteUrl: noteUrl && noteUrl.trim() ? noteUrl.trim() : null,
-        noteAuthor: deviceNicknames, // 传递设备昵称数组
+        noteAuthor: selectedNickname, // 传递选中的设备昵称（单个字符串）
         noteTitle: noteTitle && noteTitle.trim() ? noteTitle.trim() : null,
         commentContent: commentContent && commentContent.trim() ? commentContent.trim() : null,
         customerPhone: customerPhone && customerPhone.trim() ? customerPhone.trim() : null,
@@ -1015,7 +1236,7 @@ Page({
       console.log('📤 发送数据:', submitData);
 
       // 使用新的批量提交接口（增加超时时间）
-      wx.request({
+      app.request({
         url: API_CONFIG.TASKS_BATCH_SUBMIT,
         method: 'POST',
         header: {
@@ -1024,59 +1245,94 @@ Page({
         },
         data: submitData,
         timeout: 60000, // 增加超时时间到60秒（评论验证需要时间）
-        success: (res) => {
-          console.log('批量提交响应:', res); // 添加调试日志
-          if (res.data && res.data.success) {
+        useCache: false // 提交请求不使用缓存
+      }).then(res => {
+        console.log('批量提交响应:', res); // 添加调试日志
+        if (res.data && res.data.success) {
+          wx.showToast({
+            title: `成功提交${res.data.reviews ? res.data.reviews.length : 1}个任务`,
+            icon: 'success',
+            duration: 2000
+          });
+
+          // 清空状态但保留选择的账号和任务类型，返回首页
+          setTimeout(() => {
+            const currentDevice = this.data.selectedDevice; // 保存当前选择的账号
+            const currentType = this.data.selectedType; // 保存当前选择的类型
+
+            this.setData({
+              selectedDevice: currentDevice, // 保留选择的账号
+              selectedType: currentType, // 保留选择的类型
+              imageUrls: [],
+              imageMd5s: [],
+              noteUrl: '',
+              noteAuthor: '',
+              noteTitle: '',
+              commentContent: '',
+              customerPhone: '',
+              customerWechat: '',
+              displayList: [{ type: 'add' }]
+            });
+
+            // 清除设备相关缓存，确保设备状态能及时刷新
+            const app = getApp();
+            app.globalDataManager.clear('userDevices');
+            console.log('🗑️ 已清除设备缓存，确保状态及时刷新');
+
             wx.showToast({
-              title: `成功提交${res.data.reviews ? res.data.reviews.length : 1}个任务`,
+              title: '提交成功',
               icon: 'success',
-              duration: 2000
+              duration: 1500
             });
-
-            // 清空状态但保留任务类型选择，返回首页
             setTimeout(() => {
-              this.setData({
-                // selectedType: null, // 保留任务类型选择
-                imageUrls: [],
-                imageMd5s: [],
-                noteUrl: '', // 清空笔记链接
-                noteAuthor: '', // 清空昵称
-                noteTitle: '', // 清空标题
-                commentContent: '', // 清空评论内容
-                customerPhone: '', // 清空客户电话
-                customerWechat: '', // 清空客户微信
-                displayList: [{ type: 'add' }] // 重置显示列表，只保留添加按钮
-              });
-              wx.showToast({
-                title: '提交成功，返回首页',
-                icon: 'success',
-                duration: 2000
-              });
-              setTimeout(() => {
-                wx.switchTab({ url: '/pages/index/index' });
-              }, 500);
-            }, 1500);
+              wx.switchTab({ url: '/pages/index/index' });
+            }, 500);
+          }, 1500);
 
-          } else {
-            console.error('批量提交失败:', res.data); // 添加错误日志
-            wx.showToast({
-              title: res.data?.message || '提交失败',
-              icon: 'none'
-            });
-          }
-        },
-        fail: (err) => {
-          console.error('网络请求失败:', err); // 添加网络错误日志
-          wx.showToast({ title: '网络连接失败', icon: 'none' });
-        },
-        complete: () => {
-          this.setData({ uploading: false });
+        } else {
+          console.error('批量提交失败:', res.data); // 添加错误日志
+          wx.showToast({
+            title: res.data?.message || '提交失败',
+            icon: 'none'
+          });
         }
+      }).catch(err => {
+        console.error('批量提交请求失败:', err); // 添加错误日志
+        // 如果是401错误，app.request已经处理过了，这里不需要额外处理
+        if (err.message !== '登录已过期') {
+          wx.showToast({ title: '网络连接失败', icon: 'none' });
+        }
+      }).finally(() => {
+        console.log('🔄 提交完成，重置状态');
+        this.isSubmitting = false;
+        this.setData({
+          isSubmitting: false,
+          uploading: false,
+          uploadProgress: 0,
+          uploadStatus: '',
+          processingMd5: false
+        });
       });
 
     }).catch(err => {
       console.error('上传失败:', err);
-      this.setData({ uploading: false });
+      this.isSubmitting = false;
+      this.setData({
+        isSubmitting: false,
+        uploading: false,
+        uploadProgress: 0,
+        uploadStatus: '',
+        processingMd5: false
+      });
     });
+  },
+
+  // 分享给朋友
+  onShareAppMessage() {
+    return {
+      title: '易交单 - 上传任务',
+      path: '/pages/index/index',
+      imageUrl: ''
+    };
   }
 });

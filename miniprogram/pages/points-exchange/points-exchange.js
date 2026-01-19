@@ -2,10 +2,10 @@
 const app = getApp()
 const CONFIG = require('../../config.js')
 
+// 使用配置文件中的API端点
 const API_CONFIG = {
-  EXCHANGE_POINTS: `${CONFIG.API_BASE_URL}/xiaohongshu/api/users/${app.getCurrentToken ? 'current' : 'user'}/exchange-points`,
   USER_PROFILE: CONFIG.API_BASE_URL + CONFIG.API_ENDPOINTS.USER.PROFILE
-}
+};
 
 Page({
   data: {
@@ -13,12 +13,17 @@ Page({
     exchangeAmount: '',
     exchangeRate: 100, // 100积分 = 1元
     expectedMoney: 0,
-    exchanging: false
+    exchanging: false,
+    minExchangePoints: 500 // 最少兑换500积分
   },
 
   onLoad: function (options) {
     console.log('📱 积分兑换页面加载')
-    this.loadUserPoints()
+    try {
+      this.loadUserPoints()
+    } catch (e) {
+      console.error('onLoad 加载积分出错:', e)
+    }
   },
 
   onShow: function () {
@@ -30,7 +35,11 @@ Page({
     console.log('✅ 导航守卫通过')
 
     // 重新加载用户积分以确保显示最新数据
-    this.loadUserPoints()
+    try {
+      this.loadUserPoints()
+    } catch (e) {
+      console.error('onShow 加载积分出错:', e)
+    }
   },
 
   // 下拉刷新
@@ -65,10 +74,20 @@ Page({
     }).then(res => {
       console.log('📤 用户资料响应:', res)
       if (res.data && res.data.success) {
-        console.log('✅ 加载积分成功:', res.data.user.points || 0)
+        // 安全获取积分，处理不同的响应结构
+        const points = res.data.user?.points || res.data.points || res.data.user?.integral_w || 0
+        console.log('✅ 加载积分成功:', points)
         this.setData({
-          userPoints: res.data.user.points || 0 // 直接显示分
+          userPoints: points
         })
+
+        // 更新全局用户信息，确保其他页面能检测到变化
+        if (res.data.user && app.globalData.userInfo) {
+          app.globalData.userInfo.points = points
+          // 同时更新本地存储
+          wx.setStorageSync('userInfo', app.globalData.userInfo)
+          console.log('🔄 全局用户信息已更新，积分:', points)
+        }
       } else {
         console.log('❌ 加载积分失败:', res.data?.message || '未知错误')
       }
@@ -93,7 +112,17 @@ Page({
 
   // 兑换全部积分
   exchangeAll: function() {
-    const allPoints = this.data.userPoints // 可以兑换所有积分
+    const allPoints = this.data.userPoints
+    
+    // 检查是否达到最小兑换积分
+    if (allPoints < this.data.minExchangePoints) {
+      wx.showToast({
+        title: `至少需要${this.data.minExchangePoints}积分才能兑换`,
+        icon: 'none'
+      })
+      return
+    }
+    
     this.setData({
       exchangeAmount: allPoints.toString(),
       expectedMoney: (allPoints / this.data.exchangeRate)
@@ -116,6 +145,15 @@ Page({
       return
     }
 
+    // 检查是否达到最小兑换积分
+    if (points < this.data.minExchangePoints) {
+      console.log('❌ 积分数量不足，至少需要:', this.data.minExchangePoints, '当前:', points)
+      wx.showToast({
+        title: `至少需要${this.data.minExchangePoints}积分才能兑换`,
+        icon: 'none'
+      })
+      return
+    }
 
     if (points > this.data.userPoints) {
       console.log('❌ 积分不足，当前:', this.data.userPoints, '需要:', points)
@@ -151,64 +189,21 @@ Page({
 
     const token = app.getCurrentToken()
     console.log('🔐 获取到的token:', token ? '有token' : '无token')
-    
-    // 从token中解析出正确的用户ID
-    let userId = 'current'
-    if (token) {
-      try {
-        // 小程序兼容的base64解码
-const base64Decode = (str) => {
-  // 1. 修正 JWT 的特殊字符 (- 换成 +, _ 换成 /)
-  str = str.replace(/-/g, '+').replace(/_/g, '/');
-  
-  // 2. 补齐末尾缺失的 '=' (Base64 长度必须是 4 的倍数)
-  const pad = str.length % 4;
-  if (pad) {
-    str += new Array(5 - pad).join('=');
-  }
 
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-  let output = '';
-  str = str.replace(/[^A-Za-z0-9\+\/\=]/g, '');
+    // 直接从 userInfo 获取用户ID，避免解析 token 可能导致的错误
+    const userInfo = app.globalData.userInfo || wx.getStorageSync('userInfo')
+    let userId = userInfo?.id || userInfo?.username || 'current'
+    console.log('👤 使用用户ID:', userId)
 
-  for (let i = 0; i < str.length; ) {
-    const enc1 = chars.indexOf(str.charAt(i++));
-    const enc2 = chars.indexOf(str.charAt(i++));
-    const enc3 = chars.indexOf(str.charAt(i++));
-    const enc4 = chars.indexOf(str.charAt(i++));
-
-    const chr1 = (enc1 << 2) | (enc2 >> 4);
-    const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
-    const chr3 = ((enc3 & 3) << 6) | enc4;
-
-    output += String.fromCharCode(chr1);
-    if (enc3 !== 64) output += String.fromCharCode(chr2);
-    if (enc4 !== 64) output += String.fromCharCode(chr3);
-  }
-
-  // 3. 🔥 核心修正：解决中文乱码问题
-  // 将解码后的字符串转回正确的 UTF-8 编码
-    try {
-      return decodeURIComponent(atobToUtf8(output));
-    } catch (e) {
-      return output; // 如果转换失败返回原字符串
-    }
-  };
-
-        // 辅助函数：将 Latin-1 字符串转为百分比编码，方便 decodeURIComponent 处理中文
-        function atobToUtf8(str) {
-          return str.split('').map(function(c) {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-          }).join('');
-        }
-
-        // 使用：
-        const payload = JSON.parse(base64Decode(token.split('.')[1]));
-        userId = payload.userId
-        console.log('👤 解析到的用户ID:', userId)
-      } catch (e) {
-        console.error('解析token失败:', e)
-      }
+    if (!userId || userId === 'current') {
+      console.error('无法获取用户ID')
+      wx.showToast({
+        title: '登录信息异常，请重新登录',
+        icon: 'none',
+        duration: 2000
+      })
+      this.setData({ exchanging: false })
+      return
     }
 
     console.log('📡 发起兑换请求到:', `${CONFIG.API_BASE_URL}/xiaohongshu/api/users/${userId}/exchange-points`)
@@ -229,18 +224,14 @@ const base64Decode = (str) => {
           icon: 'success'
         })
 
-        // 更新本地积分
+        // 清空输入框
         this.setData({
-          userPoints: this.data.userPoints - points,
           exchangeAmount: '',
           expectedMoney: 0
         })
 
-        // 通知其他页面更新
-        if (app.globalData.userInfo) {
-          app.globalData.userInfo.points = this.data.userPoints
-        }
-        console.log('📊 积分更新完成，剩余积分:', this.data.userPoints - points)
+        // 重新从服务器加载用户积分，确保数据同步
+        this.loadUserPoints()
 
       } else {
         console.log('❌ 兑换失败，错误信息:', res.data?.message || '未知错误')
@@ -259,5 +250,14 @@ const base64Decode = (str) => {
       console.log('🔄 兑换流程完成，重置兑换状态')
       this.setData({ exchanging: false })
     })
+  },
+
+  // 分享给朋友
+  onShareAppMessage() {
+    return {
+      title: '易交单 - 积分兑换',
+      path: '/pages/index/index',
+      imageUrl: ''
+    };
   }
 })

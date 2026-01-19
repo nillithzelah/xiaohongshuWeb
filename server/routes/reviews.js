@@ -2,8 +2,10 @@ const express = require('express');
 const ImageReview = require('../models/ImageReview');
 const User = require('../models/User');
 const TaskConfig = require('../models/TaskConfig');
+const CommentLimit = require('../models/CommentLimit');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const notificationService = require('../services/notificationService');
+const reviewOptimizationService = require('../services/reviewOptimizationService');
 const router = express.Router();
 
 // 获取我的审核记录（用户）
@@ -34,18 +36,84 @@ router.get('/my-reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// 获取待审核列表（带教老师）
-router.get('/pending', authenticateToken, requireRole(['mentor', 'boss']), async (req, res) => {
+// 获取待审核列表（带教老师、主管、HR）
+router.get('/pending', authenticateToken, requireRole(['mentor', 'manager', 'boss', 'hr']), async (req, res) => {
   try {
     const { page = 1, limit = 10, status = 'pending' } = req.query;
 
-    const reviews = await ImageReview.find({ status })
+    // 自动清理超时的 processing 任务（10分钟超时）
+    const now = new Date();
+    const timeoutReleaseResult = await ImageReview.updateMany(
+      {
+        status: 'processing',
+        'processingLock.lockedUntil': { $lt: now }
+      },
+      {
+        $set: {
+          status: 'pending',
+          'processingLock.clientId': null,
+          'processingLock.lockedAt': null,
+          'processingLock.heartbeatAt': null,
+          'processingLock.lockedUntil': null
+        }
+      }
+    );
+
+    if (timeoutReleaseResult.modifiedCount > 0) {
+      console.log(`🔄 [超时清理] 自动释放 ${timeoutReleaseResult.modifiedCount} 个超时的 processing 任务`);
+    }
+
+    // 数据权限过滤
+    let query = { status };
+
+    if (req.user.role === 'mentor') {
+      // 带教老师可以看到：
+      // 1. 自己名下用户的审核 + 未分配带教老师的用户的审核（status = pending）
+      // 2. 自己提交的待人工复审的笔记（status = ai_approved）
+      const mentorUsers = await User.find({
+        $or: [
+          { mentor_id: req.user._id },
+          { mentor_id: null },
+          { mentor_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const mentorUserIds = mentorUsers.map(user => user._id);
+
+      console.log(`🔍 [审核权限] 带教老师 ${req.user.username} 查询审核，找到 ${mentorUserIds.length} 个兼职用户`);
+
+      // 如果查询的是 ai_approved 状态，只显示自己提交的笔记
+      if (status === 'ai_approved') {
+        query.userId = req.user._id;
+      } else {
+        // 其他状态显示自己名下用户的审核
+        query.userId = { $in: mentorUserIds };
+      }
+    } else if (req.user.role === 'hr') {
+      // HR 只能看到自己创建的用户的审核 + 未分配HR的用户的审核
+      const hrUsers = await User.find({
+        $or: [
+          { hr_id: req.user._id },
+          { hr_id: null },
+          { hr_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const hrUserIds = hrUsers.map(user => user._id);
+
+      console.log(`🔍 [审核权限] HR ${req.user.username} 查询审核，找到 ${hrUserIds.length} 个兼职用户`);
+
+      query.userId = { $in: hrUserIds };
+    }
+    // boss 和 manager 可以看到所有审核，不过滤
+
+    const reviews = await ImageReview.find(query)
       .populate('userId', 'username nickname')
       .sort({ createdAt: 1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
-    const total = await ImageReview.countDocuments({ status });
+    const total = await ImageReview.countDocuments(query);
 
     res.json({
       success: true,
@@ -63,8 +131,271 @@ router.get('/pending', authenticateToken, requireRole(['mentor', 'boss']), async
   }
 });
 
+// 带教老师审核 (支持带教老师和主管) - POST版本（前端兼容）
+router.post('/:id/review', authenticateToken, requireRole(['mentor', 'manager', 'boss', 'hr']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, reason, comment } = req.body;
+
+    const review = await ImageReview.findById(id).populate('userId');
+    if (!review) {
+      return res.status(404).json({ success: false, message: '审核记录不存在' });
+    }
+
+    const isManagerOrBoss = ['manager', 'boss'].includes(req.user.role);
+    const isMentor = req.user.role === 'mentor';
+
+    // 不允许操作的状态
+    const noActionStatuses = ['manager_approved', 'finance_processing', 'completed'];
+
+    // 带教老师可以处理 pending 和 ai_approved 状态（如果是自己的笔记）
+    if (isMentor) {
+      const validStatuses = ['pending', 'ai_approved'];
+      if (!validStatuses.includes(review.status)) {
+        return res.status(400).json({ success: false, message: '该记录已被审核' });
+      }
+      // 如果是 ai_approved 状态，只能操作自己名下用户的笔记
+      if (review.status === 'ai_approved') {
+        // 检查笔记提交者是否属于当前带教老师名下
+        const submitter = await User.findById(review.userId);
+        if (!submitter || submitter.mentor_id?.toString() !== req.user._id.toString()) {
+          return res.status(403).json({ success: false, message: '只能操作自己名下用户的笔记' });
+        }
+      }
+    }
+
+    // 老板和主管可以处理所有状态（除了不允许操作的状态）- 作为AI判断错误的备用
+    if (isManagerOrBoss && noActionStatuses.includes(review.status)) {
+      return res.status(400).json({ success: false, message: `该记录状态为 ${review.status}，不允许操作` });
+    }
+
+    const oldStatus = review.status;
+    const isCustomerResource = review.imageType === 'customer_resource';
+    const actionComment = reason || comment || (action === 'approve' ? '审核通过' : '审核驳回');
+
+    if (action === 'approve') {
+      review.auditHistory.push({
+        operator: req.user._id,
+        operatorName: req.user.username,
+        action: isManagerOrBoss ? 'manager_approve' : 'mentor_pass',
+        comment: actionComment,
+        timestamp: new Date()
+      });
+
+      if (isManagerOrBoss) {
+        review.managerApproval = {
+          approved: true,
+          comment: actionComment,
+          approvedAt: new Date()
+        };
+      } else {
+        review.mentorReview = {
+          reviewer: req.user._id,
+          approved: true,
+          comment: actionComment,
+          reviewedAt: new Date()
+        };
+      }
+
+      // 所有类型人工审核通过后直接完成（一次审核）
+      review.status = 'manager_approved';
+
+      // 人工审核通过时发放任务积分（根据类型）
+      let typeKey;
+      if (review.imageType === 'customer_resource') {
+        typeKey = 'customer_resource';
+      } else if (review.imageType === 'note') {
+        typeKey = 'note';
+      } else if (review.imageType === 'comment') {
+        typeKey = 'comment';
+      }
+
+      if (typeKey) {
+        const taskConfig = await TaskConfig.findOne({ type_key: typeKey, is_active: true });
+        const pointsReward = taskConfig ? Math.floor(taskConfig.price) : 0;
+
+        if (pointsReward > 0) {
+          try {
+            const Transaction = require('../models/Transaction');
+
+            // 【防止重复发放】检查是否已经发放过该任务的积分
+            const existingReward = await Transaction.findOne({
+              imageReview_id: review._id,
+              type: 'task_reward'
+            });
+
+            if (existingReward) {
+              console.log(`⚠️ [人工审核] 该任务已发放过积分，跳过重复发放: ${review._id}`);
+            } else {
+              await User.findByIdAndUpdate(review.userId, {
+                $inc: { points: pointsReward }
+              });
+              console.log(`💰 [人工审核] ${review.imageType}审核通过，已发放任务积分: ${pointsReward}`);
+
+              // 创建任务奖励交易记录
+              await new Transaction({
+              user_id: review.userId,
+              type: 'task_reward',
+              amount: pointsReward,
+              description: `任务奖励 - ${review.imageType}审核通过`,
+              status: 'completed',
+              imageReview_id: review._id,
+              createdAt: new Date()
+            }).save();
+
+            // 更新审核历史，记录积分发放
+            review.auditHistory.push({
+              operator: req.user._id,
+              operatorName: req.user.username,
+              action: 'points_reward',
+              comment: `${review.imageType}审核通过，发放${pointsReward}积分`,
+              timestamp: new Date()
+            });
+            }
+          } catch (pointsError) {
+            console.error('❌ [人工审核] 发放任务积分失败:', pointsError);
+          }
+        }
+      }
+
+      // 人工审核通过时发放分销积分（所有类型）
+      if (review.snapshotCommission1 > 0) {
+        try {
+          // review.userId 已经在查询时 populate 了
+          if (review.userId?.parent_id) {
+            const Transaction = require('../models/Transaction');
+
+            // 【防重复发放】检查一级佣金是否已发放
+            const existingCommission1 = await Transaction.findOne({
+              imageReview_id: review._id,
+              type: 'referral_bonus_1'
+            });
+
+            // 一级佣金：直接增加上级积分
+            const parentUser = await User.findById(review.userId.parent_id);
+            if (parentUser && !parentUser.is_deleted) {
+              if (!existingCommission1) {
+                await User.findByIdAndUpdate(parentUser._id, {
+                  $inc: { points: review.snapshotCommission1 }
+                });
+                console.log(`💰 [分销佣金] 一级: +${review.snapshotCommission1}积分 → ${parentUser.username}`);
+
+                // 创建一级佣金交易记录
+                await new Transaction({
+                  user_id: parentUser._id,
+                  type: 'referral_bonus_1',
+                  amount: review.snapshotCommission1,
+                  description: `一级推荐佣金 - 来自用户 ${review.userId.username || review.userId.nickname} (${review.imageType})`,
+                  status: 'completed',
+                  imageReview_id: review._id,
+                  createdAt: new Date()
+                }).save();
+              } else {
+                console.log(`⚠️ [分销佣金] 一级佣金已发放，跳过: ${review._id}`);
+              }
+
+              // 二级佣金
+              if (parentUser.parent_id && review.snapshotCommission2 > 0) {
+                // 【防重复发放】检查二级佣金是否已发放
+                const existingCommission2 = await Transaction.findOne({
+                  imageReview_id: review._id,
+                  type: 'referral_bonus_2'
+                });
+
+                const grandParentUser = await User.findById(parentUser.parent_id);
+                if (grandParentUser && !grandParentUser.is_deleted) {
+                  if (!existingCommission2) {
+                    await User.findByIdAndUpdate(grandParentUser._id, {
+                      $inc: { points: review.snapshotCommission2 }
+                    });
+                    console.log(`💰 [分销佣金] 二级: +${review.snapshotCommission2}积分 → ${grandParentUser.username}`);
+
+                    await new Transaction({
+                      user_id: grandParentUser._id,
+                      type: 'referral_bonus_2',
+                      amount: review.snapshotCommission2,
+                      description: `二级推荐佣金 - 来自用户 ${review.userId.username || review.userId.nickname} (${review.imageType})`,
+                      status: 'completed',
+                      imageReview_id: review._id,
+                      createdAt: new Date()
+                    }).save();
+                  } else {
+                    console.log(`⚠️ [分销佣金] 二级佣金已发放，跳过: ${review._id}`);
+                  }
+                }
+              }
+            }
+          }
+        } catch (commissionError) {
+          console.error('❌ [分销佣金] 发放佣金失败:', commissionError);
+        }
+      }
+    } else if (action === 'reject') {
+      review.auditHistory.push({
+        operator: req.user._id,
+        operatorName: req.user.username,
+        action: isManagerOrBoss ? 'manager_reject' : 'mentor_reject',
+        comment: actionComment,
+        timestamp: new Date()
+      });
+
+      review.status = 'rejected';
+
+      if (isManagerOrBoss) {
+        review.managerApproval = {
+          approved: false,
+          comment: actionComment,
+          approvedAt: new Date()
+        };
+      } else {
+        review.mentorReview = {
+          reviewer: req.user._id,
+          approved: false,
+          comment: actionComment,
+          reviewedAt: new Date()
+        };
+      }
+
+      review.rejectionReason = actionComment;
+    }
+
+    // 重置 reviewAttempt（人工审核后不需要AI重试计数）
+    if (review.reviewAttempt > 2) {
+      review.reviewAttempt = 1;
+    }
+
+    await review.save();
+
+    // 发送通知
+    await notificationService.sendReviewStatusNotification(review, oldStatus, review.status);
+
+    // 返回清理后的review对象，避免循环引用导致序列化失败
+    const cleanReview = {
+      _id: review._id,
+      status: review.status,
+      imageType: review.imageType,
+      imageUrl: review.imageUrl,
+      createdAt: review.createdAt,
+      auditHistory: review.auditHistory,
+      userId: review.userId?._id || review.userId,
+      username: review.userId?.username || review.userId?.username
+    };
+
+    res.json({
+      success: true,
+      message: action === 'approve'
+        ? (isCustomerResource ? '审核通过' : (isManagerOrBoss ? '审核通过' : '审核通过，提交给主管'))
+        : '审核拒绝',
+      review: cleanReview
+    });
+  } catch (error) {
+    console.error('审核错误:', error);
+    res.status(500).json({ success: false, message: '审核失败' });
+  }
+});
+
 // 带教老师审核 (支持带教老师和主管)
-router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'boss']), async (req, res) => {
+router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'manager', 'boss', 'hr']), async (req, res) => {
   try {
     const { id } = req.params;
     const { approved, comment, newType } = req.body;
@@ -74,8 +405,29 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'boss
       return res.status(404).json({ success: false, message: '审核记录不存在' });
     }
 
-    if (review.status !== 'pending') {
-      return res.status(400).json({ success: false, message: '该记录已被审核' });
+    // 带教老师可以处理 pending 和 ai_approved 状态的记录
+    const validStatuses = req.user.role === 'mentor' ? ['pending', 'ai_approved'] : ['pending'];
+    if (!validStatuses.includes(review.status)) {
+      return res.status(400).json({ success: false, message: '该记录已被审核或状态不允许此操作' });
+    }
+
+    // 带教老师权限过滤：只能操作自己下属用户的审核
+    if (req.user.role === 'mentor') {
+      const mentorUsers = await User.find({
+        $or: [
+          { mentor_id: req.user._id },
+          { mentor_id: null },
+          { mentor_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const mentorUserIds = mentorUsers.map(user => user._id);
+
+      // 使用 equals() 方法比较 ObjectId，因为 includes() 使用引用比较，会导致 ObjectId 比较失败
+      const hasPermission = mentorUserIds.some(id => id.equals(review.userId));
+      if (!hasPermission) {
+        return res.status(403).json({ success: false, message: '无权操作此记录' });
+      }
     }
 
     const oldStatus = review.status;
@@ -128,7 +480,7 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'boss
     });
 
     if (approved) {
-      review.status = 'mentor_approved'; // 带教老师审核通过，等待主管确认
+      review.status = 'manager_approved'; // 带教老师审核通过，直接进入财务流程
     } else {
       review.status = 'rejected';
     }
@@ -140,7 +492,7 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'boss
 
     res.json({
       success: true,
-      message: approved ? '审核通过，提交给主管' : '审核拒绝',
+      message: approved ? '审核通过' : '审核拒绝',
       review
     });
   } catch (error) {
@@ -149,7 +501,7 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'boss
   }
 });
 
-// 主管确认
+// 主管确认（支持人工复审AI审核通过的记录）
 router.put('/:id/manager-approve', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
   try {
     const { id } = req.params;
@@ -160,8 +512,9 @@ router.put('/:id/manager-approve', authenticateToken, requireRole(['manager', 'b
       return res.status(404).json({ success: false, message: '审核记录不存在' });
     }
 
-    if (review.status !== 'mentor_approved') {
-      return res.status(400).json({ success: false, message: '该记录状态不正确' });
+    // 支持mentor_approved（带教老师审核通过）和ai_approved（AI审核通过）两种状态
+    if (!['mentor_approved', 'ai_approved'].includes(review.status)) {
+      return res.status(400).json({ success: false, message: '该记录状态不正确，只能人工复审AI审核通过或带教老师审核通过的记录' });
     }
 
     const oldStatus = review.status;
@@ -173,39 +526,219 @@ router.put('/:id/manager-approve', authenticateToken, requireRole(['manager', 'b
     };
 
     // 添加审核历史记录
+    const actionComment = comment || (approved ? '人工复审通过' : '人工复审驳回');
     review.auditHistory.push({
       operator: req.user._id,
       operatorName: req.user.username,
       action: approved ? 'manager_approve' : 'manager_reject',
-      comment: comment || (approved ? '主管确认通过' : '主管驳回重审'),
+      comment: actionComment,
       timestamp: new Date()
     });
 
     if (approved) {
-      review.status = 'manager_approved'; // 主管确认通过，到财务处理
+      review.status = 'manager_approved'; // 人工复审通过，可以开始持续检查和财务处理
+
+      // 自动发放两级推荐佣金（直接增加积分）
+      if (review.snapshotCommission1 > 0) {
+        try {
+          const User = require('../models/User');
+          const Transaction = require('../models/Transaction');
+          const populatedReview = await ImageReview.findById(id).populate('userId');
+
+          console.log(`🔍 [佣金调试] reviewId: ${id}, type: ${review.imageType}, commission: ${review.snapshotCommission1}`);
+          console.log(`🔍 [佣金调试] userId: ${populatedReview.userId}, parent_id: ${populatedReview.userId?.parent_id}`);
+
+          if (populatedReview.userId?.parent_id) {
+            // 【防重复发放】检查一级佣金是否已发放
+            const existingCommission1 = await Transaction.findOne({
+              imageReview_id: review._id,
+              type: 'referral_bonus_1'
+            });
+
+            // 一级佣金：直接增加上级积分
+            const parentUser = await User.findById(populatedReview.userId.parent_id);
+            if (parentUser && !parentUser.is_deleted) {
+              if (!existingCommission1) {
+                await User.findByIdAndUpdate(parentUser._id, {
+                  $inc: { points: review.snapshotCommission1 }
+                });
+                console.log(`💰 [佣金] 一级: +${review.snapshotCommission1}积分 → ${parentUser.username}`);
+
+                // 创建一级佣金交易记录
+                await new Transaction({
+                  user_id: parentUser._id,
+                  type: 'referral_bonus_1',
+                  amount: review.snapshotCommission1,
+                  description: `一级推荐佣金 - 来自用户 ${populatedReview.userId.username || populatedReview.userId.nickname}`,
+                  status: 'completed',
+                  imageReview_id: review._id,
+                  createdAt: new Date()
+                }).save();
+                console.log(`📝 [佣金] 已创建一级佣金交易记录`);
+              } else {
+                console.log(`⚠️ [佣金] 一级佣金已发放，跳过: ${review._id}`);
+              }
+
+              // 二级佣金
+              if (parentUser.parent_id && review.snapshotCommission2 > 0) {
+                // 【防重复发放】检查二级佣金是否已发放
+                const existingCommission2 = await Transaction.findOne({
+                  imageReview_id: review._id,
+                  type: 'referral_bonus_2'
+                });
+
+                const grandParentUser = await User.findById(parentUser.parent_id);
+                if (grandParentUser && !grandParentUser.is_deleted) {
+                  if (!existingCommission2) {
+                    await User.findByIdAndUpdate(grandParentUser._id, {
+                      $inc: { points: review.snapshotCommission2 }
+                    });
+                    console.log(`💰 [佣金] 二级: +${review.snapshotCommission2}积分 → ${grandParentUser.username}`);
+
+                    // 创建二级佣金交易记录
+                    await new Transaction({
+                      user_id: grandParentUser._id,
+                      type: 'referral_bonus_2',
+                      amount: review.snapshotCommission2,
+                      description: `二级推荐佣金 - 来自用户 ${populatedReview.userId.username || populatedReview.userId.nickname}`,
+                      status: 'completed',
+                      imageReview_id: review._id,
+                      createdAt: new Date()
+                    }).save();
+                    console.log(`📝 [佣金] 已创建二级佣金交易记录`);
+                  } else {
+                    console.log(`⚠️ [佣金] 二级佣金已发放，跳过: ${review._id}`);
+                  }
+                }
+              }
+            } else {
+              console.log(`⚠️ [佣金] 上级用户不存在或已删除`);
+            }
+          } else {
+            console.log(`⚠️ [佣金] userId.parent_id 不存在`);
+          }
+        } catch (error) {
+          console.error('❌ [佣金] 发放佣金失败:', error);
+        }
+      }
+
+      // 记录评论限制（如果是从 pending/mentor_approved → manager_approved）
+      if (review.imageType === 'comment' && oldStatus !== 'ai_approved') {
+        try {
+          // 获取作者昵称（从多个来源尝试）
+          let authorToRecord = review.aiParsedNoteInfo?.author;
+          if (!authorToRecord && Array.isArray(review.userNoteInfo?.author)) {
+            authorToRecord = review.userNoteInfo.author[0];
+          } else if (!authorToRecord && typeof review.userNoteInfo?.author === 'string') {
+            const authorStr = review.userNoteInfo.author.trim();
+            authorToRecord = authorStr.includes(',') || authorStr.includes('，')
+              ? authorStr.split(/[,，]/)[0].trim()
+              : authorStr;
+          }
+
+          if (authorToRecord && review.noteUrl && review.userNoteInfo?.comment) {
+            await CommentLimit.recordCommentApproval(
+              review.noteUrl,
+              authorToRecord,
+              review.userNoteInfo.comment,
+              review._id
+            );
+            console.log(`✅ [manager审批] 评论限制记录: ${authorToRecord}`);
+          }
+        } catch (error) {
+          console.error('❌ [manager审批] 记录评论限制失败:', error);
+        }
+      }
+
+      // 如果是笔记类型，启用持续检查
+      if (review.imageType === 'note') {
+        const firstCheckTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        review.continuousCheck = {
+          enabled: true,
+          status: 'active',
+          nextCheckTime: firstCheckTime
+        };
+        console.log(`✅ [人工复审] 笔记类型审核通过，已启用持续检查，reviewId: ${review._id}`);
+
+        // 笔记类型：AI审核通过时未发放积分，人工复审通过时才发放
+        // 从ai_approved或mentor_approved转来都需要发放积分
+        if (oldStatus === 'ai_approved' || oldStatus === 'mentor_approved') {
+          const TaskConfig = require('../models/TaskConfig');
+          const taskConfig = await TaskConfig.findOne({ type_key: 'note', is_active: true });
+          const pointsReward = taskConfig ? Math.floor(taskConfig.price) : 0;
+
+          if (pointsReward > 0) {
+            const User = require('../models/User');
+            const Transaction = require('../models/Transaction');
+
+            // 【防止重复发放】检查是否已经发放过该任务的积分
+            const existingReward = await Transaction.findOne({
+              imageReview_id: review._id,
+              type: 'task_reward'
+            });
+
+            if (existingReward) {
+              console.log(`⚠️ [人工复审] 该任务已发放过积分，跳过重复发放: ${review._id}`);
+            } else {
+              await User.findByIdAndUpdate(review.userId, {
+                $inc: { points: pointsReward }
+              });
+              console.log(`💰 [人工复审] 笔记类型审核通过，已发放积分: ${pointsReward}`);
+
+              // 创建任务奖励交易记录
+              await new Transaction({
+                user_id: review.userId,
+                type: 'task_reward',
+                amount: pointsReward,
+                description: `任务奖励 - 笔记审核通过`,
+                status: 'completed',
+                imageReview_id: review._id,
+                createdAt: new Date()
+              }).save();
+
+              // 更新审核历史，记录积分发放
+              review.auditHistory.push({
+                operator: req.user._id,
+              operatorName: req.user.username,
+              action: 'points_reward',
+              comment: `人工复审通过，发放${pointsReward}积分`,
+              timestamp: new Date()
+              });
+            }
+          }
+        }
+      }
     } else {
-      review.status = 'manager_rejected'; // 主管驳回重审
+      review.status = 'manager_rejected'; // 人工复审驳回
       review.rejectionReason = comment; // 记录驳回原因（向后兼容）
     }
 
     await review.save();
 
-    // 发送通知
-    await notificationService.sendReviewStatusNotification(review, oldStatus, review.status);
+    // 发送通知（失败不影响主流程）
+    try {
+      await notificationService.sendReviewStatusNotification(review, oldStatus, review.status);
+    } catch (notifError) {
+      console.error('发送审核状态通知失败:', notifError.message);
+    }
 
-    // 如果是主管驳回，额外通知带教老师
-    if (!approved) {
-      await notificationService.sendMentorNotification(review, 'manager_reject', req.user.username, comment);
+    // 如果是主管驳回且原状态是mentor_approved，额外通知带教老师（失败不影响主流程）
+    if (!approved && oldStatus === 'mentor_approved') {
+      try {
+        await notificationService.sendMentorNotification(review, 'manager_reject', req.user.username, comment);
+      } catch (notifError) {
+        console.error('发送带教老师通知失败:', notifError.message);
+      }
     }
 
     res.json({
       success: true,
-      message: approved ? '主管确认通过，提交给财务' : '主管拒绝',
+      message: approved ? '人工复审通过，提交给财务处理' : '人工复审驳回',
       review
     });
   } catch (error) {
-    console.error('老板确认错误:', error);
-    res.status(500).json({ success: false, message: '确认失败' });
+    console.error('人工复审错误:', error);
+    res.status(500).json({ success: false, message: '人工复审失败' });
   }
 });
 
@@ -412,297 +945,59 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
   }
 });
 
-// 获取所有审核记录（管理员）
+// 获取所有审核记录（管理员）- 优化版本
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    console.log('🔍 Reviews API 被调用了!');
-    const { page = 1, limit = 10, status, userId, imageType, keyword, reviewer, deviceName } = req.query;
-    const limitNum = parseInt(limit);
-    const pageNum = parseInt(page);
+    console.log('🔍 Reviews API 被调用了! (优化版本)');
 
-    let query = {};
-    if (status) query.status = status;
-    if (userId) query.userId = userId;
-    if (imageType) query.imageType = imageType;
+    const options = {
+      page: req.query.page,
+      limit: req.query.limit,
+      status: req.query.status,
+      userId: req.query.userId,
+      imageType: req.query.imageType,
+      keyword: req.query.keyword,
+      reviewer: req.query.reviewer,
+      deviceName: req.query.deviceName,
+      currentUserId: req.user ? req.user._id : null,
+      currentUserRole: req.user ? req.user.role : null
+    };
 
-    // 如果有keyword，搜索用户名匹配的用户ID
-    if (keyword) {
-      const matchedUsers = await User.find({
-        $or: [
-          { username: { $regex: keyword, $options: 'i' } },
-          { nickname: { $regex: keyword, $options: 'i' } }
-        ]
-      }).select('_id');
-      const userIds = matchedUsers.map(user => user._id);
-      query.userId = { $in: userIds };
-    }
+    console.log('📋 Reviews API 收到的参数:', JSON.stringify({
+      page: options.page,
+      limit: options.limit,
+      status: options.status,
+      imageType: options.imageType,
+      userId: options.userId,
+      keyword: options.keyword
+    }));
 
-    // 如果有reviewer，按带教老师筛选审核记录
-    if (reviewer) {
-      query['mentorReview.reviewer'] = reviewer;
-    }
+    const result = await reviewOptimizationService.getOptimizedReviews(options);
 
-    // 如果有deviceName，按设备号筛选审核记录
-    if (deviceName) {
-      const Device = require('../models/Device');
-      const matchedDevices = await Device.find({
-        accountName: { $regex: deviceName, $options: 'i' }
-      }).select('assignedUser');
-      const userIds = matchedDevices.map(device => device.assignedUser);
-      if (userIds.length > 0) {
-        query.userId = query.userId ? { $in: [...new Set([...(query.userId.$in || []), ...userIds])] } : { $in: userIds };
-      } else {
-        // 如果没有找到匹配的设备，返回空结果
-        query.userId = null;
-      }
-    }
-
-    console.log('🔍 开始查询审核记录...');
-    console.log('   查询条件:', query);
-    console.log('   分页参数:', { page: pageNum, limit: limitNum });
-
-    // 获取当前用户ID（如果已认证）
-    const currentUserId = req.user ? req.user._id : null;
-
-    // 从数据库查询真实数据 - 优先显示属于自己的待审核记录
-    let reviews;
-
-    if (currentUserId && req.user.role === 'mentor') {
-      // 带教老师：优先显示自己名下用户的待审核记录
-      const assignedUsers = await User.find({ mentor_id: currentUserId }).select('_id');
-      const assignedUserIds = assignedUsers.map(u => u._id);
-
-      // 自己名下用户的待审核记录
-      const ownPendingQuery = { ...query, status: 'pending', userId: { $in: assignedUserIds } };
-      const ownPending = await ImageReview.find(ownPendingQuery)
-        .populate('userId', 'username nickname')
-        .populate('mentorReview.reviewer', 'username nickname')
-        .sort({ createdAt: -1 });
-
-      // 其他待审核记录
-      const otherPendingQuery = { ...query, status: 'pending', userId: { $nin: assignedUserIds } };
-      const otherPending = await ImageReview.find(otherPendingQuery)
-        .populate('userId', 'username nickname')
-        .populate('mentorReview.reviewer', 'username nickname')
-        .sort({ createdAt: -1 });
-
-      // 非待审核记录（按最新操作时间倒序）
-      const nonPendingQuery = { ...query };
-      nonPendingQuery.$and = nonPendingQuery.$and || [];
-      nonPendingQuery.$and.push({ status: { $ne: 'pending' } });
-
-      const nonPending = await ImageReview.find(nonPendingQuery)
-        .populate('userId', 'username nickname')
-        .populate('mentorReview.reviewer', 'username nickname');
-
-      // 对非待审核记录按最新审核时间排序
-      nonPending.sort((a, b) => {
-        const getLatestAuditTime = (review) => {
-          const times = [];
-          if (review.mentorReview?.reviewedAt) times.push(new Date(review.mentorReview.reviewedAt));
-          if (review.managerApproval?.approvedAt) times.push(new Date(review.managerApproval.approvedAt));
-          if (review.financeProcess?.processedAt) times.push(new Date(review.financeProcess.processedAt));
-          if (review.auditHistory && review.auditHistory.length > 0) {
-            review.auditHistory.forEach(history => {
-              if (history.timestamp) times.push(new Date(history.timestamp));
-            });
-          }
-          return times.length > 0 ? Math.max(...times.map(t => t.getTime())) : new Date(review.createdAt).getTime();
-        };
-        return getLatestAuditTime(b) - getLatestAuditTime(a);
-      });
-
-      // 合并结果：待审核优先，然后是非待审核
-      reviews = [...ownPending, ...otherPending, ...nonPending];
-
-      // 应用分页
-      const startIndex = (pageNum - 1) * limitNum;
-      const endIndex = startIndex + limitNum;
-      reviews = reviews.slice(startIndex, endIndex);
-    } else if (currentUserId) {
-      // 其他角色用户：按原有逻辑
-      console.log('👤 当前用户角色分支:', req.user?.role, '用户ID:', currentUserId);
-
-      const selfReviewedQuery = { ...query };
-      const otherReviewedQuery = { ...query };
-
-      selfReviewedQuery.$or = [
-        { 'mentorReview.reviewer': currentUserId },
-        { 'auditHistory.operator': currentUserId }
-      ];
-
-      otherReviewedQuery.$and = otherReviewedQuery.$and || [];
-      otherReviewedQuery.$and.push({
-        $nor: [
-          { 'mentorReview.reviewer': currentUserId },
-          { 'auditHistory.operator': currentUserId }
-        ]
-      });
-
-      console.log('🔍 selfReviewedQuery:', JSON.stringify(selfReviewedQuery, null, 2));
-      console.log('🔍 otherReviewedQuery:', JSON.stringify(otherReviewedQuery, null, 2));
-
-      const selfReviewed = await ImageReview.find(selfReviewedQuery)
-        .populate('userId', 'username nickname')
-        .populate('mentorReview.reviewer', 'username nickname');
-
-      console.log('📊 selfReviewed 数量:', selfReviewed.length);
-
-      selfReviewed.sort((a, b) => {
-        const getLatestAuditTime = (review) => {
-          const times = [];
-          if (review.mentorReview?.reviewedAt) times.push(new Date(review.mentorReview.reviewedAt));
-          if (review.managerApproval?.approvedAt) times.push(new Date(review.managerApproval.approvedAt));
-          if (review.financeProcess?.processedAt) times.push(new Date(review.financeProcess.processedAt));
-          if (review.auditHistory && review.auditHistory.length > 0) {
-            review.auditHistory.forEach(history => {
-              if (history.timestamp) times.push(new Date(history.timestamp));
-            });
-          }
-          return times.length > 0 ? Math.max(...times.map(t => t.getTime())) : new Date(review.createdAt).getTime();
-        };
-        return getLatestAuditTime(b) - getLatestAuditTime(a);
-      });
-
-      const otherReviewed = await ImageReview.find(otherReviewedQuery)
-        .populate('userId', 'username nickname')
-        .populate('mentorReview.reviewer', 'username nickname')
-        .sort({ createdAt: -1 });
-
-      console.log('📊 otherReviewed 数量:', otherReviewed.length);
-
-      reviews = [...selfReviewed, ...otherReviewed];
-      console.log('📊 合并后总数量:', reviews.length);
-
-      // 对整个合并后的数组按最新审核时间排序
-      reviews.sort((a, b) => {
-        const getLatestAuditTime = (review) => {
-          const times = [];
-          if (review.mentorReview?.reviewedAt) times.push(new Date(review.mentorReview.reviewedAt));
-          if (review.managerApproval?.approvedAt) times.push(new Date(review.managerApproval.approvedAt));
-          if (review.financeProcess?.processedAt) times.push(new Date(review.financeProcess.processedAt));
-          if (review.auditHistory && review.auditHistory.length > 0) {
-            review.auditHistory.forEach(history => {
-              if (history.timestamp) times.push(new Date(history.timestamp));
-            });
-          }
-          return times.length > 0 ? Math.max(...times.map(t => t.getTime())) : new Date(review.createdAt).getTime();
-        };
-        return getLatestAuditTime(b) - getLatestAuditTime(a);
-      });
-
-      const startIndex = (pageNum - 1) * limitNum;
-      const endIndex = startIndex + limitNum;
-      reviews = reviews.slice(startIndex, endIndex);
-      console.log('📊 分页后数量:', reviews.length);
-    } else {
-      // 未登录用户按原有逻辑
-      reviews = await ImageReview.find(query)
-        .populate('userId', 'username nickname')
-        .populate('mentorReview.reviewer', 'username nickname')
-        .sort({ createdAt: -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit);
-    }
-
-    // 为每个审核记录添加设备信息（优先使用已有的deviceInfo，否则查询Device表）
-    console.log('🔗 开始为审核记录添加设备信息...');
-    for (const review of reviews) {
-      console.log(`🔍 处理记录 ${review._id}, 用户: ${review.userId?.username || '未知'}`);
-
-      // 如果审核记录已经有deviceInfo，直接使用
-      if (review.deviceInfo && review.deviceInfo.accountName) {
-        console.log(`📱 使用已有设备信息: ${review.deviceInfo.accountName}`);
-        continue;
-      }
-
-      // 如果没有deviceInfo，从Device表查询
-      if (review.userId) {
-        try {
-          const Device = require('../models/Device');
-          const device = await Device.findOne({ assignedUser: review.userId._id });
-          console.log(`📱 从数据库查询设备: ${device ? device.accountName : '无设备'}`);
-          review._doc.deviceInfo = device ? {
-            accountName: device.accountName,
-            status: device.status,
-            influence: device.influence
-          } : null;
-        } catch (error) {
-          console.error('❌ 设备查询失败:', error);
-          review._doc.deviceInfo = null;
-        }
-      } else {
-        console.log('⚠️ 记录没有userId');
-        review._doc.deviceInfo = null;
-      }
-    }
-    console.log('✅ 设备信息关联完成');
-
-    // 计算实际返回的记录总数
-    let total;
-    if (currentUserId && req.user.role === 'mentor') {
-      // 带教老师：需要计算所有可能记录的总数
-      const assignedUsers = await User.find({ mentor_id: currentUserId }).select('_id');
-      const assignedUserIds = assignedUsers.map(u => u._id);
-
-      // 计算自己名下用户的记录数
-      const ownQuery = { ...query, status: 'pending', userId: { $in: assignedUserIds } };
-      const ownCount = await ImageReview.countDocuments(ownQuery);
-
-      // 计算其他记录数
-      const otherQuery = { ...query, status: 'pending', userId: { $nin: assignedUserIds } };
-      const otherCount = await ImageReview.countDocuments(otherQuery);
-
-      // 计算非待审核记录数
-      const nonPendingQuery = { ...query };
-      nonPendingQuery.$and = nonPendingQuery.$and || [];
-      nonPendingQuery.$and.push({ status: { $ne: 'pending' } });
-      const nonPendingCount = await ImageReview.countDocuments(nonPendingQuery);
-
-      total = ownCount + otherCount + nonPendingCount;
-    } else if (currentUserId) {
-      // 其他角色：计算所有相关记录的总数
-      const selfQuery = { ...query };
-      selfQuery.$or = [
-        { 'mentorReview.reviewer': currentUserId },
-        { 'auditHistory.operator': currentUserId }
-      ];
-      const selfCount = await ImageReview.countDocuments(selfQuery);
-
-      const otherQuery = { ...query };
-      otherQuery.$and = otherQuery.$and || [];
-      otherQuery.$and.push({
-        $nor: [
-          { 'mentorReview.reviewer': currentUserId },
-          { 'auditHistory.operator': currentUserId }
-        ]
-      });
-      const otherCount = await ImageReview.countDocuments(otherQuery);
-
-      total = selfCount + otherCount;
-    } else {
-      // 未登录或简单查询：使用数据库计数
-      total = await ImageReview.countDocuments(query);
-    }
-
-    console.log('✅ 查询成功，记录数量:', reviews.length);
+    console.log('✅ 查询成功，记录数量:', result.reviews.length);
 
     res.json({
       success: true,
-      reviews,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        pages: Math.ceil(total / limitNum)
+      data: {
+        reviews: result.reviews,
+        pagination: result.pagination
       }
     });
 
   } catch (error) {
-    console.error('获取审核记录错误:', error);
-    console.error('错误详情:', error.message);
+    console.error('=== 获取审核记录错误 ===');
+    console.error('错误名称:', error.name);
+    console.error('错误消息:', error.message);
     console.error('错误堆栈:', error.stack);
-    res.status(500).json({ success: false, message: '获取审核记录失败' });
+    console.error('请求参数:', JSON.stringify(req.query));
+    console.error('用户信息:', req.user ? { id: req.user._id, role: req.user.role } : '无');
+    console.error('====================');
+    res.status(500).json({
+      success: false,
+      message: '获取审核记录失败',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -734,8 +1029,12 @@ router.put('/notifications/:id/read', authenticateToken, async (req, res) => {
   }
 });
 
-// 一键全部通过 (只有manager和boss可以调用)
+// 一键全部通过 (只有manager和boss可以调用) - 优化版本
 router.put('/approve-all-pending', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const result = await ImageReview.updateMany(
       { status: 'pending' },
@@ -750,14 +1049,17 @@ router.put('/approve-all-pending', authenticateToken, requireRole(['manager', 'b
             timestamp: new Date()
           }
         }
-      }
+      },
+      { session }
     );
 
-    // 发送通知给所有相关用户
-    const updatedReviews = await ImageReview.find({ status: 'mentor_approved' }).populate('userId');
-    for (const review of updatedReviews) {
-      await notificationService.sendReviewStatusNotification(review, 'pending', 'mentor_approved');
-    }
+    await session.commitTransaction();
+
+    // 批量发送通知（事务外执行）
+    const updatedReviews = await ImageReview.find({ status: 'mentor_approved' })
+      .populate('userId')
+      .limit(1000 );    
+    await reviewOptimizationService.batchSendNotifications(updatedReviews, 'pending', 'mentor_approved', notificationService);
 
     res.json({
       success: true,
@@ -765,17 +1067,25 @@ router.put('/approve-all-pending', authenticateToken, requireRole(['manager', 'b
       modifiedCount: result.modifiedCount
     });
   } catch (error) {
+    await session.abortTransaction();
     console.error('一键全部通过错误:', error);
     res.status(500).json({ success: false, message: '一键全部通过失败' });
+  } finally {
+    session.endSession();
   }
 });
 
-// 一键全部驳回 (只有manager和boss可以调用)
+// 一键全部驳回 (只有manager和boss可以调用) - 优化版本
 router.put('/reject-all-pending', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { comment } = req.body;
 
     if (!comment || comment.trim() === '') {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: '驳回理由不能为空' });
     }
 
@@ -795,14 +1105,15 @@ router.put('/reject-all-pending', authenticateToken, requireRole(['manager', 'bo
             timestamp: new Date()
           }
         }
-      }
+      },
+      { session }
     );
 
-    // 发送通知给所有相关用户
+    await session.commitTransaction();
+
+    // 批量发送通知（事务外执行）
     const updatedReviews = await ImageReview.find({ status: 'rejected' }).populate('userId');
-    for (const review of updatedReviews) {
-      await notificationService.sendReviewStatusNotification(review, 'pending', 'rejected');
-    }
+    await reviewOptimizationService.batchSendNotifications(updatedReviews, 'pending', 'rejected', notificationService);
 
     res.json({
       success: true,
@@ -810,8 +1121,11 @@ router.put('/reject-all-pending', authenticateToken, requireRole(['manager', 'bo
       modifiedCount: result.modifiedCount
     });
   } catch (error) {
+    await session.abortTransaction();
     console.error('一键全部驳回错误:', error);
     res.status(500).json({ success: false, message: '一键全部驳回失败' });
+  } finally {
+    session.endSession();
   }
 });
 
@@ -878,13 +1192,169 @@ router.put('/batch-manager-approve', authenticateToken, requireRole(['manager', 
     // 提交事务
     await session.commitTransaction();
 
+    // 发放任务积分和佣金 (approved 时)
+    if (approved) {
+      const User = require('../models/User');
+      const TaskConfig = require('../models/TaskConfig');
+      const Transaction = require('../models/Transaction');
+      const updatedReviews = await ImageReview.find({ _id: { $in: ids }, status: 'manager_approved' }).populate('userId');
+
+      for (const review of updatedReviews) {
+        // 发放任务积分（所有类型：客资、笔记、评论）
+        let typeKey;
+        if (review.imageType === 'customer_resource') {
+          typeKey = 'customer_resource';
+        } else if (review.imageType === 'note') {
+          typeKey = 'note';
+        } else if (review.imageType === 'comment') {
+          typeKey = 'comment';
+        }
+
+        if (typeKey) {
+          const taskConfig = await TaskConfig.findOne({ type_key: typeKey, is_active: true });
+          const pointsReward = taskConfig ? Math.floor(taskConfig.price) : 0;
+
+          if (pointsReward > 0) {
+            // 【防止重复发放】检查是否已经发放过该任务的积分
+            const existingReward = await Transaction.findOne({
+              imageReview_id: review._id,
+              type: 'task_reward'
+            });
+
+            if (existingReward) {
+              console.log(`⚠️ [批量审核] 该任务已发放过积分，跳过重复发放: ${review._id}`);
+            } else {
+              await User.findByIdAndUpdate(review.userId._id, {
+                $inc: { points: pointsReward }
+              });
+              console.log(`💰 [批量审核] ${review.imageType}审核通过，已发放任务积分: ${pointsReward} → ${review.userId.username}`);
+
+              // 创建任务奖励交易记录
+              await new Transaction({
+                user_id: review.userId._id,
+                type: 'task_reward',
+                amount: pointsReward,
+                description: `任务奖励 - ${review.imageType}审核通过（批量）`,
+                status: 'completed',
+                imageReview_id: review._id,
+                createdAt: new Date()
+              }).save();
+
+              // 更新审核历史
+            await ImageReview.findByIdAndUpdate(review._id, {
+              $push: {
+                auditHistory: {
+                  operator: req.user._id,
+                  operatorName: req.user.username,
+                  action: 'points_reward',
+                  comment: `批量${review.imageType === 'customer_resource' ? '客资' : (review.imageType === 'note' ? '笔记' : '评论')}审核通过，发放${pointsReward}积分`,
+                  timestamp: new Date()
+                }
+              }
+            });
+            }
+          }
+        }
+
+        // 批量审批：直接增加积分作为推荐佣金
+        if (review.snapshotCommission1 > 0 && review.userId?.parent_id) {
+          // 【防重复发放】检查一级佣金是否已发放
+          const existingCommission1 = await Transaction.findOne({
+            imageReview_id: review._id,
+            type: 'referral_bonus_1'
+          });
+
+          const parentUser = await User.findById(review.userId.parent_id);
+          if (parentUser && !parentUser.is_deleted) {
+            if (!existingCommission1) {
+              await User.findByIdAndUpdate(parentUser._id, {
+                $inc: { points: review.snapshotCommission1 }
+              });
+              console.log(`💰 [批量佣金] 一级: +${review.snapshotCommission1}积分 → ${parentUser.username}`);
+
+              // 创建一级佣金交易记录
+              await new Transaction({
+                user_id: parentUser._id,
+                type: 'referral_bonus_1',
+                amount: review.snapshotCommission1,
+                description: `一级推荐佣金 - 来自用户 ${review.userId.username || review.userId.nickname} (${review.imageType})`,
+                status: 'completed',
+                imageReview_id: review._id,
+                createdAt: new Date()
+              }).save();
+            } else {
+              console.log(`⚠️ [批量佣金] 一级佣金已发放，跳过: ${review._id}`);
+            }
+
+            if (parentUser.parent_id && review.snapshotCommission2 > 0) {
+              // 【防重复发放】检查二级佣金是否已发放
+              const existingCommission2 = await Transaction.findOne({
+                imageReview_id: review._id,
+                type: 'referral_bonus_2'
+              });
+
+              const grandParentUser = await User.findById(parentUser.parent_id);
+              if (grandParentUser && !grandParentUser.is_deleted) {
+                if (!existingCommission2) {
+                  await User.findByIdAndUpdate(grandParentUser._id, {
+                    $inc: { points: review.snapshotCommission2 }
+                  });
+                  console.log(`💰 [批量佣金] 二级: +${review.snapshotCommission2}积分 → ${grandParentUser.username}`);
+
+                  // 创建二级佣金交易记录
+                  await new Transaction({
+                    user_id: grandParentUser._id,
+                    type: 'referral_bonus_2',
+                    amount: review.snapshotCommission2,
+                    description: `二级推荐佣金 - 来自用户 ${review.userId.username || review.userId.nickname} (${review.imageType})`,
+                    status: 'completed',
+                    imageReview_id: review._id,
+                    createdAt: new Date()
+                  }).save();
+                } else {
+                  console.log(`⚠️ [批量佣金] 二级佣金已发放，跳过: ${review._id}`);
+                }
+              }
+            }
+          }
+        }
+
+        // 批量审批时也记录评论限制
+        if (review.imageType === 'comment') {
+          try {
+            let authorToRecord = review.aiParsedNoteInfo?.author;
+            if (!authorToRecord && Array.isArray(review.userNoteInfo?.author)) {
+              authorToRecord = review.userNoteInfo.author[0];
+            } else if (!authorToRecord && typeof review.userNoteInfo?.author === 'string') {
+              const authorStr = review.userNoteInfo.author.trim();
+              authorToRecord = authorStr.includes(',') || authorStr.includes('，')
+                ? authorStr.split(/[,，]/)[0].trim()
+                : authorStr;
+            }
+
+            if (authorToRecord && review.noteUrl && review.userNoteInfo?.comment) {
+              await CommentLimit.recordCommentApproval(
+                review.noteUrl,
+                authorToRecord,
+                review.userNoteInfo.comment,
+                review._id
+              );
+              console.log(`✅ [批量审批] 评论限制记录: ${authorToRecord}`);
+            }
+          } catch (error) {
+            console.error('❌ [批量审批] 记录评论限制失败:', error);
+          }
+        }
+      }
+    }
+
     // 发送通知 (事务外执行，避免死锁)
-    const updatedReviews = await ImageReview.find({
+    const reviewsForNotification = await ImageReview.find({
       _id: { $in: ids },
       status: approved ? 'manager_approved' : 'manager_rejected'
     }).populate('userId');
 
-    for (const review of updatedReviews) {
+    for (const review of reviewsForNotification) {
       const oldStatus = 'mentor_approved';
       const newStatus = approved ? 'manager_approved' : 'manager_rejected';
       await notificationService.sendReviewStatusNotification(review, oldStatus, newStatus);
@@ -909,28 +1379,52 @@ router.put('/batch-manager-approve', authenticateToken, requireRole(['manager', 
   }
 });
 
-// 批量选中操作 (只有manager和boss可以调用)
-router.put('/batch-cs-review', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+// 批量选中操作 (mentor、manager、boss可调用，带教老师只能操作自己下属用户) - 优化版本
+router.put('/batch-cs-review', authenticateToken, requireRole(['mentor', 'manager', 'boss']), async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { ids, action, comment } = req.body;
 
     if (!Array.isArray(ids) || ids.length === 0) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: '请选择要操作的任务' });
     }
 
     if (!['pass', 'reject'].includes(action)) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: '无效的操作类型' });
     }
 
     if (action === 'reject' && (!comment || comment.trim() === '')) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: '驳回理由不能为空' });
     }
 
-    // 只更新状态为pending的任务
+    // 基础过滤条件：带教老师可以操作 pending 和 ai_approved 状态的任务
     const filter = {
       _id: { $in: ids },
-      status: 'pending'
+      status: req.user.role === 'mentor' ? { $in: ['pending', 'ai_approved'] } : 'pending'
     };
+
+    // 带教老师权限过滤：只能操作自己下属用户的审核
+    if (req.user.role === 'mentor') {
+      const mentorUsers = await User.find({
+        $or: [
+          { mentor_id: req.user._id },
+          { mentor_id: null },
+          { mentor_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const mentorUserIds = mentorUsers.map(user => user._id);
+
+      console.log(`🔍 [批量审核权限] 带教老师 ${req.user.username} 操作，找到 ${mentorUserIds.length} 个兼职用户`);
+
+      filter.userId = { $in: mentorUserIds };
+    }
 
     const updateData = {
       $push: {
@@ -953,19 +1447,18 @@ router.put('/batch-cs-review', authenticateToken, requireRole(['manager', 'boss'
       };
     }
 
-    const result = await ImageReview.updateMany(filter, updateData);
+    const result = await ImageReview.updateMany(filter, updateData, { session });
+    await session.commitTransaction();
 
-    // 发送通知
+    // 批量发送通知（事务外执行）
     const updatedReviews = await ImageReview.find({
       _id: { $in: ids },
       status: action === 'pass' ? 'mentor_approved' : 'rejected'
     }).populate('userId');
 
-    for (const review of updatedReviews) {
-      const oldStatus = 'pending';
-      const newStatus = action === 'pass' ? 'mentor_approved' : 'rejected';
-      await notificationService.sendReviewStatusNotification(review, oldStatus, newStatus);
-    }
+    const oldStatus = 'pending';
+    const newStatus = action === 'pass' ? 'mentor_approved' : 'rejected';
+    await reviewOptimizationService.batchSendNotifications(updatedReviews, oldStatus, newStatus, notificationService);
 
     res.json({
       success: true,
@@ -973,26 +1466,134 @@ router.put('/batch-cs-review', authenticateToken, requireRole(['manager', 'boss'
       modifiedCount: result.modifiedCount
     });
   } catch (error) {
+    await session.abortTransaction();
     console.error('批量操作错误:', error);
     res.status(500).json({ success: false, message: '批量操作失败' });
+  } finally {
+    session.endSession();
   }
 });
 
-// 获取AI自动审核记录（老板、主管、带教老师可见）
-router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manager', 'boss']), async (req, res) => {
+// 批量操作别名路由 - 专门给带教老师使用（前端调用 /batch-mentor-review）
+// 功能与 /batch-cs-review 完全相同，带教老师只能操作自己下属用户的审核
+// 带教老师可以操作 pending 和 ai_approved 状态的任务
+router.put('/batch-mentor-review', authenticateToken, requireRole(['mentor', 'manager', 'boss']), async (req, res) => {
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { page = 1, limit = 10, status, userId, imageType, keyword } = req.query;
+    const { ids, action, comment } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: '请选择要操作的任务' });
+    }
+
+    if (!['pass', 'reject'].includes(action)) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: '无效的操作类型' });
+    }
+
+    if (action === 'reject' && (!comment || comment.trim() === '')) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: '驳回理由不能为空' });
+    }
+
+    // 基础过滤条件：带教老师可以操作 pending 和 ai_approved 状态的任务
+    const filter = {
+      _id: { $in: ids },
+      status: req.user.role === 'mentor' ? { $in: ['pending', 'ai_approved'] } : 'pending'
+    };
+
+    // 带教老师权限过滤：只能操作自己下属用户的审核
+    if (req.user.role === 'mentor') {
+      const mentorUsers = await User.find({
+        $or: [
+          { mentor_id: req.user._id },
+          { mentor_id: null },
+          { mentor_id: { $exists: false } }
+        ],
+        role: 'part_time'
+      }).select('_id');
+      const mentorUserIds = mentorUsers.map(user => user._id);
+
+      console.log(`🔍 [批量审核-带教] 带教老师 ${req.user.username} 操作，找到 ${mentorUserIds.length} 个兼职用户`);
+
+      filter.userId = { $in: mentorUserIds };
+    }
+
+    const updateData = {
+      $push: {
+        auditHistory: {
+          operator: req.user._id,
+          operatorName: req.user.username,
+          action: action === 'pass' ? 'batch_pass_selected' : 'batch_reject_selected',
+          comment: action === 'pass' ? '批量通过' : comment.trim(),
+          timestamp: new Date()
+        }
+      }
+    };
+
+    if (action === 'pass') {
+      updateData.$set = { status: 'mentor_approved' };
+    } else {
+      updateData.$set = {
+        status: 'rejected',
+        rejectionReason: comment.trim()
+      };
+    }
+
+    const result = await ImageReview.updateMany(filter, updateData, { session });
+    await session.commitTransaction();
+
+    // 批量发送通知（事务外执行）
+    const updatedReviews = await ImageReview.find({
+      _id: { $in: ids },
+      status: action === 'pass' ? 'mentor_approved' : 'rejected'
+    }).populate('userId');
+
+    const oldStatus = 'pending';
+    const newStatus = action === 'pass' ? 'mentor_approved' : 'rejected';
+    await reviewOptimizationService.batchSendNotifications(updatedReviews, oldStatus, newStatus, notificationService);
+
+    res.json({
+      success: true,
+      message: `成功${action === 'pass' ? '通过' : '驳回'} ${result.modifiedCount} 个任务`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('批量操作-带教错误:', error);
+    res.status(500).json({ success: false, message: '批量操作失败' });
+  } finally {
+    session.endSession();
+  }
+});
+
+// 获取AI自动审核记录（老板、主管、带教老师可见）- 优化版本
+router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manager', 'boss', 'hr']), async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, userId, imageType, keyword, noteId } = req.query;
     const limitNum = parseInt(limit);
     const pageNum = parseInt(page);
 
+    // AI自动审核记录只显示笔记类型，不显示评论；排除主管驳回重审
     let query = {
-      'auditHistory.action': 'ai_auto_approved'
+      'auditHistory.action': 'ai_auto_approved',
+      imageType: 'note',  // 只显示笔记，评论不需要持续检查
+      status: { $ne: 'manager_rejected' }  // 排除主管驳回重审的记录
     };
 
     // 添加其他筛选条件
     if (status) query.status = status;
     if (userId) query.userId = userId;
     if (imageType) query.imageType = imageType;
+
+    // 如果有noteId，按ID后6位搜索
+    if (noteId) {
+      query._id = { $regex: noteId, $options: 'i' };
+    }
 
     // 如果有keyword，搜索用户名匹配的用户ID
     if (keyword) {
@@ -1019,84 +1620,173 @@ router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manag
 
     const total = await ImageReview.countDocuments(query);
 
-    // 为每个审核记录计算持续检查收益和生存天数
-    console.log('💰 开始计算持续检查收益...');
+    // 批量计算收益和添加设备信息
+    console.log('💰 开始批量计算持续检查收益...');
+
+    // 收集所有需要查询的用户ID（用于上级佣金计算）
+    const userIdsForCommission = reviews
+      .map(review => review.userId?.parent_id)
+      .filter(id => id);
+
+    // 批量查询上级用户信息
+    const parentUsers = userIdsForCommission.length > 0 ?
+      await User.find({ _id: { $in: userIdsForCommission } }).select('_id parent_id') : [];
+
+    const parentUserMap = new Map();
+    parentUsers.forEach(user => {
+      parentUserMap.set(user._id.toString(), user);
+    });
+
+    // 批量查询TaskConfig（用于兼容旧数据的snapshotPrice修正）
+    const taskConfigs = await TaskConfig.find({ is_active: true });
+    const taskConfigMap = new Map();
+    taskConfigs.forEach(config => {
+      taskConfigMap.set(config.type_key, config);
+    });
+
+    // 为每个审核记录计算收益
     for (const review of reviews) {
-      // 计算生存天数：从AI审核通过开始到今天的天数
-      const aiAuditTime = review.auditHistory.find(h => h.action === 'ai_auto_approved')?.timestamp;
-      const survivalDays = aiAuditTime ? Math.floor((Date.now() - new Date(aiAuditTime).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 1;
+      // 计算生存天数：从主管审核通过开始到今天的天数（上限7天，因为持续检查只有7天）
+      // 注意：持续检查只在主管审核通过(manager_approve)后才开始，不是从AI审核通过开始
+      const managerApproveTime = review.auditHistory?.find(h => h.action === 'manager_approve')?.timestamp;
+      let survivalDays = managerApproveTime ? Math.floor((Date.now() - new Date(managerApproveTime).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 0;
+      // 持续检查只有7天，生存天数上限为7
+      survivalDays = Math.min(survivalDays, 7);
 
-      // 计算总收益：第一天原价 + 后续每天0.3元（使用整数运算避免精度问题）
-      const initialPrice = review.snapshotPrice || 0; // 第一天收益（原笔记价格）
-      const dailyReward = 0.3; // 后续每天奖励
-      const additionalDays = Math.max(0, survivalDays - 1); // 除了第一天外的天数
-      const additionalEarnings = Math.round(additionalDays * dailyReward * 100) / 100; // 后续天数的收益，保留2位小数
-      const totalEarnings = Math.round((initialPrice + additionalEarnings) * 100) / 100; // 总收益，保留2位小数
+      // 【修复】使用实际的持续检查奖励记录计算收益，而非理论计算
+      // 从 continuousCheck.checkHistory 中统计实际发放的积分
+      let actualAdditionalEarnings = 0;
+      let actualCheckCount = 0;
+      let dailyReward = 30; // 默认每天30积分
 
-      // 计算上级用户佣金
+      if (review.continuousCheck?.enabled && review.continuousCheck?.checkHistory?.length > 0) {
+        // 统计成功检查且有奖励的记录
+        const rewardedChecks = review.continuousCheck.checkHistory.filter(
+          check => check.result === 'success' && check.rewardPoints > 0
+        );
+        actualCheckCount = rewardedChecks.length;
+
+        // 累加实际奖励积分（兼容旧数据：如果rewardPoints<1，视为30）
+        actualAdditionalEarnings = rewardedChecks.reduce((sum, check) => {
+          let points = check.rewardPoints || 0;
+          // 兼容旧数据：如果存储的是小数（如0.3），则视为30积分
+          if (points > 0 && points < 1) {
+            points = 30;
+          }
+          return sum + points;
+        }, 0);
+
+        // 获取实际的每日奖励积分（从最新记录中获取）
+        if (rewardedChecks.length > 0) {
+          const latestCheck = rewardedChecks[rewardedChecks.length - 1];
+          let points = latestCheck.rewardPoints || 30;
+          // 兼容旧数据
+          if (points > 0 && points < 1) {
+            points = 30;
+          }
+          dailyReward = points;
+        }
+      }
+
+      // 【兼容旧数据】处理snapshotPrice值不正确的问题
+      // 旧数据中笔记的snapshotPrice可能是10或8，但实际应该是500（TaskConfig中的当前价格）
+      let initialPrice = review.snapshotPrice || 0;
+      if (review.imageType === 'note' && initialPrice < 100) {
+        // 对于笔记类型，如果snapshotPrice小于100，说明是旧数据，从TaskConfig获取正确值
+        const noteConfig = taskConfigMap.get('note');
+        if (noteConfig) {
+          initialPrice = noteConfig.price || initialPrice;
+        }
+      }
+
+      const additionalEarnings = actualAdditionalEarnings; // 实际持续检查奖励总和
+      const totalEarnings = initialPrice + additionalEarnings; // 总收益（积分）
+
+      // 计算上级用户佣金（积分）
       let parentCommission = 0;
       let grandParentCommission = 0;
 
       if (review.userId && review.userId.parent_id) {
-        // 一级佣金（使用整数运算避免精度问题）
-        // 将所有金额转换为分单位进行计算
-        const additionalEarningsCents = Math.round(additionalEarnings * 100);
-        const snapshotPriceCents = Math.round(review.snapshotPrice * 100);
-        const snapshotCommission1Cents = Math.round(review.snapshotCommission1 * 100);
-        parentCommission = Math.floor((additionalEarningsCents * snapshotCommission1Cents) / snapshotPriceCents) / 100;
+        const parentUser = parentUserMap.get(review.userId.parent_id.toString());
+        if (parentUser) {
+          // 一级佣金：基于后续收益计算
+          const commissionRate1 = review.snapshotCommission1 || 0;
+          parentCommission = Math.floor(additionalEarnings * commissionRate1);
 
-        // 二级佣金
-        const parentUser = await User.findById(review.userId.parent_id);
-        if (parentUser && parentUser.parent_id) {
-          const snapshotCommission2Cents = Math.round(review.snapshotCommission2 * 100);
-          grandParentCommission = Math.floor((additionalEarningsCents * snapshotCommission2Cents) / snapshotPriceCents) / 100;
+          // 二级佣金
+          if (parentUser.parent_id) {
+            const commissionRate2 = review.snapshotCommission2 || 0;
+            grandParentCommission = Math.floor(additionalEarnings * commissionRate2);
+          }
         }
       }
 
       // 添加计算结果到记录中
       review._doc.survivalDays = survivalDays;
+      review._doc.actualCheckCount = actualCheckCount; // 实际检查次数
       review._doc.totalEarnings = totalEarnings;
       review._doc.initialPrice = initialPrice;
       review._doc.additionalEarnings = additionalEarnings;
       review._doc.dailyReward = dailyReward;
       review._doc.parentCommission = parentCommission;
       review._doc.grandParentCommission = grandParentCommission;
-
-      console.log(`📊 记录 ${review._id}: 生存${survivalDays}天，总收益${totalEarnings}元 (初始${initialPrice} + 后续${additionalEarnings})，上级佣金: ${parentCommission}元，二级佣金: ${grandParentCommission}元`);
     }
 
-    // 为每个审核记录添加设备信息
-    console.log('🔗 开始为AI审核记录添加设备信息...');
-    for (const review of reviews) {
-      console.log(`🔍 处理记录 ${review._id}, 用户: ${review.userId?.username || '未知'}`);
+    // 批量添加设备信息
+    await reviewOptimizationService.batchAttachDeviceInfo(reviews);
 
-      // 如果审核记录已经有deviceInfo，直接使用
-      if (review.deviceInfo && review.deviceInfo.accountName) {
-        console.log(`📱 使用已有设备信息: ${review.deviceInfo.accountName}`);
+    // 【修复】通过userNoteInfo.author中的昵称匹配正确的设备
+    // 因为批量提交时没有deviceId，需要通过昵称匹配
+    const Device = require('../models/Device');
+
+    // 收集所有用户的设备（用于昵称匹配）
+    const allDevices = await Device.find({
+      assignedUser: { $in: reviews.map(r => r.userId?._id || r.userId).filter(id => id) }
+    }).select('assignedUser accountName status influence');
+
+    // 创建昵称到设备的映射
+    const nicknameToDeviceMap = new Map();
+    allDevices.forEach(device => {
+      if (device.accountName) {
+        nicknameToDeviceMap.set(device.accountName, device);
+      }
+    });
+
+    // 为每个审核记录匹配正确的设备
+    for (const review of reviews) {
+      if (!review) continue;
+
+      // 如果已经有正确的deviceInfo且不是virtual_device，跳过
+      if (review.deviceInfo && review.deviceInfo.accountName && review.deviceInfo.accountName !== 'virtual_device' && review.deviceInfo.accountName !== '自动审核') {
         continue;
       }
 
-      // 如果没有deviceInfo，从Device表查询
-      if (review.userId) {
-        try {
-          const Device = require('../models/Device');
-          const device = await Device.findOne({ assignedUser: review.userId._id });
-          console.log(`📱 从数据库查询设备: ${device ? device.accountName : '无设备'}`);
-          review._doc.deviceInfo = device ? {
-            accountName: device.accountName,
-            status: device.status,
-            influence: device.influence
-          } : null;
-        } catch (error) {
-          console.error('❌ 设备查询失败:', error);
-          review._doc.deviceInfo = null;
+      // 从userNoteInfo.author中提取昵称进行匹配
+      if (review.userNoteInfo && review.userNoteInfo.author) {
+        // 处理逗号分隔的多个昵称
+        const nicknames = review.userNoteInfo.author.split(/,|，/).map(n => n.trim()).filter(n => n);
+
+        // 尝试匹配每个昵称
+        for (const nickname of nicknames) {
+          const matchedDevice = nicknameToDeviceMap.get(nickname);
+          if (matchedDevice) {
+            const deviceInfo = {
+              accountName: matchedDevice.accountName,
+              status: matchedDevice.status,
+              influence: matchedDevice.influence
+            };
+
+            // 更新review的deviceInfo
+            if (review._doc) {
+              review._doc.deviceInfo = deviceInfo;
+            } else {
+              review.deviceInfo = deviceInfo;
+            }
+            break; // 找到匹配就停止
+          }
         }
-      } else {
-        console.log('⚠️ 记录没有userId');
-        review._doc.deviceInfo = null;
       }
     }
-    console.log('✅ 设备信息关联完成');
 
     console.log('✅ AI自动审核记录查询成功，记录数量:', reviews.length);
 
