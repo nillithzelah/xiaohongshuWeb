@@ -3270,4 +3270,174 @@ router.post('/link-convert/fail', async (req, res) => {
   }
 });
 
+// ==================== 新增：按客户端类型返回任务的接口 ====================
+
+/**
+ * 获取待采集评论的笔记列表
+ * GET /xiaohongshu/api/client/harvest/pending
+ *
+ * 专用于 harvest-client（评论采集客户端）
+ */
+router.get('/harvest/pending', async (req, res) => {
+  try {
+    const { limit = 5, clientId, clientType } = req.query;
+
+    // 从请求头也尝试读取
+    const headerClientType = req.headers['x-client-type'];
+    const finalClientType = clientType || headerClientType;
+
+    // 验证客户端类型
+    if (finalClientType && finalClientType !== 'harvest') {
+      return res.status(400).json({
+        success: false,
+        message: `此接口仅限 harvest-client 使用`
+      });
+    }
+
+    // 查找需要采集评论的笔记
+    // 条件：状态为 approved/completed，且近期有审核通过的评论任务
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+    // 查找最近审核通过的笔记
+    const notes = await ImageReview.find({
+      status: { $in: ['completed', 'approved'] },
+      imageType: 'comment',
+      noteUrl: { $exists: true, $ne: null },
+      updatedAt: { $gte: oneHourAgo }
+    })
+    .select('noteUrl userId updatedAt')
+    .sort({ updatedAt: -1 })
+    .limit(parseInt(limit));
+
+    // 去重笔记URL
+    const uniqueNotes = [];
+    const seenUrls = new Set();
+
+    for (const note of notes) {
+      if (note.noteUrl && !seenUrls.has(note.noteUrl)) {
+        seenUrls.add(note.noteUrl);
+        uniqueNotes.push({
+          noteUrl: note.noteUrl,
+          userId: note.userId,
+          updatedAt: note.updatedAt
+        });
+      }
+    }
+
+    console.log(`📥 [采集客户端] 返回 ${uniqueNotes.length} 个待采集笔记`);
+
+    res.json({
+      success: true,
+      data: {
+        notes: uniqueNotes,
+        count: uniqueNotes.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [采集客户端] 获取待采集笔记失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * 提交采集到的评论线索
+ * POST /xiaohongshu/api/client/harvest/submit
+ *
+ * 专用于 harvest-client 提交采集到的评论
+ */
+router.post('/harvest/submit', async (req, res) => {
+  try {
+    const { noteUrl, comments, clientId, clientType } = req.body;
+
+    const headerClientType = req.headers['x-client-type'];
+    const finalClientType = clientType || headerClientType;
+
+    // 验证客户端类型
+    if (finalClientType && finalClientType !== 'harvest') {
+      return res.status(400).json({
+        success: false,
+        message: `此接口仅限 harvest-client 使用`
+      });
+    }
+
+    if (!noteUrl || !Array.isArray(comments)) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要参数: noteUrl 或 comments'
+      });
+    }
+
+    console.log(`📥 [采集客户端] 收到 ${comments.length} 条评论线索: ${noteUrl}`);
+
+    res.json({
+      success: true,
+      data: {
+        received: comments.length,
+        noteUrl: noteUrl
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [采集客户端] 提交评论失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * 获取笔记发现任务（关键词列表）
+ * GET /xiaohongshu/api/client/discovery/keywords
+ *
+ * 专用于 discovery-client（笔记发现客户端）
+ */
+router.get('/discovery/keywords', async (req, res) => {
+  try {
+    const { clientId, clientType } = req.query;
+    const headerClientType = req.headers['x-client-type'];
+    const finalClientType = clientType || headerClientType;
+
+    // 验证客户端类型
+    if (finalClientType && finalClientType !== 'discovery') {
+      return res.status(400).json({
+        success: false,
+        message: `此接口仅限 discovery-client 使用`
+      });
+    }
+
+    // 返回搜索关键词列表
+    const keywords = [
+      { keyword: '减肥被骗', priority: 1 },
+      { keyword: '护肤被骗', priority: 1 },
+      { keyword: '祛斑被骗', priority: 1 },
+      { keyword: '美容院被骗', priority: 2 },
+      { keyword: '整容被骗', priority: 2 },
+      { keyword: '网购被骗', priority: 3 },
+      { keyword: '微商被骗', priority: 3 }
+    ];
+
+    console.log(`📥 [发现客户端] 返回 ${keywords.length} 个搜索关键词`);
+
+    res.json({
+      success: true,
+      data: {
+        keywords: keywords,
+        count: keywords.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [发现客户端] 获取关键词失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 module.exports = router;

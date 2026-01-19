@@ -91,8 +91,23 @@ project.private.config.json
 *.tar.gz
 
 # Python service
-python-service/venv/
-python-service/__pycache__/
-python-service/.env
-python-service/*.pyc
-python-service/.pytest_cache/
+python-service/
+
+# AI tool configurations
+.claude/
+.playwright-mcp/
+.spec-workflow/
+
+# Screenshots
+screenshots/
+
+# Excel files
+*.xlsx
+*.xls
+
+# Related projects (separate repos)
+xhs-comment-jumper/
+xiaohongshu-adb-collector/
+xiaohongshu-audit-client/
+xiaohongshu-audit-clients/
+xiaohongshu-mobile-collector/
