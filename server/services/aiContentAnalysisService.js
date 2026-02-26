@@ -2,6 +2,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const NodeCache = require('node-cache');
+const AiPrompt = require('../models/AiPrompt');
 
 class AiContentAnalysisService {
   constructor() {
@@ -10,16 +11,21 @@ class AiContentAnalysisService {
 
     // 模型选择配置
     this.modelConfig = {
-      primary: 'deepseek-v3',
+      primary: process.env.AI_PROVIDER || 'deepseek',  // 'deepseek' 或 'zai'
       maxRetries: 2
     };
 
     // API配置
     this.apiConfig = {
       deepseek: {
-        baseUrl: 'https://api.deepseek.com/v1',
-        apiKey: process.env.DEEPSEEK_API_KEY || 'sk-ba229110c5ea4b0faa2c63e7ef3b5641',
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: process.env.DEEPSEEK_API_KEY,
         model: 'deepseek-chat'
+      },
+      zai: {
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: process.env.ZAI_API_KEY || '',
+        model: 'glm-4.7'  // 最新旗舰版，可选: glm-4-flash, glm-4.6, glm-4.5
       }
     };
 
@@ -43,6 +49,245 @@ class AiContentAnalysisService {
       false_positive_rate: 0,
       false_negative_rate: 0
     };
+
+    // 数据库提示词缓存
+    this.dbPrompts = {
+      note_audit: null,
+      comment_classification: null,
+      lastLoadTime: null
+    };
+
+    // 是否已初始化（从数据库加载提示词）
+    this.initialized = false;
+
+    // 余额监控配置
+    this.balanceConfig = {
+      lowBalanceThreshold: parseFloat(process.env.AI_LOW_BALANCE_THRESHOLD || '5'),  // 低于此值切换
+      checkInterval: 60 * 60 * 1000,  // 每小时检查一次
+      autoSwitch: process.env.AI_AUTO_SWITCH === 'true',  // 是否自动切换
+      lastCheckTime: null,
+      currentProvider: process.env.AI_PROVIDER || 'deepseek'
+    };
+  }
+
+  /**
+   * 初始化服务 - 从数据库加载提示词
+   */
+  async initialize() {
+    if (this.initialized) return;
+
+    try {
+      console.log('🔄 [AI提示词] 从数据库加载提示词...');
+      await this.loadPromptsFromDatabase();
+      this.initialized = true;
+      console.log('✅ [AI提示词] 提示词加载完成');
+
+      // 启动余额监控定时任务
+      this.startBalanceMonitoring();
+    } catch (error) {
+      console.error('❌ [AI提示词] 加载失败，将使用硬编码提示词:', error.message);
+      // 加载失败不影响服务启动，使用硬编码提示词作为兜底
+      this.initialized = true;
+      // 仍然启动余额监控
+      this.startBalanceMonitoring();
+    }
+  }
+
+  /**
+   * 启动余额监控定时任务
+   */
+  startBalanceMonitoring() {
+    // 立即检查一次
+    this.checkBalanceAndSwitch();
+
+    // 定时检查
+    setInterval(async () => {
+      await this.checkBalanceAndSwitch();
+    }, this.balanceConfig.checkInterval);
+
+    console.log(`💰 [余额监控] 已启动，检查间隔: ${this.balanceConfig.checkInterval / 60000} 小时，切换阈值: ¥${this.balanceConfig.lowBalanceThreshold}`);
+  }
+
+  /**
+   * 检查余额并在需要时切换 AI 提供商
+   */
+  async checkBalanceAndSwitch() {
+    const now = Date.now();
+
+    // 避免频繁检查
+    if (this.balanceConfig.lastCheckTime && (now - this.balanceConfig.lastCheckTime < this.balanceConfig.checkInterval)) {
+      return;
+    }
+    this.balanceConfig.lastCheckTime = now;
+
+    try {
+      // 只检查当前使用 deepseek 的情况
+      if (this.balanceConfig.currentProvider !== 'deepseek') {
+        console.log(`💰 [余额监控] 当前使用 ${this.balanceConfig.currentProvider}，跳过 DeepSeek 余额检查`);
+        return;
+      }
+
+      const balance = await this.getDeepSeekBalance();
+
+      if (balance === null) {
+        console.warn('⚠️ [余额监控] 无法获取 DeepSeek 余额');
+        return;
+      }
+
+      console.log(`💰 [余额监控] DeepSeek 余额: ¥${balance.toFixed(2)}`);
+
+      // 检查是否低于阈值
+      if (balance < this.balanceConfig.lowBalanceThreshold) {
+        console.warn(`⚠️ [余额监控] DeepSeek 余额低于 ¥${this.balanceConfig.lowBalanceThreshold}，当前: ¥${balance.toFixed(2)}`);
+
+        if (this.balanceConfig.autoSwitch && this.apiConfig.zai.apiKey) {
+          await this.switchProvider('zai');
+        } else {
+          console.log('ℹ️ [余额监控] 自动切换未启用，请手动配置 AI_AUTO_SWITCH=true 或切换到 z.ai');
+        }
+      }
+    } catch (error) {
+      console.error('❌ [余额监控] 检查失败:', error.message);
+    }
+  }
+
+  /**
+   * 获取 DeepSeek 余额
+   */
+  async getDeepSeekBalance() {
+    try {
+      const response = await axios.get(`${this.apiConfig.deepseek.baseUrl}/user/balance`, {
+        headers: {
+          'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
+
+      if (response.data && response.data.balance_infos && response.data.balance_infos.length > 0) {
+        const balanceInfo = response.data.balance_infos[0];
+        return parseFloat(balanceInfo.total_balance || 0);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('DeepSeek 余额查询失败:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * 切换 AI 提供商
+   */
+  async switchProvider(newProvider) {
+    if (newProvider === this.balanceConfig.currentProvider) {
+      console.log(`💰 [AI切换] 已经是 ${newProvider}，无需切换`);
+      return;
+    }
+
+    const oldProvider = this.balanceConfig.currentProvider;
+    this.balanceConfig.currentProvider = newProvider;
+    this.modelConfig.primary = newProvider;
+
+    console.log(`🔄 [AI切换] ${oldProvider.toUpperCase()} → ${newProvider.toUpperCase()}`);
+    console.log(`💰 [AI切换] 余额低于阈值，已自动切换到 ${newProvider.toUpperCase()}`);
+
+    // 记录切换次数
+    this.metrics.model_switch_count++;
+  }
+
+  /**
+   * 从数据库加载提示词
+   */
+  async loadPromptsFromDatabase() {
+    try {
+      const prompts = await AiPrompt.find({ enabled: true });
+
+      for (const prompt of prompts) {
+        if (prompt.type === 'note_audit') {
+          this.dbPrompts.note_audit = {
+            name: prompt.name,
+            displayName: prompt.displayName,
+            systemPrompt: prompt.systemPrompt,
+            userPromptTemplate: prompt.userPromptTemplate,
+            apiConfig: prompt.apiConfig,
+            outputFormat: prompt.outputFormat,
+            version: prompt.version
+          };
+          console.log(`  ✓ 加载笔记审核提示词: ${prompt.displayName} (${prompt.version})`);
+        } else if (prompt.type === 'comment_classification') {
+          this.dbPrompts.comment_classification = {
+            name: prompt.name,
+            displayName: prompt.displayName,
+            systemPrompt: prompt.systemPrompt,
+            userPromptTemplate: prompt.userPromptTemplate,
+            apiConfig: prompt.apiConfig,
+            outputFormat: prompt.outputFormat,
+            version: prompt.version
+          };
+          console.log(`  ✓ 加载评论分类提示词: ${prompt.displayName} (${prompt.version})`);
+        }
+      }
+
+      this.dbPrompts.lastLoadTime = new Date();
+    } catch (error) {
+      console.error('❌ [AI提示词] 从数据库加载失败:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 重新加载提示词（用于更新后热加载）
+   */
+  async reloadPrompts() {
+    console.log('🔄 [AI提示词] 重新加载提示词...');
+    try {
+      await this.loadPromptsFromDatabase();
+      console.log('✅ [AI提示词] 重新加载完成');
+      return { success: true, message: '提示词重新加载成功' };
+    } catch (error) {
+      console.error('❌ [AI提示词] 重新加载失败:', error.message);
+      return { success: false, message: error.message };
+    }
+  }
+
+  /**
+   * 获取笔记审核提示词（优先使用数据库）
+   */
+  getNoteAuditPrompt() {
+    if (this.dbPrompts.note_audit) {
+      return this.dbPrompts.note_audit;
+    }
+    // 返回 null 表示使用硬编码提示词
+    return null;
+  }
+
+  /**
+   * 获取评论分类提示词（优先使用数据库）
+   */
+  getCommentClassificationPrompt() {
+    if (this.dbPrompts.comment_classification) {
+      return this.dbPrompts.comment_classification;
+    }
+    // 返回 null 表示使用硬编码提示词
+    return null;
+  }
+
+  /**
+   * 替换模板变量
+   * @param {string} template - 模板字符串，使用 ${变量名} 语法
+   * @param {object} variables - 变量对象
+   */
+  replaceTemplateVariables(template, variables = {}) {
+    let result = template;
+    for (const [key, value] of Object.entries(variables)) {
+      // $ 在正则中有特殊含义，需要转义为 \$
+      const placeholder = `\\$\\{${key}\\}`;
+      // 使用函数形式的replace来避免$被当作替换模式的特殊字符
+      const regex = new RegExp(placeholder, 'g');
+      result = result.replace(regex, () => String(value));
+    }
+    return result;
   }
 
   /**
@@ -53,6 +298,11 @@ class AiContentAnalysisService {
    */
   async analyzeVictimPost(content, scamCategory) {
     try {
+      // 确保已初始化（从数据库加载提示词）
+      if (!this.initialized) {
+        await this.initialize();
+      }
+
       console.log('🤖 开始AI内容分析...');
 
       // 1. 缓存检查
@@ -116,28 +366,36 @@ class AiContentAnalysisService {
   }
 
   /**
-   * 调用DeepSeek模型
+   * 调用DeepSeek模型（笔记审核）
    */
   async callDeepSeek(content, scamCategory) {
     const startTime = Date.now();
 
     try {
-      const prompt = this.buildAnalysisPrompt(content, scamCategory);
+      // 必须使用数据库提示词
+      const dbPrompt = this.getNoteAuditPrompt();
+      if (!dbPrompt) {
+        throw new Error('数据库中未配置笔记审核提示词，请先在 AI提示词管理中配置 note_audit 类型的提示词');
+      }
+
+      console.log(`📋 [AI提示词] 使用数据库提示词: ${dbPrompt.displayName} v${dbPrompt.version}`);
+
+      const systemPrompt = dbPrompt.systemPrompt || '你是一个专业的JSON API，只返回JSON格式的结果，不要包含其他任何文字。';
+      // 替换模板变量
+      const userPrompt = this.replaceTemplateVariables(dbPrompt.userPromptTemplate, {
+        content: content,
+        scamCategory: scamCategory || '未知'
+      });
+      const apiConfig = dbPrompt.apiConfig || {};
 
       const response = await axios.post(`${this.apiConfig.deepseek.baseUrl}/chat/completions`, {
-        model: this.apiConfig.deepseek.model,
+        model: apiConfig.model || this.apiConfig.deepseek.model,
         messages: [
-          {
-            role: 'system',
-            content: '你是一名专业的内容审核专家，专门识别小红书上的维权/避雷贴。请严格按照JSON格式输出分析结果。'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
         ],
-        temperature: 0.3,
-        max_tokens: 2000
+        temperature: apiConfig.temperature ?? 0.3,
+        max_tokens: apiConfig.maxTokens || 2000
       }, {
         headers: {
           'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
@@ -150,8 +408,15 @@ class AiContentAnalysisService {
       this.metrics.ai_average_response_time = (this.metrics.ai_average_response_time + responseTime) / 2;
 
       const result = this.parseAIResponse(response.data.choices[0].message.content);
-      result.model_used = 'deepseek-v3';
+      result.model_used = apiConfig.model || 'deepseek-chat';
+      result.prompt_used = dbPrompt.name;
+      result.prompt_version = dbPrompt.version;  // 记录提示词版本
       result.response_time = responseTime;
+
+      // 在 reason 前添加版本号
+      if (result.reason && dbPrompt.version) {
+        result.reason = `【v${dbPrompt.version}】${result.reason}`;
+      }
 
       return result;
 
@@ -161,75 +426,86 @@ class AiContentAnalysisService {
     }
   }
 
+  /**
+   * 调用z.ai模型（笔记审核）
+   */
+  async callZai(content, scamCategory) {
+    const startTime = Date.now();
+
+    try {
+      // 必须使用数据库提示词
+      const dbPrompt = this.getNoteAuditPrompt();
+      if (!dbPrompt) {
+        throw new Error('数据库中未配置笔记审核提示词，请先在 AI提示词管理中配置 note_audit 类型的提示词');
+      }
+
+      console.log(`📋 [AI提示词] 使用数据库提示词: ${dbPrompt.displayName} v${dbPrompt.version}`);
+
+      const systemPrompt = dbPrompt.systemPrompt || '你是一个专业的JSON API，只返回JSON格式的结果，不要包含其他任何文字。';
+      // 替换模板变量
+      const userPrompt = this.replaceTemplateVariables(dbPrompt.userPromptTemplate, {
+        content: content,
+        scamCategory: scamCategory || '未知'
+      });
+      const apiConfig = dbPrompt.apiConfig || {};
+
+      const response = await axios.post(`${this.apiConfig.zai.baseUrl}/chat/completions`, {
+        model: apiConfig.model || this.apiConfig.zai.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: apiConfig.temperature ?? 0.3,
+        max_tokens: apiConfig.maxTokens || 2000
+      }, {
+        headers: {
+          'Authorization': `Bearer ${this.apiConfig.zai.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      });
+
+      const responseTime = Date.now() - startTime;
+      this.metrics.ai_average_response_time = (this.metrics.ai_average_response_time + responseTime) / 2;
+
+      const result = this.parseAIResponse(response.data.choices[0].message.content);
+      result.model_used = apiConfig.model || 'glm-4-flash';
+      result.prompt_used = dbPrompt.name;
+      result.prompt_version = dbPrompt.version;  // 记录提示词版本
+      result.response_time = responseTime;
+
+      // 在 reason 前添加版本号
+      if (result.reason && dbPrompt.version) {
+        result.reason = `【v${dbPrompt.version}】${result.reason}`;
+      }
+
+      return result;
+
+    } catch (error) {
+      console.error('z.ai API调用失败:', error.message);
+      throw error;
+    }
+  }
 
   /**
-   * 构建分析提示词
+   * 通用的AI调用方法 - 根据配置选择使用哪个AI服务
    */
-  buildAnalysisPrompt(content, scamCategory) {
-    return `你是一名专业的内容审核专家，专门识别小红书上的维权/避雷/被骗相关内容。
+  async callAI(content, scamCategory) {
+    const provider = this.modelConfig.primary;
 
-任务：分析以下笔记内容，判断其是否属于被骗维权相关内容。
+    console.log(`🤖 [AI Provider] 使用: ${provider.toUpperCase()}`);
 
-支持的维权类别（共11类）：
-
-1. **减肥类**：减肥被骗、减肥产品被骗、减肥套路、减肥药被骗等
-2. **医美类**：医美被骗、医美拼房套路、医美退费等
-3. **祛斑类**：祛斑被骗、祛斑产品被骗、祛斑套路等
-4. **祛痘类**：祛痘被骗、祛痘产品被骗等
-5. **丰胸类**：丰胸被骗、丰胸产品被骗等
-6. **护肤类**：护肤被骗、护肤产品被骗等
-7. **眼袋类**：祛眼袋被骗、去眼袋产品被骗等
-8. **育发类**：育发被骗、白发转黑发被骗、白转黑被骗退费等
-9. **玉石类**：定制手镯被骗、翡翠原石被骗、赌石被骗等
-10. **女性调理类**：女性调理被骗、月经调理被骗等
-11. **增高类**：增高被骗、增高产品被骗、增高药被骗、增高骗局等
-
-通用维权关键词：维权、避雷、上岸、被骗经历、投诉成功、维权成功、退款成功、追回来了
-
-判断标准：
-- ✅ 应该判断为符合的情况：
-  - 分享被骗经历（减肥/医美/祛斑/祛痘/丰胸/护肤等被骗）
-  - 寻求维权方法、退款方法、追回钱款
-  - 分享"成功上岸"、"追回来了"、"退款成功"等维权成功经验
-  - 揭露骗局、提醒他人避雷的内容
-  - 询问"怎么追回"、"怎么退款"、"如何维权"等问题
-  - 表达愤怒、后悔、求助等情绪的维权内容
-  - 提到"拼房套路"、"杀猪盘"等被骗模式
-
-- ❌ 应该判断为不符合的情况（重要！）：
-  - 教程类内容（如：如何办营业执照、流程指南）
-  - 知识科普类（如：法律知识、政策解读）
-  - 产品介绍类（如：产品功能、产品优势、使用方法）
-  - 正常的商业推广、产品广告
-  - 中性的经验分享（不涉及维权或被骗）
-  - 普通减肥分享、护肤分享（没有被骗/维权内容）
-  - "保姆级流程"、"手把手教你"等教程类标题
-  - 产品测评、使用心得（没有被骗/维权内容）
-
-特别说明：
-- 必须同时满足：①有维权相关关键词 ②有被骗/投诉/维权的明确意图
-- 如果内容只是普通产品分享或教程，即使包含相关词汇，也应判断为不符合
-- 关键词如"减肥"、"护肤"、"医美"单独出现不算，必须有"被骗"、"维权"、"退款"等维权意图
-- "套路"、"骗局"等词汇通常与维权相关
-
-笔记内容：
-${content}
-
-输出格式 (JSON)：
-{
-  "is_genuine_victim_post": boolean,
-  "scam_category": "匹配到的类别（如：减肥类、医美类等）",
-  "confidence_score": 0.0-1.0,
-  "emotion_analysis": {
-    "anger_level": 0-10,
-    "disappointment_level": 0-10,
-    "urgency_level": 0-10
-  },
-  "reason": "详细分析理由，说明是否属于维权相关内容",
-  "risk_factors": ["可能的风险点"],
-  "recommendation": "审核建议"
-}`;
+    if (provider === 'zai') {
+      if (!this.apiConfig.zai.apiKey) {
+        console.warn('⚠️ z.ai API key未配置，回退到DeepSeek');
+        return this.callDeepSeek(content, scamCategory);
+      }
+      return this.callZai(content, scamCategory);
+    } else {
+      return this.callDeepSeek(content, scamCategory);
+    }
   }
+
 
   /**
    * 解析AI响应
@@ -384,22 +660,30 @@ ${content}
     const startTime = Date.now();
 
     try {
-      const prompt = this.buildCommentAnalysisPrompt(commentContent, noteTitle);
+      // 必须使用数据库提示词
+      const dbPrompt = this.getCommentClassificationPrompt();
+      if (!dbPrompt) {
+        throw new Error('数据库中未配置评论分类提示词，请先在 AI提示词管理中配置 comment_classification 类型的提示词');
+      }
+
+      console.log(`📋 [AI提示词] 使用数据库提示词: ${dbPrompt.displayName} v${dbPrompt.version}`);
+
+      const systemPrompt = dbPrompt.systemPrompt || '你是一个专业的JSON API，只返回JSON格式的结果，不要包含其他任何文字。';
+      // 替换模板变量
+      const userPrompt = this.replaceTemplateVariables(dbPrompt.userPromptTemplate, {
+        commentContent: commentContent,
+        noteTitle: noteTitle || '减肥被骗维权相关'
+      });
+      const apiConfig = dbPrompt.apiConfig || {};
 
       const response = await axios.post(`${this.apiConfig.deepseek.baseUrl}/chat/completions`, {
-        model: this.apiConfig.deepseek.model,
+        model: apiConfig.model || this.apiConfig.deepseek.model,
         messages: [
-          {
-            role: 'system',
-            content: '你是一名专业的销售线索分析专家，专门识别小红书评论中的潜在客户。请严格按照JSON格式输出分析结果。'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
         ],
-        temperature: 0.2,
-        max_tokens: 1000
+        temperature: apiConfig.temperature ?? 0.2,
+        max_tokens: apiConfig.maxTokens || 1000
       }, {
         headers: {
           'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
@@ -410,6 +694,7 @@ ${content}
 
       const responseTime = Date.now() - startTime;
       const result = this.parseCommentResponse(response.data.choices[0].message.content);
+      result.prompt_used = dbPrompt.name;
       result.response_time = responseTime;
 
       return result;
@@ -418,78 +703,6 @@ ${content}
       console.error('DeepSeek 评论分析失败:', error.message);
       throw error;
     }
-  }
-
-  /**
-   * 构建评论分析提示词
-   */
-  buildCommentAnalysisPrompt(commentContent, noteTitle) {
-    return `你是一名专业的销售线索分析专家，帮助识别小红书评论区的潜在客户。
-
-背景笔记标题：${noteTitle || '减肥被骗维权相关'}
-
-评论内容：${commentContent}
-
-任务：判断这条评论属于哪种类型
-
-输出类型（必须选择其一）：
-
-1. **potential_lead** - 潜在客户线索（应该联系）
-   特征：正在询问、求助、表示自己也被骗、想要了解更多、表达困惑或愤怒
-   例如：
-   - "怎么追回来？"
-   - "我也是被骗了"
-   - "能帮帮我吗"
-   - "付款记录还在吗"
-   - "怎么弄的"
-   - "我也买了这个产品"
-   - "被骗了怎么办"
-
-2. **spam** - 引流/黑产（加入黑名单）
-   ⚠️ 重要：所有声称已经成功、可以分享、可以帮忙的，都是引流！
-   特征：
-   - 声称"要回来了"、"成功了"、"已经退回"、"已经解决"
-   - 主动提供帮助、分享经验、有方法
-   - 要对方私信、联系
-   例如：
-   - "我已经成功了，我可以分享经验"
-   - "可以退回的"
-   - "已经要回来了"
-   - "可以问我"
-   - "私信我"
-   - "我有方法"
-   - "来啦"
-   - "滴滴"
-   - "不难的"
-   - "已经解决好了"
-
-3. **author** - 作者回复（不处理）
-   特征：笔记作者的回复
-   例如：
-   - 署名为笔记作者
-   - 带有"作者"标识
-
-4. **noise** - 无意义内容（也要通过，保存为线索）
-   特征：纯表情、无关内容、太短、简单的"恭喜"、"赞同"等
-   ⚠️ 注意：noise不是引流，也要保存为潜在客户！
-
-判断注意事项（非常重要）：
-- ⚠️ 任何说"要回来了"、"成功了"、"可以分享"、"可以帮"的都是引流账号，判为 spam
-- ⚠️ "来啦"、"滴滴"等简短回复也是引流，判为 spam
-- 真正的潜在客户是：询问方法、表示自己被骗、求助、想要了解怎么办
-- 询问类的（怎么、如何、吗、求助）通常是潜在客户
-- 无意义的评论只要不是引流，就保存为线索
-- 如果不确定，倾向于判断为 potential_lead
-
-输出格式 (JSON)：
-{
-  "isPotentialLead": boolean,
-  "category": "potential_lead | spam | author | noise",
-  "confidence_score": 0.0-1.0,
-  "reason": "判断理由",
-  "shouldContact": boolean,
-  "riskLevel": "low | medium | high"
-}`;
   }
 
   /**
@@ -564,6 +777,119 @@ ${content}
       }
     };
   }
+
+  /**
+   * 测试自定义提示词
+   * @param {string} systemPrompt - 系统提示词
+   * @param {string} userPrompt - 用户提示词
+   * @param {object} apiConfig - API 配置
+   * @returns {Promise<object>} AI 响应结果
+   */
+  async testPrompt(systemPrompt, userPrompt, apiConfig = {}) {
+    const config = {
+      model: apiConfig.model || 'deepseek-chat',
+      temperature: apiConfig.temperature || 0.3,
+      maxTokens: apiConfig.maxTokens || 1000
+    };
+
+    try {
+      const response = await axios.post(
+        `${this.apiConfig.deepseek.baseUrl}/chat/completions`,
+        {
+          model: config.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: config.temperature,
+          max_tokens: config.maxTokens
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`
+          },
+          timeout: 30000
+        }
+      );
+
+      const content = response.data.choices?.[0]?.message?.content || '';
+
+      return {
+        success: true,
+        content: content,
+        usage: response.data.usage || {}
+      };
+    } catch (error) {
+      console.error('测试提示词失败:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        content: null
+      };
+    }
+  }
+
+  /**
+   * 静态方法：测试自定义提示词（兼容旧代码）
+   * @param {string} systemPrompt - 系统提示词
+   * @param {string} userPrompt - 用户提示词
+   * @param {object} apiConfig - API 配置
+   * @returns {Promise<object>} AI 响应结果
+   */
+  static async testPromptStatic(systemPrompt, userPrompt, apiConfig = {}) {
+    const config = {
+      model: apiConfig.model || 'deepseek-chat',
+      temperature: apiConfig.temperature || 0.3,
+      maxTokens: apiConfig.maxTokens || 1000
+    };
+
+    const apiBaseUrl = 'https://api.deepseek.com';
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+
+    try {
+      const response = await axios.post(
+        `${apiBaseUrl}/chat/completions`,
+        {
+          model: config.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: config.temperature,
+          max_tokens: config.maxTokens
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          timeout: 30000
+        }
+      );
+
+      const content = response.data.choices?.[0]?.message?.content || '';
+
+      return {
+        success: true,
+        content: content,
+        usage: response.data.usage || {}
+      };
+    } catch (error) {
+      console.error('测试提示词失败:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        content: null
+      };
+    }
+  }
 }
 
-module.exports = AiContentAnalysisService;
+// 导出单例实例
+const instance = new AiContentAnalysisService();
+
+// 兼容旧代码：同时导出类和实例
+module.exports = instance;
+// 同时在实例上挂载类，以便创建新实例
+instance.Class = AiContentAnalysisService;
