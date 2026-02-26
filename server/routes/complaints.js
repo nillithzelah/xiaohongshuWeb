@@ -1,6 +1,7 @@
 const express = require('express');
 const Complaint = require('../models/Complaint');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { escapeRegExp } = require('../utils/security');
 const router = express.Router();
 
 // 提交投诉（用户）
@@ -55,7 +56,7 @@ router.get('/', authenticateToken, requireRole(['boss', 'manager']), async (req,
 
     // 搜索投诉内容
     if (keyword) {
-      query.content = { $regex: keyword, $options: 'i' };
+      query.content = { $regex: escapeRegExp(keyword), $options: 'i' };
     }
 
     const complaints = await Complaint.find(query)

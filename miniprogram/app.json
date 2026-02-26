@@ -6,7 +6,6 @@
     "pages/profile/profile",
     "pages/device-list/device-list",
     "pages/distribution/distribution",
-    "pages/complaint/complaint",
     "pages/points-exchange/points-exchange",
     "pages/account-detail/account-detail"
   ],
