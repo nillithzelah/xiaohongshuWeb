@@ -470,8 +470,7 @@ Page({
        showEditModal: true,
        editingDevice: device,
        editForm: {
-         accountName: device.accountName,
-         accountUrl: device.accountUrl || ''
+         accountName: device.accountName
        }
      });
    },
@@ -482,8 +481,7 @@ Page({
        showEditModal: false,
        editingDevice: null,
        editForm: {
-         accountName: '',
-         accountUrl: ''
+         accountName: ''
        }
      });
    },
@@ -495,53 +493,9 @@ Page({
      });
    },
 
-   // 修改网址输入处理
-   onEditAccountUrlInput: function(e) {
-     this.setData({
-       'editForm.accountUrl': e.detail.value
-     });
-   },
-
-   // 粘贴修改账号的分享文本
-   pasteEditAccountUrl: function() {
-     wx.getClipboardData({
-       success: (res) => {
-         const text = res.data;
-         console.log('📋 修改账号粘贴的文本:', text);
-
-         // 优先尝试提取链接
-         const xhsUrlMatch = text.match(/https?:\/\/[^\s]+/);
-         if (xhsUrlMatch) {
-           this.setData({
-             'editForm.accountUrl': xhsUrlMatch[0]
-           });
-           wx.showToast({
-             title: '已提取链接',
-             icon: 'success'
-           });
-         } else {
-           // 如果没有找到链接，放进输入框让用户手动处理
-           this.setData({
-             'editForm.accountUrl': text
-           });
-           wx.showToast({
-             title: '已粘贴，请手动填写',
-             icon: 'none'
-           });
-         }
-       },
-       fail: () => {
-         wx.showToast({
-           title: '粘贴失败',
-           icon: 'none'
-         });
-       }
-     });
-   },
-
    // 修改账号
    editAccount: function() {
-     const { accountName, accountUrl } = this.data.editForm;
+     const { accountName } = this.data.editForm;
      const device = this.data.editingDevice;
 
      if (!accountName.trim()) {
@@ -564,16 +518,12 @@ Page({
 
      const token = app.getCurrentToken();
 
-     // 跳过AI审核，直接修改设备
-     console.log('✅ 跳过AI审核，直接修改设备...');
-
      app.request({
          url: `${CONFIG.API_BASE_URL}/xiaohongshu/api/devices/${device._id}`,
          method: 'PUT',
          header: { 'Authorization': `Bearer ${token}` },
          data: {
-           accountName: accountName.trim(),
-           accountUrl: accountUrl.trim() // 同时更新链接
+           accountName: accountName.trim()
          }
        }).then(res => {
          if (res.data && res.data.success) {

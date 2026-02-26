@@ -89,6 +89,8 @@ project.private.config.json
 *.rar
 *.zip
 *.tar.gz
+archive/
+server/archive/
 
 # Python service
 python-service/

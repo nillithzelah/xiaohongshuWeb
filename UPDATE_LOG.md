@@ -1,5 +1,3600 @@
 # UPDATE_LOG
 
+## 2026-02-25 笔记发现管理卡片数据修复
+
+**问题**：笔记发现管理卡片显示数据不正确
+- 待采集队列：数量错误
+- 采集设备在线：无数据（缺少 onlineHarvestDevices 字段）
+
+**根本原因**：
+1. 后端 `/discovery/stats` 接口缺少 `onlineHarvestDevices` 统计
+2. "待采集队列"统计逻辑不清晰，导致数量错误
+
+**修复内容**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js:2557-2613` | `/discovery/stats` 接口优化 |
+
+**修复方案**：
+
+1. **添加在线设备统计**：
+   ```javascript
+   const onlineHarvestDevices = await Device.countDocuments({
+     status: 'online',
+     is_deleted: { $ne: true }
+   });
+   ```
+
+2. **修正待采集队列统计**：
+   - 只统计已验证 (`status: 'verified'`) 的笔记
+   - 需要采集评论 (`needsCommentHarvest: true`)
+   - 笔记有效 (`noteStatus: 'active'`)
+
+**修改位置**：`server/routes/client.js` 第2557-2613行
+
+**验证**：
+```bash
+# 服务已重启
+pm2 restart xiaohongshu-api
+
+# 服务状态正常
+✅ MongoDB 连接成功
+✅ 路由注册成功
+```
+
+**预期效果**：
+| 字段 | 说明 |
+|------|------|
+| total | 总笔记数 |
+| verified | 已验证笔记数 |
+| pending | 可加入队列的笔记（已验证+需采集+有效） |
+| recent | 最近7天发现的笔记数 |
+| onlineHarvestDevices | 在线采集设备数 |
+
+**部署状态**：✅ 已部署到服务器 wubug
+
+---
+
+# UPDATE_LOG
+
+## 2026-02-24 OpenClaw GLM-5 模型回复空白问题
+
+**问题**：OpenClaw Telegram bot 回复空白消息
+
+**故障现象**：
+- 用户发送消息后，bot 回复为空
+- 日志显示 `telegram sendMessage ok`，但消息内容为空
+- 会话记录显示 assistant 只有 `thinking` 部分，没有 `text` 部分
+
+**根本原因**：
+GLM-5 模型的 thinking 模式有问题，只输出思考过程不输出实际文本：
+```json
+// ❌ GLM-5 返回的内容（只有 thinking）
+"content":[{"type":"thinking","thinking":"..."}]
+
+// ✅ 正常应该返回的内容
+"content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"..."}]
+```
+
+**诊断过程**：
+```bash
+# 1. 检查日志 - 消息发送成功但内容可能为空
+grep "sendMessage" /tmp/openclaw/openclaw-2026-02-24.log
+
+# 2. 检查会话记录 - 发现只有 thinking 没有 text
+tail ~/.openclaw/agents/main/sessions/*.jsonl | grep '"type":"message"'
+```
+
+**解决**：
+修改 `~/.openclaw/openclaw.json`，将主模型从 GLM-5 切换到 GLM-4.7：
+```diff
+"model": {
+-  "primary": "zai/glm-5",
++  "primary": "zai/glm-4.7",
+   "fallbacks": [
+-    "zai/glm-4.7"
++    "zai/glm-5"
+   ]
+}
+```
+
+然后重启 Gateway：
+```bash
+openclaw gateway stop && openclaw gateway start
+```
+
+**教训**：
+- GLM-5 的 thinking 模式可能不稳定，GLM-4.7 更稳定
+- 检查 AI 回复问题时，要查看会话记录中的实际内容结构
+- `thinking` 和 `text` 是分开的两个部分，只有 `text` 会发送给用户
+
+---
+
+## 2026-02-24 OpenClaw 代理配置修复
+
+**问题**：OpenClaw Gateway 无法连接，Telegram 网络请求失败
+
+**故障现象**：
+- `openclaw status --deep` 显示 Gateway unreachable (timeout)
+- 日志显示 `telegram deleteMyCommands failed: Network request failed`
+- RPC probe: failed, gateway timeout after 10000ms
+
+**根本原因**：
+1. 代理端口配置错误：配置文件中是 `7890`，但实际代理监听 `7897`
+2. Gateway 进程存在僵尸连接（CLOSE_WAIT/FIN_WAIT_2）
+
+**诊断过程**：
+```bash
+# 1. 检查代理端口
+netstat -an | grep -E "789[0-9]"
+# 发现 7897 在监听，7890 未运行
+
+# 2. 验证代理可用
+curl -x http://127.0.0.1:7897 -s "https://api.telegram.org/bot.../getMe"
+# 返回 {"ok":true,...} ✅
+
+# 3. 检查配置
+grep "proxy" ~/.openclaw/openclaw.json
+# 显示 "proxy": "http://127.0.0.1:7890" ❌
+```
+
+**解决**：
+1. 更新配置文件 `~/.openclaw/openclaw.json`：
+   ```diff
+   - "proxy": "http://127.0.0.1:7890"
+   + "proxy": "http://127.0.0.1:7897"
+   ```
+
+2. 清理过期锁文件：
+   ```bash
+   openclaw doctor --fix
+   # Removed 1 stale session lock file
+   ```
+
+3. 重启 Gateway：
+   ```bash
+   openclaw gateway stop
+   openclaw gateway start
+   ```
+
+**最终状态**：
+```
+Health
+┌──────────┬───────────┬──────────────────────────────┐
+│ Gateway  │ reachable │ 2018ms                       │
+│ Telegram │ OK        │ @nillith_cipher_bot 正常      │
+└──────────┴───────────┴──────────────────────────────┘
+```
+
+**教训**：
+- 代理软件重启后端口可能变化，需检查实际监听端口
+- `openclaw doctor --fix` 可自动清理过期锁文件
+- Gateway 僵尸连接会导致超时，重启可解决
+
+---
+
+## 2026-02-24 素人分发系统登录过期提示优化
+
+**问题**：登录过期时没有任何提示，页面直接跳转到登录页，用户体验不佳
+
+**修改内容**：`admin/src/contexts/AuthContext.js`
+
+**最终方案 - 弹窗内直接登录**：
+- **不跳转页面**：用户无需离开当前页面
+- **弹窗内登录**：直接在 Modal 中输入用户名密码
+- **登录后刷新**：成功后刷新当前页面，数据自动恢复
+- **无倒计时**：用户可慢慢输入，无时间压力
+- **防重复弹窗**：多个并发401请求只弹一次
+- **支持Enter键**：用户名/密码输入框按Enter即可登录
+
+**弹窗效果**：
+```
+┌─────────────────────────────────────┐
+│            登录已过期                │
+├─────────────────────────────────────┤
+│                                     │
+│     您的登录状态已过期，请重新登录   │
+│                                     │
+│     ┌─────────────────────────┐    │
+│     │ 请输入用户名            │    │
+│     └─────────────────────────┘    │
+│     ┌─────────────────────────┐    │
+│     │ 请输入密码      ••••••  │    │
+│     └─────────────────────────┘    │
+│                                     │
+│         [关闭]    [登录]            │
+└─────────────────────────────────────┘
+```
+
+**用户体验流程**：
+```
+用户操作中 → Token过期 → 弹窗出现
+      ↓
+   输入用户名密码 → 点击登录（或按Enter）
+      ↓
+   登录成功 → 弹窗关闭 → 页面刷新
+      ↓
+   继续之前的操作 ✅
+```
+
+**同步到服务器**：✅ 已完成
+
+---
+
+## 2026-02-07 修复手机号空格问题
+
+**问题**：用户 `13478647547` 的 `username` 字段末尾有空格，导致登录失败
+
+**修复内容**：
+1. **数据库修复** - 去除该用户 username 字段的空格
+2. **User.js 模型** - 添加 pre-save hook 自动 trim username/phone/wechat/nickname
+3. **auth.js 接口** - 所有登录/注册接口添加输入 trim
+
+**修改的接口**：
+- `POST /auth/phone-login` - 手机号快速登录
+- `POST /auth/login` - 账号密码登录
+- `GET /auth/check-phone` - 检查手机号
+- `POST /auth/user-register` - 用户注册
+
+**同步到服务器**：✅ 已完成
+
+---
+
+## 2026-02-07 修改笔记审核提示词排除增高鞋
+
+**修改内容**：
+- 更新 `aiprompts` 集合中的 `note_audit` 提示词
+- 版本：v23 → v24
+
+**具体变更**：
+1. 【支持的13个类别】增高后添加说明：`增高（增高药/增高手术/增高训练，不含增高鞋）`
+2. 【拒绝标准】新增第8条：`增高鞋类：增高鞋、内增高鞋、隐形增高鞋等鞋类产品（增高类仅支持增高药/增高手术/增高训练）`
+
+**原因**：增高鞋是鞋类产品，不属于增高诈骗范畴（增高通常指增高药/增高手术/增高训练等）
+
+---
+
+## 2026-02-07 修复 harvest 客户端数据库中的异常今日统计
+
+**问题**：数据库中部分 harvest 客户端的今日统计数据异常高（累计值的数百倍）
+
+**修复方式**：
+- 创建并运行 `server/fix-harvest-today-stats.js` 脚本
+- 检测条件：今日统计 > 累计统计 × 10（明显异常）
+- 修复操作：将今日统计重置为 0，更新 todayDate
+
+**修复结果**：
+- 扫描：103 个 harvest 客户端
+- 修复：9 个异常客户端
+- 正常：94 个客户端
+
+**异常示例**：
+| 客户端 | todayNotesProcessed | totalNotesProcessed | 倍数 |
+|--------|---------------------|---------------------|------|
+| harvest_DESKTOP-PNKOTAJ | 1,070,880 | 2,149 | 498x |
+| harvest_CHINAMI-5FCCQMG | 399,848 | 1,310 | 305x |
+| harvest_DESKTOP-TSJMEVS | 16,241 | 270 | 60x |
+
+---
+
+## 2026-02-07 硬编码常量提取重构（阶段2）
+
+**修改文件**：
+- `shared/constants/index.js` - 改用纯 CommonJS 格式（解决 ES6 导出兼容问题）
+- `server/models/ImageReview.js` - 使用常量替换硬编码
+
+**ImageReview.js 改动**：
+| 硬编码 | 改用常量 |
+|--------|----------|
+| `['customer_resource', 'note', 'comment']` | `IMAGE_TYPE_LIST` |
+| `{customer_resource: 10, note: 8, comment: 3}` | `IMAGE_TYPE_PRICES` |
+| 11个状态字符串 | `REVIEW_STATUS_LIST` |
+| `['online', 'offline', ...]` | `DEVICE_STATUS_LIST` |
+
+**同步到服务器**：✅ 已完成
+
+---
+
+## 2026-02-07 硬编码常量提取重构（阶段1）
+
+**目标**：将分散在项目中的硬编码配置提取到统一常量文件
+
+**新建文件**：
+- `shared/constants/index.js` - 全局常量定义
+  - `SCAM_CATEGORIES` - 13个受骗类别
+  - `USER_ROLES` - 用户角色枚举
+  - `IMAGE_TYPES` - 图片类型
+  - `REVIEW_STATUS` - 审核状态
+  - `DEVICE_STATUS` - 设备状态
+  - `DISCOVERY_STATUS` - 笔记发现状态
+  - `SHORTLINK_STATUS` - 短链接状态
+  - `API_PREFIX` / `API_ROUTES` - API路径常量
+
+**修改文件**：
+- `server/config/keywords.js` - 添加引用注释
+- `server/models/User.js` - 使用 `USER_ROLES` 常量
+
+**同步到服务器**：✅ 已完成
+
+---
+
+## 2026-02-06 修复采集客户端今日统计重复累加问题
+
+**问题**：评论采集客户端的"今日统计"数量重复累加，原因是：
+- 后端期望 `todayNotesProcessed` 是**增量**（本次心跳新增），用 `$inc` 累加
+- 但客户端发送的是**累计值**（总的已处理数）
+- 结果每次心跳都把整个累计值再加一次，导致今日统计不断累加
+
+**修改内容**：
+- 修改 `xiaohongshu-audit-clients/harvest-client/services/HarvestFetcher.js`
+- 添加 `lastHeartbeatNotes/Comments/Leads` 字段记录上次心跳时的累计值
+- 心跳时计算增量发送：`delta = 当前累计值 - 上次心跳累计值`
+
+**修改位置**：第25-35行（新增字段）、第140-194行（修改心跳逻辑）
+
+**行为对比**：
+| 场景 | 修改前 | 修改后 |
+|------|--------|--------|
+| 第1次心跳 | 发送累计值10 | 发送增量10 |
+| 第2次心跳 | 发送累计值15（+5），但后端再加15 | 发送增量5 |
+| 结果 | 今日统计 = 10+15+... = 重复累加 | 今日统计 = 10+5+... = 正确 |
+
+---
+
+## 2026-02-06 采集客户端限流处理优化
+
+**问题**：采集笔记客户端检测到访问频率限制（错误代码 300013）时直接退出，导致采集中断
+
+**修改内容**：
+- 修改 `xiaohongshu-audit-clients/discovery-client/services/NoteDiscoveryService.js`
+- 限流检测后不再直接退出客户端
+- 改为等待 5 分钟后自动返回搜索页继续采集
+
+**修改位置**：第1086-1114行
+
+**行为对比**：
+| 场景 | 修改前 | 修改后 |
+|------|--------|--------|
+| 检测到限流 | 直接退出客户端 | 等待5分钟后继续采集 |
+
+**已同步到服务器**：https://www.wubug.cc/downloads/xiaohongshu-audit-clients.zip
+
+---
+
+## 2026-02-06 修复服务启动失败
+
+**问题**：PM2 配置的 `cwd` 路径错误，导致 `Cannot find module './routes/auth'`
+
+**原因**：之前修改时把 `cwd` 从 `/var/www/xiaohongshu-web` 改成了 `/var/www/xiaohongshu-web/server`，导致 server.js 中的相对路径找不到模块
+
+**修复**：
+- `cwd` 改回 `/var/www/xiaohongshu-web`
+- `script` 改回 `server/server.js`
+
+**修改文件**：
+- `ecosystem.config.js`
+
+---
+
+## 2026-02-06 设备修改权限优化
+
+**问题**：part_time（兼职用户）无法在小程序中修改自己分配的设备
+
+**修改内容**：
+- 移除 PUT `/devices/:id` 路由的 `requireRole(deviceRoles)` 限制
+- 添加设备所有者判断：`part_time` 用户可以修改分配给自己的设备
+- 字段级权限控制：`part_time` 用户只能修改 `accountName` 和 `accountUrl`，其他字段保持不变
+
+**权限矩阵**：
+| 角色 | 可修改范围 |
+|------|-----------|
+| manager/boss/hr | 所有设备，所有字段 |
+| mentor | 所有设备，不含积分字段 |
+| part_time | 仅自己的设备，仅账号名和URL |
+
+**修改文件**：
+- `server/routes/devices.js` (lines 413-463)
+
+---
+
+## 2026-02-06 角色名称规范化
+
+**修改内容**：
+- "经理" → "主管" (manager)
+- "推广人员" → "引流人员" (promoter)
+
+**修改文件**：
+- `admin/src/pages/PermissionManagement.js` - 更新 ROLE_LABELS 和 ROLE_DESCRIPTIONS
+- `server/init/init-permissions.js` - 更新角色描述
+- `CLAUDE.md` - 新增"用户角色定义"章节，规范8种角色的代码和显示名称
+
+**角色对照表**：
+- `boss` - 老板
+- `manager` - 主管
+- `hr` - HR
+- `mentor` - 带教老师
+- `finance` - 财务
+- `promoter` - 引流人员
+- `part_time` - 兼职用户
+- `lead` - 线索
+
+---
+
+## 2026-02-06 动态权限系统上线
+
+**功能**：实现完整的动态权限管理系统
+
+**后端**：
+- 新建 `server/models/MenuDefinition.js` - 菜单定义模型（24个菜单项）
+- 新建 `server/models/RolePermission.js` - 角色权限模型
+- 新建 `server/routes/permissions.js` - 权限API路由
+- 新建 `server/init/init-permissions.js` - 初始化脚本
+- 修改 `server/server.js` - 注册权限路由
+
+**前端**：
+- 修改 `admin/src/contexts/AuthContext.js` - 添加权限状态管理
+- 新建 `admin/src/components/DynamicMenu.js` - 动态菜单组件
+- 新建 `admin/src/pages/PermissionManagement.js` - 权限管理页面
+- 修改 `admin/src/components/Layout.js` - 使用动态菜单
+- 修改 `admin/src/App.js` - 添加权限管理路由
+
+**特性**：
+- 老板可通过网页配置各角色权限
+- 修改后刷新页面即可生效
+- 导航栏根据后端权限自动生成
+
+---
+
+## 2026-02-06 修复导航菜单权限不一致问题
+
+**问题**：前端菜单显示与后端 API 权限不一致，导致用户看到无权访问的菜单项
+
+**修复内容**：
+
+| 角色 | 移除菜单 | 新增菜单 |
+|------|---------|---------|
+| **hr** | 笔记发现管理、采集队列管理、短链接池管理、搜索关键词管理 | 评论线索管理、评论黑名单 |
+| **mentor** | 笔记发现管理、采集队列管理、短链接池管理、搜索关键词管理 | - |
+
+**修改文件**：
+- `admin/src/components/Layout.js` - 修复 hr 和 mentor 角色的菜单配置
+
+**权限对照表**：
+
+| 菜单 | boss | hr | manager | mentor | finance | promoter |
+|------|------|-----|---------|--------|---------|----------|
+| 仪表板 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| 审核管理 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| 系统监控 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| AI自动审核记录 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 笔记发现管理 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| 采集队列管理 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| 短链接池管理 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| 评论线索管理 | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| 评论黑名单 | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| 搜索关键词管理 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| AI提示词管理 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| 任务积分管理 | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| 财务管理 | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ |
+| 公司员工 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 兼职用户 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 设备管理 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 设备审核 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+
+## 2026-02-06 自动提取笔记标题、作者、关键词功能
+
+**需求**：手动导入的笔记没有标题/作者/关键词，采集评论时需要自动提取
+
+**实现方案**：
+- 在 `BrowserAutomation.js` 中添加 `extractKeywordFromContent()` 方法
+- 在 `CommentHarvestService.js` 中，访问页面后统一提取缺失的字段
+- 一次调用 `extractNoteContent()` 获取全部信息，避免重复请求
+
+**修改位置**：
+- `xiaohongshu-audit-clients/shared/services/BrowserAutomation.js:2317-2414` - 新增关键词提取方法
+- `xiaohongshu-audit-clients/harvest-client/services/CommentHarvestService.js:320-362` - 采集时自动提取
+
+**提取逻辑**：
+
+| 字段 | 提取方式 | 状态 |
+|------|----------|------|
+| **标题** | `extractNoteContent()` 返回的 title | ✅ |
+| **作者** | `extractNoteContent()` 返回的 author | ✅ |
+| **关键词** | `extractKeywordFromContent()` 分析提取 | ✅ |
+
+**关键词提取策略**（优先级从高到低）：
+1. 维权关键词：被骗、投诉、维权、祛斑、医美、减肥等（40+词）
+2. 标题分词：取第一个有效词
+3. 内容分词：取开头前100字符分词
+4. 排除停用词：的、了、是、在、我...等80+个常用词
+
+## 2026-02-06 允许无标题笔记通过关键词检查
+
+**问题**：有些笔记没有标题，但关键词检查时会拒绝
+
+**解决方案**：
+- 修改 `asyncAiReviewService.js` 中的 `performKeywordCheck` 函数
+- 只检查内容是否为空，允许标题为空
+- 日志更新为"页面内容为空（标题为空是允许的）"
+
+**修改位置**：
+- `server/services/asyncAiReviewService.js:1934-1943`
+
+```javascript
+// 修改前：标题和内容都为空时才返回失败
+if ((!title || title.trim() === '') && (!content || content.trim() === '')) {
+
+// 修改后：只检查内容是否为空
+if (!content || content.trim() === '') {
+```
+
+## 2026-02-06 修复 discovery-client 采集退出问题
+
+**问题现象**：
+- discovery-client 采集两下就退出
+- 客户端请求关键词时服务器报错
+- 关键词被锁定后无法释放
+
+**根本原因**：
+
+| 问题 | 位置 | 原因 |
+|------|------|------|
+| MongoDB 语法错误 | `server/routes/client.js:5208` | `$inc` 被错误放在 `$set` 内部 |
+| 资源泄露 | `xiaohongshu-android-client-new/main.js:534-537` | APP 启动失败时关键词未释放 |
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 将 `$inc: { searchCount: 1 }` 从 `$set` 内部移出，作为独立的更新操作 |
+| `xiaohongshu-android-client-new/main.js` | 使用 `try-finally` 确保关键词在任何情况下都会被释放 |
+
+**代码修改**：
+
+```javascript
+// client.js - 修复前
+$set: {
+  'searchLock.isLocked': true,
+  ...
+  $inc: { searchCount: 1 }  // ❌ 错误
+}
+
+// client.js - 修复后
+{
+  $set: { 'searchLock.isLocked': true, ... },
+  $inc: { searchCount: 1 }  // ✅ 正确
+}
+```
+
+```javascript
+// main.js - 修复前
+function runCollectTaskOnce() {
+  var keyword = allocateKeyword();
+  if (!xhsAuto.launchApp()) {
+    return false;  // ← 关键词未释放！
+  }
+  releaseKeyword(keyword);
+}
+
+// main.js - 修复后
+function runCollectTaskOnce() {
+  var keyword = allocateKeyword();
+  try {
+    if (!xhsAuto.launchApp()) return false;
+  } finally {
+    releaseKeyword(keyword);  // ← 无论如何都会释放
+  }
+}
+```
+
+**部署验证**：
+- ✅ 服务器已重启 (PID: 2301247)
+- ✅ 客户端脚本已更新
+
+## 2026-02-05 提取公共权限辅助函数 (A3)
+
+**问题**：
+- 多个文件中存在重复的角色判断代码：`req.user.role === 'mentor'` 等
+- 状态查询条件在多处重复定义
+- 代码可维护性差，修改权限逻辑需要改动多处
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/middleware/auth.js` | 添加 `Role` 对象和 7 个辅助函数 |
+| `server/routes/reviews.js` | 使用 `Role.isMentor()` 等替代重复代码 |
+| `server/routes/devices.js` | 使用 `Role.isHr()` 等替代重复代码 |
+| `server/routes/user-management.js` | 使用 `Role.isAdmin()` 等替代重复代码 |
+| `server/routes/hr.js` | 使用 `Role.isHr()` 替代重复代码 |
+
+**新增辅助函数**：
+
+```javascript
+// 角色判断（替代 req.user.role === 'xxx'）
+Role.isMentor(req)
+Role.isHr(req)
+Role.isPartTime(req)
+Role.isManager(req)
+Role.isFinance(req)
+Role.isBoss(req)
+Role.isAdmin(req)    // boss 或 manager
+Role.isAuditor(req)  // boss、manager 或 finance
+
+// 状态查询条件
+getStatusQueryForRole(role)  // 返回 MongoDB 查询条件
+getValidStatusesForRole(role) // 返回有效状态数组
+
+// 用户管理权限
+isOwnResource(req, userId)
+isSubordinate(req, targetUser)
+canManageUser(req, targetUser)
+```
+
+**代码对比**：
+
+```javascript
+// 修改前
+if (req.user.role === 'mentor') { ... }
+if (req.user.role === 'boss' || req.user.role === 'manager') { ... }
+
+// 修改后
+if (Role.isMentor(req)) { ... }
+if (Role.isAdmin(req)) { ... }
+```
+
+---
+
+## 2026-02-05 修复删除检查客户端账号掉线处理
+
+**问题**：
+- 小红书账号掉线后，客户端没有检测到
+- 继续处理任务，获取错误数据
+- 服务器继续给掉线账号的客户端分配任务
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `xiaohongshu-audit-clients/deletion-check-client/services/NoteManagementService.js` | 添加登录状态检测和掉线处理 |
+
+**修复内容**：
+1. **`checkNoteDeleted` 方法**：访问笔记页前先检测登录状态
+   - 检查 URL 是否包含 `login`/`signin`
+   - 检查页面标题是否包含"登录"
+   - 检测到登录页时抛出异常
+
+2. **`processNote` 方法**：捕获账号掉线异常
+   - 检测到"小红书账号已掉线"错误时
+   - 调用 `notifyOffline()` 通知服务器
+   - 设置 `isRunning = false` 停止服务
+   - 主循环会在下一次迭代时正确退出
+
+**检测条件**：
+```javascript
+const isLoginPage = currentUrl.includes('login') ||
+                   currentUrl.includes('signin') ||
+                   pageTitle.includes('登录') ||
+                   pageTitle.includes('Login') ||
+                   pageTitle.includes('小红书 - 你的生活') && currentUrl.includes('xiaohongshu.com');
+```
+
+**下载地址**：`https://www.wubug.cc/downloads/xiaohongshu-audit-clients.zip`
+
+---
+
+## 2026-02-04 修复带教审核 500 错误
+
+**问题**：
+- 带教审核笔记时返回 `500 Internal Server Error`
+- 错误：`auditHistory.action: 'review_start' is not a valid enum value`
+
+**根本原因**：
+- 数据库中存在旧的 action 值：`review_start`、`review_wait_complete`
+- 模型枚举定义中缺少这些值
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/models/ImageReview.js` (第211-212行) | 添加 `'review_start', 'review_wait_complete'` 到枚举值 |
+
+**验证**：
+- 服务已重启，带教可以正常审核
+
+---
+
+## 2026-02-04 简化 noteStatus 查询条件
+
+**问题**：
+- 查询条件中使用 `noteStatus: { $in: ['active', null] }`
+- 用户询问这些 null 记录从哪里来的，是否需要删除
+
+**分析结果**：
+- 数据库中**没有任何** `noteStatus=null` 的记录
+- 模型默认值是 `'active'`，不是 null
+- 这是防御性编程的历史遗留代码
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` (第3011行) | `noteStatus: { $in: ['active', null] }` → `noteStatus: 'active'` |
+
+**验证**：
+- API 统计正常：`total: 1914, verified: 1902, pending: 1`
+- 无需删除任何记录，数据已干净
+
+---
+
+## 2026-02-04 修复采集队列统计 Date 计算问题
+
+**问题**：
+- 采集队列管理页面显示 "可加入队列: 1903"，但实际应该是 0-2 条
+- `/discovery/stats` 返回 `pending: 0`（正确）
+- `/harvest-queue` 返回 `ready: 1883`（错误）
+
+**根本原因**：
+1. MongoDB 聚合管道中，`$add: ['$commentsHarvestedAt', '$intervalMs']` 不能直接将 Date 类型和数字相加
+2. 在同一 `$addFields` 阶段中，无法引用刚刚计算的字段（`$intervalMs`）
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 分离 `$addFields` 为两个阶段，使用 `$convert` + `$toLong` 计算 Date |
+
+**代码变更**：
+
+1. **两个 `$addFields` 阶段**（第一阶段计算 `intervalMs`，第二阶段计算 `nextHarvestTime`）：
+```javascript
+// 第一步：计算采集间隔
+{ $addFields: { intervalMs: { $switch: { ... } } } },
+// 第二步：计算队列状态和下次采集时间
+{ $addFields: {
+  nextHarvestTime: {
+    $cond: {
+      if: { $eq: ['$commentsHarvestedAt', null] },
+      then: now,
+      else: {
+        $convert: {
+          input: { $add: [{ $toLong: '$commentsHarvestedAt' }, '$intervalMs'] },
+          to: 'date'
+        }
+      }
+    }
+  }
+}}
+```
+
+2. **修改的 API**：
+   - `/discovery/harvest-queue` - 待采集队列统计
+   - `/discovery/list` - 笔记发现列表
+   - `/discovery/stats` - 笔记发现统计
+
+**效果**：
+- 统计数据现在准确反映实际可采集的笔记数量
+- 所有三个 API 的统计数据一致
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 修复短链转换 ObjectId 错误
+
+**问题**：
+```
+Cast to ObjectId failed for value "batch" (type string) at path "_id" for model "DiscoveredNote"
+```
+
+**根本原因**：
+- 前端批量操作时发送 `noteId: "batch"` 到短链转换 API
+- 后端 `findById()` 尝试将字符串转换为 ObjectId 失败
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 添加 noteId 验证，拒绝 "batch"、"undefined"、"null" 等无效值 |
+
+**代码变更**（`/link-convert/update` 路由）：
+```javascript
+// 验证 noteId 不是特殊值（如 batch）
+if (noteId === 'batch' || noteId === 'undefined' || noteId === 'null') {
+  return res.status(400).json({
+    success: false,
+    message: '无效的 noteId 参数'
+  });
+}
+```
+
+**效果**：
+- 无效 noteId 返回 400 错误而非服务器崩溃
+- 错误提示更友好
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 采集优先级使用数据库配置
+
+**需求**：采集时间间隔改为从数据库读取，而非硬编码
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 使用 `SystemConfig.getValue('harvest_priority_intervals')` 读取时间间隔 |
+
+**修改位置**：
+1. `/discovery/list` API（行 2799-2801）
+2. `/discovery/stats` API（行 2944-2946）
+
+**效果**：
+- 管理员可在前端动态配置时间间隔
+- 无需修改代码即可调整采集策略
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 新增采集队列管理页面
+
+**需求**：显示笔记发现管理的待采集队列，以及处理完成的任务，包括是哪个客户端完成的
+
+**解决方案**：
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `admin/src/pages/HarvestQueueManagement.js` | 新建 | 采集队列管理页面 |
+| `server/routes/client.js` | 新增 API | `/discovery/harvest-queue` |
+| `admin/src/App.js` | 新增路由 | `/harvest-queue` |
+| `admin/src/components/Layout.js` | 新增菜单 | 采集队列管理 |
+
+**页面功能**：
+
+**待采集队列 Tab**：
+- 统计卡片：待采集总数、正在分发、可立即采集、排队中
+- 表格列：ID、标题、作者、关键词、优先级、队列状态、最后采集时间、评论数
+- 队列状态：分发中（橙色）、可采集（绿色）、排队中+等待时间（蓝色）
+- 搜索功能：按标题、作者、笔记ID搜索
+- 排序：正在处理的排在最前，然后按优先级排序
+
+**已完成任务 Tab**：
+- 统计卡片：已完成总数、今日完成、历史累计
+- 表格列：ID、标题、作者、关键词、处理时间、客户端、评论数
+- 显示处理该任务的客户端ID
+- 按处理时间倒序排列
+
+**API 端点**：`GET /xiaohongshu/api/client/discovery/harvest-queue`
+- 参数：`tab` (pending/completed), `skip`, `limit`, `keyword`
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 修复采集任务分发逻辑：去掉 needsCommentHarvest 过滤
+
+**问题**：
+- 分发时过滤 `needsCommentHarvest=true`（只有629条）
+- 但实际有 **1,218条** 笔记时间间隔到了，可以采集
+- 导致客户端获取到 0 个任务
+
+**根本原因**：
+- `needsCommentHarvest` 标记与实际时间间隔不同步
+- 大量笔记 `needsCommentHarvest=false` 但间隔已到
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 去掉 `needsCommentHarvest=true` 过滤，改为按 `noteStatus=active + 时间间隔` 判断 |
+
+**查询条件变更**：
+
+| | 旧查询（错误） | 新查询（正确） |
+|---|---|---|
+| `needsCommentHarvest` | ✅ true | - |
+| `noteStatus` | ✅ 'active' | ✅ 'active' |
+| `commentsHarvestedAt` | - | ✅ { $ne: null } |
+| 判断依据 | 标记字段 | **时间间隔** |
+
+**结果**：
+- 候选笔记：0 → 1,196
+- 客户端获取：0 → 5个任务
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 待采集队列按优先级排序
+
+**问题**：前端"可采集"队列按发现时间排序，与后端实际分配顺序（按优先级）不一致
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 当筛选队列状态时，默认按 harvestPriority 排序 |
+
+**代码变更**：
+```javascript
+// 队列状态筛选时，默认按优先级排序（与实际分配顺序一致）
+let defaultSortField = 'discoverTime';
+if (canHarvest && !sort) {
+  defaultSortField = 'harvestPriority';
+}
+const sortField = sort || defaultSortField;
+```
+
+**效果**：
+- 筛选"可采集"或"排队中"时 → 默认按优先级排序（10→5→2→1）
+- 其他筛选条件 → 保持原 discoverTime 排序
+- 管理员看到的顺序 = 客户端实际分配的顺序
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 采集间隔配置改为数据库读取
+
+**问题**：采集优先级间隔时间硬编码在后端代码中，修改需要重启服务
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 添加 SystemConfig 导入，两处聚合管道改为从数据库读取配置 |
+
+**修改位置**：
+1. `/discovery/list` API - 列表查询聚合管道
+2. `/discovery/stats` API - 统计查询聚合管道
+
+**代码变更**：
+```javascript
+// 从数据库获取采集优先级间隔配置
+const priorityIntervals = await SystemConfig.getValue('harvest_priority_intervals', {
+  10: 10,    // 10分钟
+  5: 60,     // 1小时
+  2: 360,    // 6小时
+  1: 1440    // 24小时
+});
+
+// 使用数据库配置
+{ case: { $eq: ['$harvestPriority', 1] }, then: (priorityIntervals[1] || 1440) * 60 * 1000 }
+```
+
+**效果**：现在可通过管理后台的"优先级配置"按钮动态修改采集间隔，无需重启服务
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 修复"可采集"筛选：低优先级间隔时间统一为24小时
+
+**问题**：将低优先级采集间隔从12小时改为24小时后，前端"可采集"筛选显示不正确，很多未到24小时间隔的笔记也显示为可采集
+
+**根本原因**：
+- 后端 `/discovery/list` API 的聚合管道中有两处硬编码的720分钟（12小时）
+- 第一处：lines 2799-2801（已修复）
+- 第二处：lines 2944-2946（本次修复）
+
+**解决方案**：
+
+| 位置 | 修改前 | 修改后 |
+|------|--------|--------|
+| priority = 1 | `720 * 60 * 1000` | `1440 * 60 * 1000` |
+| default | `720 * 60 * 1000` | `1440 * 60 * 1000` |
+
+**修改文件**：`server/routes/client.js`
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 修复监控API：待采集队列统计与分发逻辑不一致
+
+**问题**：监控API的查询条件 `{ commentsHarvested: { $ne: true } }` 排除了所有已采集过的笔记，导致统计结果显示0，但实际有624条笔记在采集队列中
+
+**根本原因**：
+- 采集系统支持"重采"机制（基于优先级时间间隔）
+- `commentsHarvested: true` 只表示"曾经采集过"，不是"采集完成不用再采"
+- 监控API误将 `commentsHarvested` 当作队列判断条件
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/admin.js` | 修改待采集队列查询条件，与分发逻辑保持一致 |
+| `server/routes/client.js` | 去除10天限制，所有符合状态的笔记都可进入队列 |
+
+**查询条件对比**：
+
+| | 旧查询（错误） | 新查询（正确） |
+|---|---|---|
+| `needsCommentHarvest` | ✅ true | ✅ true |
+| `commentsHarvested` | ❌ `{ $ne: true }` | - |
+| `noteStatus` | - | ✅ `'active'` |
+| `status` | - | ✅ `{ $in: ['discovered', 'verified'] }` |
+| `createdAt` | - | ❌ 去除10天限制 |
+
+**结果**：监控页面显示正确的队列数量，旧笔记只要有新评论需求也能采集
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-04 监控页面优化：显示处理任务数而非有效线索数
+
+**问题**：之前 harvest 客户端显示的是"有效线索"数，但实际处理的任务数往往更多（很多任务处理后不产生有效线索）
+
+**解决方案**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `models/ClientHeartbeat.js` | 新增 `totalNotesProcessed` 和 `todayNotesProcessed` 字段，记录处理的笔记总数 |
+| `routes/admin.js` | 监控 API 返回新字段 |
+| `admin/src/pages/MonitoringPage.js` | harvest 客户端显示"XX 任务 (YY线索)"格式 |
+| `xiaohongshu-audit-clients/harvest-client/services/HarvestFetcher.js` | 心跳时上报 `totalNotesProcessed` 统计 |
+
+**显示效果**：
+- **今日统计**: `50 任务 (12线索)` - 表示处理了50个笔记，产生12个有效线索
+- **累计统计**: 同样的格式，显示累计处理数和有效线索数
+
+**部署状态**: ✅ 已部署
+
+---
+
+## 2026-02-03 客户端监控页面增强：显示初次心跳时间和完整任务统计
+
+**修改内容**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/admin.js` | 监控API返回 `firstSeenAt` 字段（初次心跳时间） |
+| `admin/src/pages/MonitoringPage.js` | 为 `deletion-recheck` 和 `note-delete` 客户端添加任务统计显示 |
+
+**新增功能**：
+- **初次时间列**：显示客户端首次心跳时间（`firstSeenAt`），用于追踪客户端运行时长
+- **完整统计**：所有客户端类型（包括删除复查、删除检查）现在都能显示今日和累计任务数
+- **通用显示**：未知类型的客户端默认使用 `todayReviewsCompleted` 和 `totalReviewsCompleted` 显示
+
+**统计列说明**：
+| 客户端类型 | 今日统计 | 累计统计 |
+|-----------|----------|----------|
+| discovery | `todayNotesDiscovered` 笔记 | `totalNotesDiscovered` 笔记 |
+| harvest | `todayValidLeads` 有效线索 | `totalValidLeads` 有效线索 |
+| blacklist-scan | `todayBlacklisted/commentsScanned` 黑名单 | `totalBlacklisted/commentsScanned` 黑名单 |
+| audit | `todayReviewsCompleted` 完成 | `totalReviewsCompleted` 完成 |
+| deletion-recheck | `todayReviewsCompleted` 复查 | `totalReviewsCompleted` 复查 |
+| note-delete | `todayReviewsCompleted` 复查 | `totalReviewsCompleted` 复查 |
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-02-03 修复删除检测客户端AI分析逻辑混淆
+
+**问题**：删除检测客户端和采集客户端使用相同的 `aiAnalysis` 字段，导致：
+- 显示"[已分析] 已有AI分析"的笔记实际是discovery客户端的分析结果
+- 删除检测客户端跳过了已有分析的笔记，没有进行独立的验证
+
+**解决方案**：
+
+| 组件 | 修改内容 |
+|------|----------|
+| `models/DiscoveredNote.js` | 新增 `deletionCheckAnalysis` 字段，独立存储删除检测的分析结果 |
+| `routes/client.js` | API 支持 `isDeletionCheck` 参数，根据来源选择更新字段 |
+| `deletion-check-client/services/NoteManagementService.js` | 修改检查逻辑，只跳过 `deletionCheckAnalysis` 已有的笔记 |
+
+**字段区分**：
+- `aiAnalysis` - discovery客户端采集时的快速筛选分析
+- `deletionCheckAnalysis` - 删除检测客户端的独立验证分析
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-02-03 清理 banned/private 无用状态
+
+**问题**：`banned` 和 `private` 状态在代码中从未被实际使用
+
+**清理内容**：
+
+| 文件 | 修改 |
+|------|------|
+| `models/DiscoveredNote.js` | noteStatus 枚举移除 banned, private |
+| `routes/client.js` | API 验证列表移除 banned, private (2处) |
+| `check-deleted-notes.js` | 查询条件移除 banned, private |
+
+**保留状态**：
+- `active` - 正常
+- `deleted` - 已删除
+- `ai_rejected` - 文意不符合
+
+**修改位置**：数据库 `discoverednotes` 集合 noteStatus 枚举
+
+**部署状态**：✅ 已更新
+
+---
+
+## 2026-02-03 优化 AI 提示词
+
+### 1. 笔记审核提示词 (v17 → v18)
+
+**优化内容**：精简提示词，减少 80% 文字量
+
+| 指标 | 优化前 | 优化后 | 变化 |
+|------|--------|--------|------|
+| 字数 | ~1800 | ~350 | 减少 80% |
+| Token | ~700 | ~150 | 节省 78% |
+
+**保留**：13个类别、维权教程/服务/科普都通过、拒绝非13类诈骗
+
+---
+
+### 2. 评论分类提示词 (v1.0.0 → v1.1.0)
+
+**优化内容**：精简提示词，移除未使用字段
+
+| 指标 | 优化前 | 优化后 | 变化 |
+|------|--------|--------|------|
+| 字数 | ~1150 | ~400 | 减少 65% |
+| Token | ~500 | ~180 | 节省 64% |
+
+**保留**：核心判断标准"说自己vs教别人"、spam详细说明
+
+**移除**：未使用的 `riskLevel` 字段
+
+---
+
+**总收益**：
+- 每次笔记审核节省 ~550 tokens
+- 每次评论分类节省 ~320 tokens
+- API 成本降低 ~70%
+
+**修改位置**：数据库 `aiprompts` 集合
+
+**部署状态**：✅ 已更新
+
+---
+
+## 2026-02-03 修复笔记404判定bug + AI提示词测试功能
+
+### 1. 修复笔记404判定bug
+
+**问题**：deletion-check-client 检测到笔记404时，即使第1次失败（<3次）也会立即标记为 `deleted` 状态
+
+**原因**：`server/routes/client.js:3379` 行的 else 分支错误地设置了 `noteStatus: 'deleted'`
+
+**修复**：
+- 移除 else 分支中的 `noteStatus: 'deleted'`
+- 只在失败次数 >= 3 时才标记为 deleted
+- 失败计数 < 3 时，保持原 noteStatus 不变
+
+**影响**：修复前有 1660 条笔记被错误标记为 deleted（其中1501条 AI判断为true）
+
+**数据恢复**：
+- 恢复 1501 条 AI 判断为 true 的笔记为 active
+- 将 159 条 AI 判断为 false 的笔记改为 ai_rejected
+
+**修改文件**：
+- `server/routes/client.js:3371-3387`
+
+---
+
+### 2. AI提示词测试功能修复
+
+**问题**：AI提示词管理页面的"测试"按钮无法显示变量输入框
+
+**原因**：数据库中的提示词没有 `variables` 字段
+
+**修复**：
+- 为 `note_audit` 提示词添加 `content` 变量
+- 为 `comment_classification` 提示词添加 `commentContent` 和 `noteTitle` 变量
+- 统一提示词名称（去掉 `_v1` 后缀）
+
+**修改文件**：
+- `server/update-ai-prompts-variables.js` (新建)
+
+---
+
+## 2026-02-03 清理无用数据模型字段
+
+**清理内容**：
+
+1. **DiscoveredNote.js** - 删除 `harvestInterval` 字段
+   - 该字段只定义从未使用，采集间隔由 `harvestPriority` 动态计算
+
+2. **ImageReview.js** - 清理 `auditHistory.action` 枚举中10个未使用的值
+   - `page_content_extracted` - 从未写入
+   - `keyword_check` - 从未写入
+   - `ai_content_analysis` - 从未写入
+   - `await_client_verification` - 从未写入
+   - `keyword_check_failed` - 从未写入
+   - `ai_content_analysis_failed` - 从未写入
+   - `system_error_rejected` - 从未写入
+   - `review_start` - 从未写入
+   - `review_delay` - 从未写入（实际用 `review_delay_schedule`）
+   - `review_wait_complete` - 从未写入
+
+3. **保留** `skip_server_audit` 枚举值
+   - 虽然服务端从未写入，但前端 `AiAutoApprovedList.js` 有引用
+
+**修改文件**：
+- `server/models/DiscoveredNote.js`
+- `server/models/ImageReview.js`
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-02-03 优化 deletion-check-client 处理逻辑
+
+**修改内容**：
+AI分析只做一次，之后只检查删除状态。
+
+**修改前**：
+- 每次处理都会进行AI分析
+- 已有AI分析结果时返回 `aiPassed/aiRejected`
+
+**修改后**：
+- 新增 `checked` 状态（已有AI分析，跳过AI分析）
+- 处理流程：检查删除 → 检查AI分析 → 无则分析
+- AI通过的笔记保持 `noteStatus='active'`，持续监控删除状态
+
+**修改文件**：
+- `xiaohongshu-audit-clients/deletion-check-client/services/NoteManagementService.js`
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-02-02 修复 deletion-recheck-client 笔记状态更新失败
+
+**问题描述**：
+deletion-recheck-client 复查笔记时，虽然服务器日志显示 "状态已更新: noteStatus=active"，但数据库中笔记状态没有实际更新。
+
+**根本原因**：
+后端 API `/xiaohongshu/api/client/discovery/:id/status` 在处理 `status: 'verified'` 时，没有处理 `noteStatus` 参数：
+
+```javascript
+// 修复前：只设置了 AI 分析结果
+if (status === 'verified') {
+  note.aiAnalysis.is_genuine_victim_post = true;
+  // ❌ 缺少 noteStatus 处理
+}
+```
+
+对比 `rejected` 分支是有处理的：
+```javascript
+if (status === 'rejected') {
+  note.noteStatus = targetNoteStatus;  // ✅ 有处理
+}
+```
+
+**修复方案**：
+在 `verified` 分支添加 `noteStatus` 处理逻辑：
+
+```javascript
+if (status === 'verified') {
+  note.aiAnalysis.is_genuine_victim_post = true;
+
+  // 处理 noteStatus（支持 deletion-recheck-client 恢复笔记）
+  if (noteStatus) {
+    const oldNoteStatus = note.noteStatus || 'active';
+    note.noteStatus = noteStatus;
+
+    // 如果恢复为 active 状态，清除删除时间并恢复评论采集
+    if (noteStatus === 'active') {
+      note.deletedAt = null;
+      note.needsCommentHarvest = true;
+      console.log(`✅ [审核状态更新] 笔记已恢复为正常状态: ${id}, ${oldNoteStatus} -> active`);
+    }
+  }
+}
+```
+
+**修改文件**：
+- `server/routes/client.js` (第 3218-3234 行)
+
+**部署**：
+- 已同步到服务器并重启 xiaohongshu-api
+
+---
+
+## 2026-02-02 队列状态筛选后端化
+
+**问题描述**：
+队列筛选功能只对当前页数据做前端筛选，导致：
+1. 只能看到第一页的筛选结果（最多20条）
+2. 分页 total 错误显示为 20
+
+**修复方案**：
+将队列筛选逻辑移到后端 MongoDB 查询：
+
+```javascript
+// server/routes/client.js
+if (canHarvest === 'no') {
+  // 排队中：有 harvestLock 且未过期
+  andConditions.push({
+    'harvestLock.lockedUntil': { $gt: now }
+  });
+} else if (canHarvest === 'yes') {
+  // 可采集：没有 harvestLock 或已过期（包括 null）
+  andConditions.push({
+    $or: [
+      { harvestLock: { $exists: false } },
+      { 'harvestLock.lockedUntil': null },
+      { 'harvestLock.lockedUntil': { $lte: now } }
+    ]
+  });
+}
+```
+
+**前端变更**：
+- 移除前端过滤逻辑
+- 直接将 `canHarvest` 参数传给后端 API
+- 移除未使用的 helper 函数 `isInHarvestQueue` 和 `canJoinHarvestQueue`
+
+**验证结果**：
+| 筛选条件 | 结果数量 | 说明 |
+|---------|---------|------|
+| 全部 | 2018 | 所有笔记 |
+| 可采集 | 2014 | 可加入采集队列 |
+| 排队中 | 4 | 正在队列中分发 |
+
+**部署**：
+- 后端 `server/routes/client.js`
+- 前端 `admin/src/pages/DiscoveredNotes.js`
+
+---
+
+## 2026-02-02 AI 提示词更新 v15
+
+**功能概述**：
+更新笔记审核 AI 提示词到版本 15，明确说明只要是12类相关的维权内容都可以接受，包括教程、科普、流程、话术等。
+
+**核心变更**：
+
+1. **明确接受的内容类型**：
+   - ✅ 维权教程、退费教程、维权话术
+   - ✅ 维权流程建议、科普知识
+   - ✅ 个人被骗经历分享
+   - ✅ 成功经验分享、揭露骗局
+
+2. **重要说明新增**：
+   - 只要是12类相关的维权内容都可以接受，包括教程、科普、流程、话术等
+   - 不需要是个人真实经历，维权知识科普、流程建议都可以
+   - 关键是：内容是否与12类的维权/退费/被骗相关
+
+3. **支持的12个类别**：
+   减肥类、医美类、祛斑类、祛痘类、丰胸类、护肤类、眼袋类、育发类、玉石类、女性调理类、增高类、HPV类
+
+**数据库更新**：
+```bash
+ssh wubug "cd /var/www/xiaohongshu-web/server && node update-prompt-v15.js"
+```
+
+**验证**：
+- version: 15
+- updatedAt: 2026-02-02 07:18:27 UTC
+
+---
+
+## 2026-02-02 deletion-check-client 区分删除原因
+
+**功能概述**：
+为 deletion-check-client 添加区分删除原因的功能，现在可以区分"笔记被小红书删除"和"文意不符合（AI拒绝）"两种情况。
+
+**核心改进**：
+
+1. **数据模型更新**：
+   - `noteStatus` 枚举值新增 `ai_rejected`（文意不符合）
+   - 原有枚举值：`active`, `deleted`, `not_found`, `banned`, `private`
+   - 新枚举值：`active`, `deleted`, `not_found`, `banned`, `private`, `ai_rejected`
+
+2. **客户端回传逻辑**：
+   - 笔记被小红书删除 → `noteStatus: 'deleted'`（调用 `/note-deleted` 接口）
+   - 文意不符合（AI拒绝） → `noteStatus: 'ai_rejected'`（调用 `/status` 接口）
+
+3. **后端API接口更新**：
+   - `PUT /xiaohongshu/api/client/discovery/:id/status`
+     - 新增 `noteStatus` 参数支持
+     - 客户端可传递 `noteStatus: 'ai_rejected'` 区分文意不符合
+   - `PUT /xiaohongshu/api/client/discovery/:id/note-status`
+     - 验证状态值列表更新，包含 `ai_rejected`
+
+4. **管理后台前端更新**：
+   - 筛选下拉框新增"❌ 文意不符"选项
+   - 表格列显示 `ai_rejected` 状态（❌ 文意不符 标签）
+   - 修改删除状态模态框新增"文意不符"按钮
+   - 状态保存逻辑支持 `ai_rejected` 状态
+
+**noteStatus 状态说明**：
+| 状态值 | 说明 | 触发条件 |
+|--------|------|----------|
+| `active` | 笔记正常存在 | 默认状态 |
+| `deleted` | 笔记被删除 | 小红书平台删除 |
+| `not_found` | 笔记未找到 | 404等 |
+| `banned` | 笔记被封禁 | 账号封禁 |
+| `private` | 笔记为私密 | 作者设为私密 |
+| `ai_rejected` | 文意不符合 | AI审核拒绝 |
+
+**影响文件**：
+- `server/models/DiscoveredNote.js` - 添加 `ai_rejected` 枚举值
+- `server/routes/client.js` - API接口支持 `noteStatus` 参数
+- `xiaohongshu-audit-clients/deletion-check-client/services/NoteManagementService.js` - 回传时传递 `noteStatus`
+- `admin/src/pages/DiscoveredNotes.js` - 前端显示和交互支持
+
+**服务重启**：
+- `pm2 restart xiaohongshu-api`
+
+**前端部署**：
+- `npm run build` → 同步到 `admin/public/`
+
+---
+
+## 2026-02-02 AI提示词优化 - 严格12类别限制
+
+**问题现象**：
+笔记 ID `d0444e`（网课退费诈骗）被 AI 误判通过，但"网课退费"不在支持的12个类别内，应被拒绝。
+
+**根本原因**：
+- 原提示词中"教育诈骗：课程被骗、培训被骗、学费被骗"在拒绝列表中
+- AI 看到内容具有"维权特征"（分享被骗经历、揭露骗局），优先匹配了通过条件
+- AI 没有将"网课退费"归类为"教育诈骗"而拒绝
+
+**修复内容**：
+更新数据库 AI 提示词（版本 v13 → v14）：
+
+1. **开头强调最高优先级规则**：
+   ```
+   ⚠️⚠️⚠️ 最高优先级规则（必须首先检查）⚠️⚠️⚠️
+   只有以下12个特定类别的维权内容才能通过审核，任何其他类型一律拒绝！
+   ```
+
+2. **明确拒绝"网课退费"**：
+   ```
+   🚫 以下类型一律拒绝（即使内容很像真实维权帖）：
+   - 教育诈骗：网课退费、课程被骗、培训被骗、学费被骗、学历提升被骗
+   ```
+
+3. **增加分析步骤**：
+   ```
+   第一步：判断内容属于哪个类别？
+   - 如果属于12个支持类别 → 进入第二步
+   - 如果不属于 → 直接拒绝
+   ```
+
+**影响文件**：
+- 数据库 `aiprompts` 集合 - `note_audit` 类型提示词（版本14）
+
+**服务重启**：
+- `pm2 restart xiaohongshu-api`
+
+---
+
+## 2026-01-31 harvest-client 评论AI判断逻辑修复
+
+**问题现象**：
+同样的评论被重复处理，AI判断为 `spam` 的评论仍然显示"通过"。
+
+**根本原因**：
+服务器端评论AI返回值结构从 `is_spam` 改为 `isPotentialLead` + `category`，但客户端仍检查 `is_spam` 字段，导致所有评论都通过过滤。
+
+**修复内容**：
+更新 `harvest-client/services/CommentHarvestService.js` 的AI判断逻辑：
+```javascript
+// 兼容新旧两种返回值格式
+const isSpam = aiResult.is_spam || aiResult.category === 'spam';
+const isAuthor = aiResult.category === 'author' || aiResult.category === '作者';
+const isNoise = aiResult.category === 'noise';
+const shouldFilter = isSpam || isAuthor || isNoise;
+
+// 过滤规则：
+// - spam（引流）→ 加入黑名单并跳过
+// - author（作者）→ 跳过但不加黑名单
+// - noise（无意义）→ 跳过但不加黑名单
+// - potential_lead（潜在客户）→ 通过
+```
+
+**影响文件**：
+- `xiaohongshu-audit-clients/harvest-client/services/CommentHarvestService.js`
+
+---
+
+## 2026-01-31 客户端版本检查功能 - 下载方式说明优化
+
+**功能概述**：
+版本检查API的下载方式描述更新为引用 `update-client.bat` 脚本，与实际更新方式保持一致。
+
+**核心改进**：
+1. **下载方式描述更新**：
+   - 从 "请联系管理员获取更新"
+   - 改为 "运行项目根目录下的 update-client.bat 脚本自动更新"
+
+**影响文件**：
+- `server/routes/client.js` - 第178行下载方式描述
+
+---
+
+## 2026-01-31 客户端版本检查功能
+
+**功能概述**：
+为所有客户端添加版本检查功能，启动时自动检查是否有新版本可用。
+
+**核心改进**：
+1. **服务端版本配置**：
+   - `GET /xiaohongshu/api/client/version-check` - 版本检查API
+   - 服务端维护各客户端最新版本信息
+   - 支持版本比较和更新说明
+
+2. **客户端集成**：
+   - 共享模块 `VersionCheck.js` 统一版本检查逻辑
+   - 启动时自动调用版本检查API
+   - 有更新时显示提示信息
+
+3. **版本信息存储**：
+   - 各客户端 `config.json` 添加 `version` 字段
+   - 格式：主版本.次版本.修订号（如 1.0.0）
+
+**支持的客户端**：
+- audit (审核客户端) - v1.0.0
+- harvest (采集客户端) - v1.0.1
+- discovery (发现客户端) - v1.0.0
+- note-delete (删除客户端) - v1.0.0
+- short-link (短链接审核客户端) - v1.0.0
+- blacklist-scan (黑名单扫描客户端) - v1.0.0
+- deletion-check (删除检查客户端) - v1.0.0
+
+**影响文件**：
+- `server/routes/client.js` - 新增版本检查API
+- `xiaohongshu-audit-clients/shared/utils/VersionCheck.js` - 共享版本检查模块
+- 各客户端 `config.json` - 添加版本字段
+- 各客户端 `index.js` - 集成版本检查
+
+---
+
+## 2026-01-31 移除 AI 提示词硬编码兜底逻辑
+
+**功能概述**：
+AI 内容分析服务现在完全依赖数据库提示词，不再使用硬编码兜底。如果数据库未配置提示词，服务会抛出明确的错误提示。
+
+**核心改进**：
+1. **移除硬编码兜底**：
+   - `callDeepSeek()` 方法：未配置数据库提示词时抛出错误
+   - `callDeepSeekForComment()` 方法：未配置数据库提示词时抛出错误
+   - 错误信息清晰提示需要在管理后台配置对应的提示词类型
+
+2. **清理冗余代码**：
+   - 删除 `buildAnalysisPrompt()` 方法（~70行硬编码笔记审核提示词）
+   - 删除 `buildCommentAnalysisPrompt()` 方法（~150行硬编码评论分类提示词）
+   - 代码更简洁，维护成本更低
+
+**错误提示示例**：
+```
+数据库中未配置笔记审核提示词，请先在 AI提示词管理中配置 note_audit 类型的提示词
+数据库中未配置评论分类提示词，请先在 AI提示词管理中配置 comment_classification 类型的提示词
+```
+
+**影响文件**：
+- `server/services/aiContentAnalysisService.js` - 移除硬编码兜底和冗余方法
+
+---
+
+## 2026-01-31 AI 服务使用数据库提示词
+
+**功能概述**：
+AI 内容分析服务现在从数据库加载提示词，支持热更新，无需重启服务即可应用提示词修改。
+
+**核心改进**：
+1. **数据库驱动提示词**：
+   - 服务启动时从数据库加载启用的提示词
+   - 笔记审核和评论分类分别使用对应的数据库提示词
+   - 提示词更新后可通过 API 重新加载
+
+2. **热更新机制**：
+   - `POST /admin/ai-prompts/reload` - 重新加载提示词
+   - `GET /admin/ai-prompts/status` - 查看当前加载的提示词状态
+   - 更新提示词后调用 reload 接口即可生效
+
+3. **单例模式改造**：
+   - `aiContentAnalysisService` 改为单例导出
+   - 所有模块共享同一个服务实例
+   - 保持硬编码提示词作为兜底方案
+
+**服务初始化日志**：
+```
+🔄 [AI提示词] 从数据库加载提示词...
+  ✓ 加载笔记审核提示词: 笔记文意审核 (1.0.0)
+  ✓ 加载评论分类提示词: 评论分类 (1.0.0)
+✅ [AI提示词] 提示词加载完成
+✅ AI内容分析服务初始化完成
+```
+
+**AI 审核日志示例**：
+```
+📋 [AI提示词] 使用数据库提示词: 笔记文意审核 v1.0.0
+```
+
+**影响文件**：
+- `server/services/aiContentAnalysisService.js` - 添加数据库加载、热更新功能，改为单例导出
+- `server/services/asyncAiReviewService.js` - 使用单例实例
+- `server/routes/client.js` - 使用单例实例
+- `server/routes/admin.js` - 新增 reload 和 status API
+- `server/server.js` - 添加 AI 服务初始化调用
+
+---
+
+## 2026-01-31 新增 AI 提示词管理功能
+
+**功能概述**：
+创建 AI 提示词管理系统，支持在管理后台查看、编辑、测试 AI 提示词，无需修改代码即可调整提示词内容。
+
+**新增功能**：
+1. **数据库模型**：`AiPrompt` 模型存储提示词配置
+   - 支持多种提示词类型（笔记审核、评论分类等）
+   - 可配置 API 参数（模型、温度、token 限制）
+   - 变量说明功能，方便测试
+
+2. **API 接口** (`/admin/ai-prompts`)：
+   - `GET /admin/ai-prompts` - 获取提示词列表
+   - `GET /admin/ai-prompts/:name` - 获取单个提示词
+   - `POST /admin/ai-prompts` - 创建新提示词
+   - `PUT /admin/ai-prompts/:name` - 更新提示词
+   - `DELETE /admin/ai-prompts/:name` - 删除提示词
+   - `POST /admin/ai-prompts/:name/test` - 测试提示词
+
+3. **管理后台页面**：
+   - 提示词列表展示（类型、状态、更新时间等）
+   - 新建/编辑提示词弹窗
+   - 在线测试功能（输入变量值测试 AI 响应）
+   - 模板预览（查看完整的提示词内容）
+
+**访问路径**：管理后台 → AI提示词管理
+
+**影响文件**：
+- `server/models/AiPrompt.js` - 新增数据模型
+- `server/routes/admin.js` - 新增 API 路由
+- `server/services/aiContentAnalysisService.js` - 新增 testPrompt 方法
+- `admin/src/pages/AiPromptManagement.js` - 新增管理页面
+- `admin/src/App.js` - 注册路由
+- `admin/src/components/Layout.js` - 添加菜单项
+
+---
+
+## 2026-01-31 修复审核客户端lastSuccessUploadAt未记录问题
+
+**问题**：审核客户端成功完成任务后，`lastSuccessUploadAt` 字段未被设置，导致客户端在24小时后从监控页面消失。
+
+**根本原因**：
+- 新验证流程（`clientVerification` 字段存在时）只记录失败 `recordTaskFailure`，成功时未调用 `recordTaskSuccess`
+- 旧验证流程正确调用了 `recordTaskSuccess`
+
+**修复内容**：
+- 在 `server/routes/client.js` 的 `/verify-result` 接口中
+- 新流程现在也会在验证成功时调用 `recordTaskSuccess`
+- `lastSuccessUploadAt` 和 `totalReviewsCompleted` 现在正确更新
+
+**影响文件**：
+- `server/routes/client.js:1668-1678` - 新增成功统计记录
+
+---
+
+## 2026-01-30 评论AI - 添加真实引流话术示例
+
+**新增真实引流话术（4条）**：
+1. "我之前也是这样分阶段买的，好在要回啦"
+2. "不要被他们的话术牵着走，我也是后面才反应过来，还好及时止损啦。真是一不小心就上岸啦"
+3. "我的已经要回来了，需要的说一声，别放过"
+4. "已经褪啦，没要的不要惯着，见一个帮一个"
+
+**话术特征分析**：
+- **假装受害者**："我也是"、"我也被骗了"
+- **暗示成功/有经验**："要回啦"、"反应过来"、"上岸啦"
+- **引导联系**："需要的说一声"、"见一个帮一个"
+- **同音字规避**："褪"代替"退"规避关键词检测
+- **专业术语**："分阶段买"、"止损"、"上岸"
+
+**新增检测规则**：
+- 【规避型】使用同音字/变体规避检测：褪=退，上岸=成功
+- 新增同音字识别："褪"→"退"，"上岸"→"成功"
+- 新增专业术语："分阶段买"
+- 新增引导话术："别放过"、"不要惯着"、"见一个帮一个"
+
+**影响文件**：
+- `xiaohongshu-audit-clients/shared/services/CommentAIService.js:166-224`
+
+---
+
+## 2026-01-30 评论AI - 增强话术引流检测
+
+**问题**：引流账号使用话术伪装成受害者，AI未能正确识别
+
+**典型话术案例**：
+- "我也是后面才反应过来，还好及时止损啦"
+- "我也是被骗了，后来才发现可以追回"
+- "我也是，现在已经解决了"
+
+**话术特征**：
+1. 假装共鸣："我也是"、"我也被骗了"
+2. 暗示有经验："后来才发现"、"反应过来了"
+3. 暗示有方法："找到了"、"已经弄好了"
+4. 专业术语诱惑："止损"、"追回"、"维权"
+
+**修改内容**：
+- 新增【话术型】引流分类
+- 新增话术引流特征识别（5大类）
+- 新增10个话术引流示例
+- 增强判断注意事项（3条话术引流警告）
+
+**影响文件**：
+- `xiaohongshu-audit-clients/shared/services/CommentAIService.js:139-250`
+
+---
+
+## 2026-01-30 采集评论客户端 - 统一笔记删除检测逻辑
+
+**问题**：采集评论客户端与删除笔记客户端的删除检测逻辑不一致
+
+**修改**：将 `BrowserAutomation.js` 的 `checkIsNoteNotFound` 方法改为与删除笔记客户端相同的检测逻辑
+
+**改动内容**：
+- 删除关键词从 3 种扩展到 11 种（与删除笔记客户端一致）
+- 新增内容长度检测（<1000字符视为可能删除）
+- 新增内容元素检测（检查 .note-text 等正常内容元素）
+
+**删除关键词列表**：
+```
+404, 页面不见了, 页面不存在, 笔记不存在, 内容已删除,
+内容违规, 该内容已被作者删除, 该内容暂不可见,
+该内容暂时无法查看, 抱歉，你访问的内容不见了, 当前笔记暂时无法浏览
+```
+
+**影响文件**：
+- `xiaohongshu-audit-clients/shared/services/BrowserAutomation.js:600-681`
+
+---
+
+## 2026-01-30 短链接客户端 - 修复发布时间提取
+
+**问题**：短链接转换长链接客户端无法提取笔记发布时间（如 2025-07-03）
+
+**原因**：
+1. CSS选择器使用 `.time` 等，但小红书页面使用 `.date` class
+2. 正则表达式只匹配"3天前"等相对时间，不匹配 `YYYY-MM-DD` 格式
+
+**修复**：
+- 添加 `.date` 选择器（优先匹配）
+- 正则表达式增加 `(\d{4}-\d{1,2}-\d{1,2})` 匹配具体日期
+
+**影响文件**：
+- `xiaohongshu-audit-clients/short-link-client/services/ShortLinkAuditService.js:464-489`
+
+---
+
+## 2026-01-30 兼职用户管理 - 移除锁定状态列显示
+
+**修改**：锁定状态在兼职用户管理页面不再显示为单独列，但保留锁定/解锁按钮和弹窗
+
+**改动内容**：
+- 移除"锁定状态"列（已锁定/正常标签显示）
+- 保留锁定/解锁按钮（操作列中）
+- 保留锁定用户弹窗
+- 保留锁定相关的state和处理函数
+
+**影响文件**：
+- `admin/src/pages/ClientList.js`
+  - 第543-558行：移除锁定状态列
+
+**原因**：锁定用户已从列表中过滤（伪删除），无需显示状态标签，但保留操作功能
+
+---
+
+## 2026-01-29 用户锁定功能优化
+
+**修改**：锁定用户等同于伪删除，锁定后不显示在兼职用户管理列表中
+
+**改动内容**：
+- 用户列表查询添加 `isLocked: { $ne: true }` 过滤条件
+- 设备分配用户列表也添加相同过滤
+
+**影响文件**：
+- `server/routes/user-management.js:336-339` - 用户列表查询
+- `server/routes/devices.js:587-591` - 设备分配用户查询
+
+---
+
+## 2026-01-29 搜索关键词管理 - 新增分类功能
+
+**功能**：关键词分类从硬编码改为动态管理，支持新增自定义分类
+
+**新增API**：
+- `GET /xiaohongshu/api/admin/keyword-categories` - 获取所有分类列表
+- `POST /xiaohongshu/api/admin/keyword-categories` - 添加新分类
+
+**前端改动**：
+- 移除硬编码的 `CATEGORY_OPTIONS` 常量
+- 页面加载时从后端获取分类列表
+- 新增"新增分类"按钮和弹窗
+
+**影响文件**：
+- `server/routes/admin.js:2479-2551` - 新增分类API
+- `admin/src/pages/SearchKeywords.js` - 前端动态分类支持
+
+---
+
+## 2026-01-29 系统健康检查与Bug修复
+
+**检查范围**：数据一致性、分佣代码、时间边界逻辑、Cookie池状态、错误日志分析
+
+**发现并修复的问题**：
+
+1. **clientHealthService.js:290 - firstSeenAt 调用错误**
+   - 问题：`z.firstSeenAt?.toISOString?.slice(0, 10)` 可选链语法错误
+   - 影响：每小时僵尸客户端检测任务失败
+   - 修复：改为安全的调用方式 `z.firstSeenAt ? z.firstSeenAt.toISOString().slice(0, 10) : '-'`
+
+2. **server.js - 缺少 trust proxy 配置**
+   - 问题：Nginx 设置了 X-Forwarded-For，但 Express 未启用 trust proxy
+   - 影响：限流功能无法正确识别用户IP，可能导致限流失效
+   - 修复：添加 `app.set('trust proxy', true);`
+
+**检查结果（无问题）**：
+- ✅ 积分计算：无循环中 save()、无浮点数直接计算
+- ✅ 昵称7天限制：数据库验证无重复昵称
+- ✅ 时间边界：所有时间计算使用正确的毫秒转换
+
+**发现的警告（非阻塞）**：
+- ⚠️ Cookie池：唯一Cookie被设置为 `enabled: false`，系统依赖环境变量中的 XIAOHONGSHU_COOKIE
+- ⚠️ PM2重启次数：xiaohongshu-api 累计重启381次（历史累计）
+
+**影响文件**：
+- `server/services/clientHealthService.js:290`
+- `server/server.js:16-18`
+
+---
+
+## 2026-01-29 客户端描述字段支持
+
+**问题**：客户端发送心跳时携带 description，但后端未使用该值
+
+**修复**：优化心跳处理逻辑，优先使用客户端上传的 description
+- 客户端发送 description → 使用客户端的值
+- 客户端未发送但数据库有 → 保持数据库中的值
+- 都没有 → 使用默认描述
+
+**影响文件**：
+- `server/routes/client.js:1443-1465` - 心跳处理逻辑
+
+---
+
+## 2026-01-29 导航栏优化
+
+**修改**：隐藏 Cookie管理 和 公告管理 菜单项
+
+**影响角色**：boss, manager
+
+**影响文件**：
+- `admin/src/components/Layout.js:131-132` - boss 角色菜单
+- `admin/src/components/Layout.js:191-192` - manager 角色菜单
+
+---
+
+## 2026-01-29 仪表板后端API支持
+
+**功能**：为新仪表板添加后端API数据支持
+
+**新增API**：
+
+1. **评论线索统计** - `GET /xiaohongshu/api/admin/comment-leads/stats`
+   - 返回：总线索数、今日新增、今日已验证、黑名单用户数、累计评论数、今日评论数
+   - 权限：boss, manager, promoter, hr
+
+2. **评论线索列表** - `GET /xiaohongshu/api/admin/comment-leads`
+   - 查询参数：limit, status, sort
+   - 返回：线索列表（包含评论内容、笔记信息、AI分析、状态等）
+   - 权限：boss, manager, promoter, hr
+
+3. **黑名单统计** - `GET /xiaohongshu/api/admin/comments/blacklist/stats`
+   - 返回：按原因分组的统计数据、今日新增数量
+   - 权限：boss, manager, promoter, hr
+
+**已有API**（财务仪表板）：
+- `GET /xiaohongshu/api/admin/finance/stats` - 财务统计
+- `GET /xiaohongshu/api/admin/finance/withdrawal-records` - 提现记录
+
+**影响文件**：
+- `server/routes/admin.js:11` - 导入 CommentBlacklist 模型
+- `server/routes/admin.js:2893-3045` - 新增评论线索和黑名单相关路由
+
+---
+
+## 2026-01-29 系统监控中心添加最后提交任务时间
+
+**功能**：客户端状态表格新增"最后提交"列
+
+**修改内容**：
+- 后端 API (`server/routes/admin.js`) - 监控接口返回 `lastSuccessUploadAt` 字段
+- 前端 (`admin/src/pages/MonitoringPage.js`) - 表格新增"最后提交"列
+
+**效果**：管理员可以在监控中心看到每个客户端最后成功提交任务的时间（显示"X分钟前"或具体时间）
+
+---
+
+## 2026-01-29 用户仪表板全面升级
+
+**功能**：完善各角色用户仪表板，添加数据可视化
+
+**新增仪表板**：
+1. **财务仪表板 (FinanceDashboard)** - finance 角色专用
+   - 9个统计卡片：总提现、今日提现、本月提现、待处理、兼职用户数等
+   - 提现趋势折线图
+   - 提现状态饼图（已完成/待处理）
+   - 最近提现记录列表
+   - 时间范围选择器（支持自定义日期范围）
+   - 数据刷新按钮
+
+2. **推广仪表板 (PromoterDashboard)** - promoter 角色专用
+   - 6个统计卡片：总线索数、今日新增、今日已验证、黑名单用户、累计评论数等
+   - 线索趋势柱状图（新增线索/已验证）
+   - AI分类分布饼图（高价值/中价值/低价值/无效）
+   - 黑名单来源柱状图
+   - 最新线索列表
+
+**图表库集成**：使用 Recharts 实现数据可视化
+- LineChart（折线图）
+- BarChart（柱状图）
+- PieChart（饼图）
+
+**影响文件**：
+- `admin/src/pages/dashboard/FinanceDashboard.js` - 新建财务仪表板
+- `admin/src/pages/dashboard/PromoterDashboard.js` - 新建推广仪表板
+- `admin/src/pages/Dashboard.js:16-17` - 导入新仪表板组件
+- `admin/src/pages/Dashboard.js:517-522` - 更新角色路由映射
+
+**角色路由更新**：
+- `finance` → FinanceDashboard（原 BossDashboard）
+- `promoter` → PromoterDashboard（新增）
+- `boss` → BossDashboard
+- `hr` → HrDashboard
+- `manager` → ManagerDashboard
+- `mentor` → MentorDashboard
+
+---
+
+## 2026-01-29 修复token失效后未自动跳转登录页
+
+**问题**：管理后台token失效后，没有自动退出到登录页面
+
+**原因**：缺少axios响应拦截器处理401错误
+
+**修复**：在 `admin/src/contexts/AuthContext.js` 中添加全局响应拦截器
+- 监听所有API响应
+- 检测到401时自动清除认证信息并跳转登录页
+- 组件卸载时清理拦截器
+
+**影响文件**：
+- `admin/src/contexts/AuthContext.js:46-68`
+
+---
+
+## 2026-01-28 笔记发现管理添加修改删除状态按钮
+
+**功能**：在笔记发现管理页面添加"修改删除状态"按钮
+
+**实现**：
+1. **前端** - 操作列新增"删除状态"按钮，点击弹出状态选择模态框
+2. **前端** - 模态框支持三种状态选择：正常、已删除、未找到
+3. **后端** - 新增 `PUT /xiaohongshu/api/client/discovery/:id/note-status` 接口
+4. **后端** - 标记为已删除时自动释放采集锁并停止评论采集
+
+**按钮显示逻辑**：
+- 笔记正常状态 → 显示黄色"删除状态"按钮
+- 笔记已删除状态 → 显示绿色"恢复"按钮
+
+**影响文件**：
+- `admin/src/pages/DiscoveredNotes.js` - 新增状态按钮、Modal和处理函数
+- `server/routes/client.js:2845-2918` - 新增 `/discovery/:id/note-status` 路由
+
+---
+
+## 2026-01-28 统一客户端退出登录处理逻辑
+
+**问题**：各客户端检测到Cookie失效后处理不一致
+- audit-client：仅记录日志，继续处理任务
+- blacklist-scan-client：仅break循环，fetcher继续运行
+- discovery-client：服务层检测但未设置isOffline标志
+- short-link-client：有状态管理但break退出
+- harvest-client：相对完整但日志不统一
+
+**修复内容**：统一处理流程
+```
+检测到登录页面
+    ↓
+设置 isOffline = true
+    ↓
+通知服务器 updateHeartbeatStatus('offline')
+    ↓
+停止接收新任务（fetcher检查isOffline）
+    ↓
+提示用户重新登录
+```
+
+**影响文件**（客户端）：
+- `audit-client/index.js:247-266`
+- `blacklist-scan-client/index.js:190-208`
+- `discovery-client/services/NoteDiscoveryService.js:316-356,1086-1102`
+- `short-link-client/index.js:217-236`
+- `harvest-client/index.js:216-235`
+
+---
+
+## 2026-01-28 采集客户端增加 noteStatus='active' 过滤
+
+**修改**：后端 `/harvest/pending` 接口增加 `noteStatus='active'` 过滤条件
+
+**效果**：
+- 采集客户端只获取 `noteStatus='active'` 且 `needsCommentHarvest=true` 的笔记
+- 已删除的笔记不会再被拉取采集
+- 删除检测闭环：检测到删除 → 标记 `noteStatus='deleted'` → 下次自动过滤
+
+**影响文件**：
+- `server/routes/client.js:4209`
+
+---
+
+## 2026-01-28 修复登录检测时序问题
+
+**问题**：Cookie存在时，登录弹窗尚未加载完成就判断登录成功
+- 页面加载序列：Cookie出现 → 弹窗未渲染 → 元素检查通过 → 误判登录成功
+
+**修复**：在 `waitForLogin()` 方法中增加 `checkLoginModalExists()` 检查
+- Cookie有效后，先检查是否存在登录弹窗
+- 如果存在弹窗，继续等待直到弹窗消失
+- 防止页面加载时序导致的误判
+
+**影响文件**：
+- `xiaohongshu-audit-clients/shared/services/BrowserAutomation.js:1165-1175`
+
+---
+
+## 2026-01-28 笔记发现管理页面增加删除状态筛选
+
+**功能**：在笔记发现管理页面增加"删除状态"筛选下拉框
+
+**筛选选项**：
+- 全部删除状态
+- 🟢 正常 (noteStatus=active)
+- 🗑️ 已删除 (noteStatus=deleted)
+- ❓ 未找到 (noteStatus=not_found)
+
+**影响文件**：
+- `admin/src/pages/DiscoveredNotes.js:83,119-121,761-770`
+
+---
+
+## 2026-01-28 采集评论客户端掉线检测修复
+
+**问题**：客户端检测到 Cookie 失效（登录退出）后，没有停止接收任务，也没有通知服务器更新状态为暂停
+
+**修复**：
+1. **index.js** - 检测到掉线时调用 `markAsOffline()` 通知服务器
+2. **HarvestFetcher.js** - 主循环检查 `isOffline`，掉线时停止循环和心跳
+
+**修复前行为**：
+- 检测到掉线 → 只设置本地标志 → 继续接收任务
+
+**修复后行为**：
+- 检测到掉线 → 调用 `markAsOffline()` → 通知服务器状态为 offline → 停止循环 → 停止心跳
+
+**影响文件**：
+- `xiaohongshu-audit-clients/harvest-client/index.js:216-230`
+- `xiaohongshu-audit-clients/harvest-client/services/HarvestFetcher.js:178-207`
+
+---
+
+## 2026-01-28 笔记删除日志增加客户端ID显示
+
+**修改**：`/discovery/note-deleted` 接口日志增加客户端ID显示
+
+**日志格式**：
+- 旧：`🗑️ [笔记删除] 已标记: {noteId} (删除时间: {time})`
+- 新：`🗑️ [笔记删除] 已标记: {noteId} (客户端: {clientId}) (删除时间: {time})`
+
+**影响文件**：
+- `server/routes/client.js:4834`
+
+---
+
+## 2026-01-28 红薯糖水 Android 采集脚本 v1.0
+
+**功能**：AutoX6 自动化采集小红书笔记短链接
+
+**实现**：
+1. **悬浮窗界面** - 三个按钮：采集（运行/停止切换）、转换、关闭
+2. **采集流程**：
+   - 从服务器分配关键词（支持多设备协同）
+   - 启动小红书APP并搜索关键词
+   - 循环点击笔记 → 分享 → 复制链接 → 上传服务器
+   - 每个关键词最多采集50条，点击失败自动滚动
+   - 完成后释放关键词，继续下一个
+3. **坐标定位** - 分享按钮 (1101,220)、复制链接 (337,2421) 基于 1200x2664 屏幕
+
+**下载地址**：`https://www.wubug.cc/downloads/main.jscript`
+
+**影响文件**：
+- `xiaohongshu-android-client-new/main.js` (765行)
+
+---
+
+## 2026-01-26 客户端备注功能
+
+**需求**：在客户端状态列表中添加备注名，用于人工输入来记忆客户端
+
+**实现**：
+1. **数据库模型** - `ClientHeartbeat` 添加 `remark` 字段
+2. **后端API** - 新增 `PUT /admin/clients/:clientId/remark` 接口（老板和经理权限）
+3. **前端页面** - 监控中心客户端列表增加"备注"列，点击"编辑"按钮弹出对话框修改备注
+
+**影响文件**：
+- `server/models/ClientHeartbeat.js:26-30`
+- `server/routes/admin.js:2807-2843`
+- `admin/src/pages/MonitoringPage.js`
+
+---
+
+## 2026-01-26 评论黑名单解封权限限制
+
+**需求**：引流人员可以查看评论黑名单，但不能操作解封
+
+**后端修改**：
+- 解封接口 `DELETE /xiaohongshu/api/client/comments/blacklist/:nickname` 权限从 `['boss', 'manager', 'promoter']` 改为 `['boss', 'manager']`
+
+**前端修改**：
+- 导入 `useAuth` 获取当前用户角色
+- 添加 `canUnban` 判断：只有 `boss` 和 `manager` 可以解封
+- 引流人员查看黑名单页面时，操作列的"解封"按钮不显示
+- 导航栏添加"评论黑名单"菜单项给引流人员
+
+**影响文件**：
+- `server/routes/client.js:3568`
+- `admin/src/pages/CommentBlacklist.js`
+- `admin/src/components/Layout.js`
+
+---
+
+## 2026-01-26 系统监控客户端备注显示修复
+
+**问题**：系统监控页面客户端状态中 remark 字段显示为 null
+
+**原因**：`ClientHeartbeat.find().select()` 中没有包含 `remark` 字段
+
+**修复**：在 select 中添加 `remark` 字段
+
+**影响文件**：
+- `server/routes/admin.js:128`
+
+---
+
+## 2026-01-25 AI自动审核生存天数计算修复
+
+**问题**：AI自动审核详情中生存天数显示错误
+
+**修复逻辑**：
+1. 起始时间：优先使用 `managerApproval.approvedAt`（主管审核通过发放500积分时），兼容 `auditHistory` 中的 `manager_approve`
+2. 从第0天开始计算（而非第1天）
+3. 如果持续检查失败，停止计数，使用失败前的成功检查天数
+4. 上限为7天（持续检查最多7天）
+
+**影响文件**：
+- `server/routes/reviews.js:1657-1684`
+
+---
+
+## 2026-01-25 系统监控数据修复
+
+**问题**：系统监控中心"今日采集评论"显示为 0，但评论线索管理中有新增数据
+
+**原因**：
+- 原查询使用 `DiscoveredNote.aggregate([{ $sum: '$lastCommentCount' }])`
+- 由于 `lastCommentCount` 字段值为 0，导致统计结果为 0
+- 应该统计 `CommentLead` 集合中今日新增的记录数
+
+**修复**：
+1. 添加 `CommentLead` 模型导入 (`server/routes/admin.js:10`)
+2. 将聚合查询改为 `CommentLead.countDocuments({ createdAt: { $gte: todayStart } })`
+3. 更新变量名从 `todayHarvestCommentsTotal` 改为 `todayCommentLeadsCount`
+4. 简化赋值逻辑：`const todayComments = todayCommentLeadsCount;`
+
+**影响文件**：
+- `server/routes/admin.js`
+
+---
+
+## 2026-01-24 登录次数限制与账户锁定功能
+
+**需求**：添加登录次数验证，提示剩余尝试次数，多次失败后锁定账户
+
+**功能实现**：
+
+1. **后端登录限制逻辑** (`server/routes/auth.js:32-137`):
+   - 最大失败次数：5次
+   - 锁定时长：30分钟
+   - 使用内存 Map 存储登录失败记录
+   - 支持用户名大小写不敏感
+
+2. **API响应格式**:
+   ```javascript
+   // 登录失败时返回
+   {
+     success: false,
+     message: "用户名或密码错误，还剩4次尝试机会",
+     remainingAttempts: 4,
+     locked: false
+   }
+
+   // 锁定时返回
+   {
+     success: false,
+     message: "登录失败次数过多，账户已锁定，请30分钟后再试",
+     locked: true,
+     remainingMinutes: 30
+   }
+   ```
+
+3. **前端提示优化** (`admin/src/pages/Login.js`):
+   - 显示剩余尝试次数（X/5）
+   - 次数少于3次时红色警告
+   - 锁定后禁用登录按钮和输入框
+   - Alert组件显示锁定状态
+
+**关键代码**:
+- `checkLoginLockout(username)` - 检查锁定状态
+- `recordLoginFailure(username)` - 记录失败次数
+- `clearLoginAttempts(username)` - 登录成功时清除记录
+
+**注意事项**:
+- 内存存储，服务重启后记录清空
+- 如需持久化可改为 Redis 或 MongoDB 存储
+
+---
+
+## 2026-01-24 评论采集客户端黑名单API 401错误修复
+
+**问题**：评论采集客户端 (`harvest-client`) 调用黑名单API时返回401未授权错误
+
+**故障现象**：
+- 客户端调用 `GET /xiaohongshu/api/client/comments/blacklist` 返回401
+- 客户端无法获取黑名单数据，导致黑名单过滤功能失效
+
+**根本原因**：
+1. 黑名单API需要JWT认证和特定角色 (`boss`, `manager`, `promoter`)
+2. 客户端代码 `CommentHarvestService.js` 没有配置认证token
+3. 客户端配置文件 `config.json` 缺少 `auth.token` 字段
+
+**修复方案**：
+
+1. **修改客户端代码** (`harvest-client/services/CommentHarvestService.js`):
+   ```javascript
+   // 添加 auth 配置支持
+   this.auth = config.auth || {};
+
+   // 创建 axios 实例时设置 Authorization 头
+   const headers = {
+     'Content-Type': 'application/json'
+   };
+   if (this.auth.token) {
+     headers['Authorization'] = `Bearer ${this.auth.token}`;
+   }
+   ```
+
+2. **更新配置文件** (`harvest-client/config.json`):
+   ```json
+   {
+     "auth": {
+       "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+     }
+   }
+   ```
+
+3. **使用 boss 账号的 token**（拥有最高权限）
+
+**验证**：
+```bash
+# 测试黑名单API
+curl -X GET https://www.wubug.cc/xiaohongshu/api/client/comments/blacklist \
+  -H "Authorization: Bearer <TOKEN>"
+# 返回: {"success":true,"data":[...]}
+```
+
+---
+
+## 2026-01-24 Docker MongoDB数据丢失与恢复
+
+**问题**：Docker MongoDB容器被意外重建，导致生产数据丢失
+
+**故障现象**：
+- API返回 `MongoError: pool destroyed`
+- 数据库所有集合计数为0（users: 0, imagereviews: 0）
+- PM2显示API服务online但无法正常工作
+- PM2重启次数累计392次
+
+**根本原因**：
+- Docker MongoDB容器在15:41被重建/删除
+- 容器使用的是临时卷或未正确挂载持久化卷
+- 重建后数据卷被新空卷替换
+
+**数据恢复过程**：
+1. 发现Docker匿名卷 `3e768444769f1796edcebc4f8fdecf3ba16e6fe0c6ee9c86f122ad584946d31d` 包含旧数据
+2. 该卷最后修改时间为今天16:06-16:12，包含比03:00备份更新的数据
+3. 重建MongoDB容器挂载该卷：
+   ```bash
+   docker run -d --name mongo --restart=always -p 27017:27017 \
+     -v 3e768444769f1796edcebc4f8fdecf3ba16e6fe0c6ee9c86f122ad584946d31d:/data/db \
+     mongo:4.4
+   ```
+
+**数据对比**：
+| 集合 | 03:00备份 | 旧卷数据 | 说明 |
+|------|----------|---------|------|
+| users | 109 | 109 | 相同 |
+| imagereviews | 1831 | 1831 | 相同 |
+| commentleads | 596 | 603 | 旧卷多7条 |
+| discoverednotes | - | 1129 | 旧卷独有 |
+| commentblacklists | - | 202 | 旧卷独有 |
+
+**教训与预防**：
+
+1. **Docker卷必须命名**
+   - ❌ 错误：`docker run -v /data/db mongo`（匿名卷，容器删除后难找回）
+   - ✅ 正确：`docker run -v mongo_data:/data/db mongo`（命名卷，易于管理）
+
+2. **定期备份验证**
+   - 当前备份脚本每天03:00自动备份到 `/root/mongo_backup/`
+   - 备份文件格式：`xiaohongshu_audit_YYYYMMDD_HHMMSS`
+   - 建议：每周验证备份可恢复性
+
+3. **监控容器重建**
+   - 设置监控告警，当容器被意外删除/重建时通知
+   - PM2的392次重启应该更早引起注意
+
+4. **systemd MongoDB已禁用但数据目录为空**
+   - `/var/lib/mongodb/` 目录为空，旧数据已丢失
+   - 确认当前使用Docker MongoDB（端口27017）
+
+**新备份已保存**：
+- `/root/mongo_backup/xiaohongshu_audit_20260124_160900` (7.5M)
+
+---
+
+## 2026-01-24 持续检查7天期限计算基准修复
+
+**问题**：持续检查7天期限是基于笔记创建时间（`createdAt`）计算，但应该基于主管审核通过时间（`manager_approve`）计算
+
+**影响**：
+- 笔记提交到主管审核之间有时间差，导致持续检查天数不准确
+- 用户反馈"生成日期1天的笔记有590积分"问题与此相关
+
+**解决方案**：将计算基准从 `createdAt` 改为 `auditHistory` 中的 `manager_approve` 时间
+
+### 修改文件
+| 文件 | 修改内容 |
+|------|----------|
+| `server/services/continuousCheckService.js:78-82` | 从 `auditHistory` 获取 `manager_approve` 时间作为检查起点 |
+
+### 代码变更
+```javascript
+// 修复前：基于笔记创建时间
+const createdAt = new Date(review.createdAt);
+const daysSinceCreation = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+
+// 修复后：基于主管审核通过时间
+const managerApproveRecord = review.auditHistory?.find(h => h.action === 'manager_approve');
+const checkStartTime = managerApproveRecord?.timestamp ? new Date(managerApproveRecord.timestamp) : new Date(review.createdAt);
+const daysSinceCheckStart = Math.floor((now - checkStartTime) / (1000 * 60 * 60 * 24));
+```
+
+**效果**：持续检查天数计算更准确，从审核通过后才开始计算7天期限
+
+---
+
+## 2026-01-24 客户端ID持久化功能迁移
+
+**问题**：xiaohongshu-audit-clients 中各客户端每次启动生成随机ID，导致服务器无法识别同一客户端
+
+**解决方案**：将旧版 xiaohongshu-audit-client 中的 ClientIdManager 迁移到新版共享模块
+
+### 新增文件
+- **`xiaohongshu-audit-clients/shared/utils/ClientIdManager.js`** - 客户端ID持久化管理器
+  - ID存储位置：`xiaohongshu-audit-clients/.client-id.json`
+  - 支持的客户端类型：audit, discovery, harvest, short-link, blacklist-scan
+  - 功能：生成ID、持久化存储、重启后保持不变
+
+### 修改文件
+| 文件 | 修改内容 |
+|------|----------|
+| `discovery-client/services/NoteDiscoveryService.js` | 使用 ClientIdManager.getId() |
+| `harvest-client/services/HarvestFetcher.js` | 使用 ClientIdManager.getId() |
+| `audit-client/services/TaskFetcher.js` | 使用 ClientIdManager.getId() |
+| `short-link-client/services/ShortLinkAuditService.js` | 使用 ClientIdManager.getId() |
+| `blacklist-scan-client/services/BlacklistScanFetcher.js` | 使用 ClientIdManager.getId() |
+
+### 删除代码
+- 移除各客户端中的 `generateClientId()` 方法
+- 移除 `os` 和 `crypto` 依赖（不再需要）
+
+**效果**：客户端重启后ID保持不变，服务器可以正确追踪客户端历史数据和统计
+
+---
+
+## 2026-01-24 客户端健康度监控系统
+
+**新增功能**：完整的客户端健康度监控和统计系统
+
+### 新增文件
+- **`server/services/clientHealthService.js`** - 客户端健康度服务核心
+
+**功能**：
+1. **在线状态自动更新**（每5分钟）
+   - `online`: 5分钟内有心跳
+   - `idle`: 5-15分钟内有心跳
+   - `offline`: 超过15分钟无心跳
+
+2. **今日统计重置**（每日0:05）
+   - 自动重置 `todayXXX` 统计字段
+   - 跨天自动检测并更新
+
+3. **任务成功记录**
+   - 更新累计统计和今日统计
+   - 重置连续失败计数
+   - 自动恢复任务分发（成功后解除暂停）
+
+4. **任务失败记录**
+   - 失败计数+1
+   - 连续失败≥3次自动暂停任务分发
+
+5. **僵尸客户端检测**（每小时）
+   - 检测从未完成任务的客户端
+   - 自动移除描述，阻止获取任务
+
+### 修改文件
+
+**`server/routes/client.js`**:
+- 第1374-1383行：移除心跳接口的 `status` 手动设置
+- 第1208-1222行：`/pending-tasks` 添加健康检查
+- 第1884-1896行：`/verify-result` 添加统计更新
+- 第2384-2396行：`/discovery/report` 添加统计更新
+- 第2696-2709行：`/harvest/complete` 添加统计更新
+- 第2884-2897行：`/comments/submit` 添加统计更新
+- 第3620-3650行：`/harvest/pending` 添加暂停检查
+- 第3954-3967行：`/discovery/fetch-one-without-short-url` 添加健康检查
+
+**`server/server.js`**:
+- 第203-206行：启动客户端健康度服务
+
+### 统计字段映射
+
+| 客户端类型 | 累计字段 | 今日字段 | 更新接口 |
+|-----------|---------|---------|----------|
+| discovery | totalNotesDiscovered | todayNotesDiscovered | /discovery/report |
+| harvest | totalCommentsCollected, totalValidLeads | todayCommentsCollected, todayValidLeads | /harvest/complete, /comments/submit |
+| audit | totalReviewsCompleted | todayReviewsCompleted | /verify-result |
+
+### 部署验证
+```bash
+# 服务器日志确认
+✅ [客户端健康度] 定时任务已启动
+✅ 客户端健康度服务启动成功
+```
+
+---
+
+## 2026-01-24 评论黑名单显示全部数据
+
+**修改**：移除黑名单API的100条限制
+- **文件**: `server/routes/client.js:3078`
+- **修改**: 删除 `.limit(100)` 限制
+- **效果**: 评论黑名单页面现在可以显示全部数据（而非仅100条）
+
+---
+
+## 2026-01-24 采集评论任务堆积问题修复
+
+**问题**：
+- 待采集评论任务1118个，其中378个（34%）被长期锁定
+- 锁定时长27-29分钟，来自同一客户端 `harvest_DESKTOP-HDM9SKA_1e7ae375`
+- 客户端获取任务后异常退出，锁未被释放
+
+**根本原因**：
+1. 客户端检测到新审核任务时直接 `return` 退出，已获取的任务锁未释放
+2. 锁定时间过长（30分钟），客户端卡住时任务会被占用很久
+3. 缺少异常保护机制
+
+**修复方案**：
+
+### 1. 缩短任务锁定时间
+**文件**: `server/routes/client.js:3533`
+- 锁定时间从 30分钟 → 10分钟
+- 减少单次锁定对任务队列的影响
+
+### 2. 服务端支持强制释放
+**文件**: `server/routes/client.js:2609`
+- `/harvest/complete` 接口新增 `forceRelease` 参数
+- 强制释放时只释放锁，不标记为已采集
+
+### 3. 客户端异常保护
+**文件**: `xiaohongshu-audit-client/index.js:455-510`
+- 将 `return` 改为 `break`，让 `finally` 块处理释放
+- 记录已获取但未完成的任务
+- 在 `finally` 块中释放未完成任务的锁
+
+### 4. 新增释放锁辅助方法
+**文件**: `xiaohongshu-audit-client/index.js:597-623`
+- 新增 `releaseHarvestLocks()` 方法
+- 批量强制释放未完成任务的锁
+
+**修改文件清单**：
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/client.js` | 缩短锁定时间 + 支持强制释放 |
+| `xiaohongshu-audit-client/index.js` | 添加 finally 块 + 释放锁方法 |
+
+**验证结果**：
+- ✅ 释放了 1118 个被锁定的任务
+- ✅ 被锁定任务数从 378 → 20（正常值）
+- ✅ 服务已重启并正常运行
+
+---
+
+## 2026-01-23 客户端管理优化
+
+**问题**：
+- 客户端每次重启生成新ID，导致数据库积累大量僵尸记录
+- 部分客户端没有描述信息，难以识别
+- 僵尸客户端（已下线）一直显示为 online 状态
+
+**修复方案**：
+
+### 1. 持久化客户端ID
+
+**新增文件**：`xiaohongshu-audit-client/services/ClientIdManager.js`
+- ID 存储在 `.client-id.json` 文件中
+- 首次启动时生成并保存
+- 后续启动时复用，避免创建新记录
+
+**修改文件**：
+- `TaskFetcher.js` - 使用 `ClientIdManager.getId('audit')`
+- `NoteDiscoveryService.js` - 使用 `ClientIdManager.getId('discovery')`
+
+### 2. 心跳接口自动补充描述
+
+**修改文件**：`server/routes/client.js`
+- 新建客户端时自动添加默认描述
+- 已存在但无描述的客户端自动补充
+- 按客户端类型区分：
+  - `audit`: 审核客户端 - 审核用户提交的小红书笔记和评论
+  - `discovery`: 发现客户端 - 搜索发现小红书维权笔记
+  - `harvest`: 评论采集客户端 - 采集笔记评论作为线索
+  - `short-link`: 短链接客户端 - 处理外部短链接审核
+  - `blacklist-scan`: 黑名单扫描客户端 - 扫描笔记评论识别黑名单用户
+
+### 3. 僵尸客户端自动清理
+
+**修改文件**：`server/services/harvestScheduler.js`
+- 每5分钟执行一次
+- 将超过1小时无心跳的客户端 `status` 设为 `offline`
+- 前端监控页面会正确显示"已退出"
+
+**修改文件清单**：
+| 文件 | 修改内容 |
+|------|---------|
+| `xiaohongshu-audit-client/services/ClientIdManager.js` | 新增：客户端ID持久化管理 |
+| `xiaohongshu-audit-client/services/TaskFetcher.js` | 改用持久化ID |
+| `xiaohongshu-audit-client/services/NoteDiscoveryService.js` | 改用持久化ID |
+| `server/routes/client.js` | 心跳接口自动设置默认描述 |
+| `server/services/harvestScheduler.js` | 添加僵尸客户端清理逻辑 |
+
+**验证结果**：
+- ✅ 代码修改完成
+- ✅ 已部署到服务器
+- ✅ PM2 服务重启成功
+
+---
+
+## 2026-01-23 新评论 WebSocket 实时推送通知
+
+**功能**：当有新评论线索时，后端通过 WebSocket 推送消息，前端接收后显示提醒
+
+**实现方案**：
+
+1. **后端 WebSocket 服务器** (`server/server.js`)
+   - 添加 `ws` 依赖
+   - 在 5001 端口创建 WebSocket 服务器
+   - 将 `wss` 实例挂载到 `app` 供路由使用
+
+2. **后端广播逻辑** (`server/routes/client.js`)
+   - 评论线索创建成功后，通过 WebSocket 广播消息
+   - 消息格式：`{ type: 'new_comment_leads', data: { count, noteTitle, ... } }`
+
+3. **前端 WebSocket 客户端** (`admin/src/pages/CommentLeads.js`)
+   - 建立 WebSocket 连接（自动重连）
+   - 接收消息后显示通知
+   - 标签页标题显示未读数量：`(3) 💬 新评论`
+   - 右上角显示 Ant Design 通知
+   - 播放提示音（可选）
+   - 用户回到页面时清除未读计数
+
+**通知方式**：
+- 标签页标题变化
+- 右上角 Toast 通知（带图标和边框动画）
+- 声音提醒（`/sounds/notification.mp3`）
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/package.json` | 添加 `ws` 依赖 |
+| `server/server.js` | 创建 WebSocket 服务器（5001端口） |
+| `server/routes/client.js` | 评论创建成功后广播消息 |
+| `admin/src/pages/CommentLeads.js` | WebSocket 客户端 + 通知逻辑 |
+
+**验证结果**：
+- ✅ 前端构建成功
+- ✅ 后端 WebSocket 服务启动成功（5001端口）
+- ✅ 前后端已部署到服务器
+- ✅ PM2 服务重启成功
+
+**注意事项**：
+- 生产环境需要 Nginx 配置 WebSocket 代理
+- 需要准备提示音文件 `/sounds/notification.mp3`
+- 浏览器可能阻止自动播放声音，需要用户交互后才能播放
+
+---
+
+## 2026-01-23 评论黑名单操作人员追踪
+
+**问题**：引流人员在评论线索管理页面添加黑名单后，评论线索的"操作人员"字段没有更新
+
+**原因分析**：
+1. 前端调用 `/client/comments/:id/blacklist` 接口
+2. 但后端只有 `/client/comments/blacklist` 接口
+3. 缺少将评论线索ID与操作人员关联的逻辑
+
+**修复内容**：
+
+1. **新增接口** (`server/routes/client.js` 第3108-3181行)
+   ```
+   POST /xiaohongshu/api/client/comments/:id/blacklist
+   权限：boss, manager, promoter
+   ```
+   - 根据评论线索ID获取评论者昵称
+   - 添加/更新黑名单记录
+   - 同时更新CommentLead的 `status='invalid'`、`lastOperatedBy`、`lastOperatedAt`
+
+2. **原有接口增强** - 支持 `leadId` 参数追踪操作人员
+   - POST `/client/comments/blacklist` - 添加黑名单时更新操作人员
+   - DELETE `/client/comments/blacklist/:nickname?leadId=xxx` - 删除时更新操作人员
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | 新增 `/:id/blacklist` 接口，黑名单操作记录操作人员 |
+
+**验证结果**：
+- ✅ 语法检查通过
+- ✅ 文件同步到服务器
+- ✅ 后端服务重启成功
+
+---
+
+## 2026-01-23 评论黑名单接口权限控制
+
+**问题**：评论黑名单的三个接口缺少权限控制
+- GET `/comments/blacklist` - 无需认证
+- POST `/comments/blacklist` - 无需认证
+- DELETE `/comments/blacklist/:nickname` - 有认证但无角色限制
+
+**修复内容**：
+为三个黑名单接口添加角色权限控制，只允许以下角色操作：
+- `boss` - 老板
+- `manager` - 主管
+- `promoter` - 引流人员
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | 三个黑名单接口添加 `authenticateToken` 和 `requireRole(['boss', 'manager', 'promoter'])` |
+
+**接口变更**：
+```
+GET    /xiaohongshu/api/client/comments/blacklist  ← 需认证 + 角色
+POST   /xiaohongshu/api/client/comments/blacklist  ← 需认证 + 角色
+DELETE /xiaohongshu/api/client/comments/blacklist/:nickname ← 需认证 + 角色
+```
+
+**验证结果**：
+- ✅ 语法检查通过
+- ✅ 文件同步到服务器
+- ✅ 后端服务重启成功
+
+---
+
+## 2026-01-22 采集评论任务分发机制深度检查与修复
+
+**问题1：统计API与派发API查询条件不一致**
+- 统计API (`/discovery/stats`) 没有时间限制和状态过滤
+- 派发API (`/harvest/pending`) 有10天时间限制和状态过滤
+- 导致"排队中"统计数量虚高
+
+**问题2：客户端心跳未传递 taskIds**
+- 采集评论客户端的心跳请求中没有传递正在处理的任务ID
+- 导致无法通过心跳延长锁定时间
+- 处理时间超过15分钟的任务会被超时释放
+
+**修复内容**：
+
+1. **统计API查询条件统一** (`server/routes/client.js` 第2646-2698行)
+   - 添加10天时间限制 `createdAt: { $gte: tenDaysAgo }`
+   - 添加状态过滤 `status: { $in: ['discovered', 'verified'] }`
+   - 与任务派发API查询条件完全一致
+
+2. **客户端心跳传递 taskIds** (`harvest-client/services/HarvestFetcher.js`)
+   - 添加 `currentTaskIds` 成员变量追踪正在处理的任务
+   - 拉取笔记后记录 `noteIds` 到 `currentTaskIds`
+   - 心跳请求中传递 `taskIds` 以延长锁定时间
+   - 处理完成后清空 `currentTaskIds`
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | 统计API添加时间限制和状态过滤 |
+| `harvest-client/services/HarvestFetcher.js` | 心跳传递taskIds延长锁定 |
+
+**验证结果**：
+- ✅ 语法检查通过
+- ✅ 文件同步到服务器
+- ✅ 后端服务重启成功
+
+---
+
+## 2026-01-22 采集评论任务分发与释放机制优化
+
+**问题**：采集评论任务锁定超时时间不一致、心跳机制不完善、缺少健康检查
+
+**修复内容**：
+1. **统一锁定超时时间**：从10分钟改为15分钟，给客户端更多处理时间
+2. **完善心跳机制**：心跳API现在支持延长 `DiscoveredNote.harvestLock`（之前只支持 `ImageReview.processingLock`）
+3. **添加任务健康检查**：新增 `checkStuckTasks()` 方法，检测并自动释放锁定超过30分钟的卡住任务
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | 锁定超时10→15分钟，心跳支持 harvestLock 延长 |
+| `server/services/harvestScheduler.js` | lockTimeoutMinutes 配置更新，新增 checkStuckTasks() |
+
+**验证结果**：
+- ✅ 语法检查通过
+- ✅ 文件同步到服务器
+- ✅ 后端服务重启成功
+
+---
+
+## 2026-01-22 系统监控功能修复
+
+**需求**：统一系统监控的在线状态判断、健康度阈值，优化 harvest 客户端统计显示。
+
+**分析结论**：经过详细分析，**所有客户端的统计功能都已实现**，数据库中有有效数据。
+
+**问题修复**：
+| 问题 | 修复前 | 修复后 |
+|------|--------|--------|
+| 在线状态判断 | 前端1分钟，后端5分钟 | 统一为5分钟 |
+| 健康度阈值 | 前端2次警告，后端3次暂停 | 统一为3次 |
+| harvest显示 | "6/98 合格" | "6 有效线索" |
+| todayDate字段 | 部分客户端缺失 | 心跳API添加初始化 |
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `admin/src/pages/MonitoringPage.js` | 在线状态改为5分钟，健康度阈值改为3次，harvest只显示有效线索数 |
+| `server/routes/client.js` | 心跳API添加 `$setOnInsert: { todayDate }` |
+
+**验证结果**：
+- ✅ 前端构建成功
+- ✅ 部署到服务器
+- ✅ 后端服务重启成功
+
+---
+
+**需求**：将笔记查重操作从"点击笔记后"提前到"时间筛选后、点击前"，避免浪费时间访问已存在的笔记。
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `xiaohongshu-audit-clients/discovery-client/services/NoteDiscoveryService.js` | 新增 `batchCheckExists()` 方法，支持并发批量查重 |
+| `xiaohongshu-audit-clients/discovery-client/services/NoteDiscoveryService.js` | 修改 `discoverNote()` 方法，在时间筛选后调用批量查重 |
+
+**流程变化**：
+```
+优化前: 搜索 → 时间筛选 → 点击 → 提取内容 → 查重 → AI分析
+优化后: 搜索 → 时间筛选 → 🔍 批量查重 → 只点击新笔记 → AI分析
+```
+
+**实现细节**：
+- 使用 `Promise.allSettled` 并发查重，每批最多5个并发请求
+- 查重失败时保守处理，当作不存在继续流程
+- 详细的日志输出（批次进度、已存在的笔记ID等）
+
+**预期效果**：
+- 搜索10个笔记，5个已存在：优化前点击10次，优化后只点击5次
+- 节省约50%的点击和等待时间
+
+**部署状态**：✅ 已部署到服务器
+**压缩包**：`xiaohongshu-audit-clients.zip`（123M）
+
+---
+
+## 2026-01-22 新增引流人员角色和操作人员追踪
+
+**需求**：
+- 新增 `promoter`（引流人员）角色，4个账号只能访问评论线索管理页面
+- 评论线索管理添加"操作人员"列，记录最后操作的用户（排除"查看原文"）
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/models/User.js` | 添加 `promoter` 到角色枚举 |
+| `server/models/CommentLead.js` | 添加 `lastOperatedBy` 和 `lastOperatedAt` 字段 |
+| `server/routes/client.js` | 更新状态时记录操作人员，列表查询时 populate 操作人员信息 |
+| `admin/src/components/Layout.js` | 配置 promoter 菜单（仅仪表板+评论线索管理） |
+| `admin/src/pages/CommentLeads.js` | 添加"操作人员"列 |
+
+**操作追踪规则**：
+- ✅ 记录操作：点击快速状态按钮、模态框状态按钮、批量更新状态
+- ❌ 不记录操作：点击"查看原文"、筛选/搜索、刷新数据
+
+**promoter 角色权限**：
+- 仪表板（默认所有角色）
+- 评论线索管理
+
+**部署状态**：✅ 已部署到服务器
+
+**后续补充**：
+| 文件 | 修改内容 |
+|------|---------|
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 creatableRoles（boss、manager、hr 可创建） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 getAssignableRoles（可分配角色列表） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 roleLevels（级别1，最低） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 getRoleColor（蓝色标签） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 getRoleText（引流人员） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到筛选下拉框选项 |
+
+**部署状态**：✅ 已部署到服务器
+
+**后续补充**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/auth.js` | 添加 promoter 到 allowedRoles（boss、manager、hr 可创建） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 creatableRoles（boss、manager、hr 可创建） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 getAssignableRoles（可分配角色列表） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 roleLevels（级别1，最低） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 getRoleColor（蓝色标签） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到 getRoleText（引流人员） |
+| `admin/src/pages/StaffList.js` | 添加 promoter 到筛选下拉框选项 |
+
+**部署状态**：✅ 已部署到服务器
+
+---
+
+## 2026-01-22 设备管理页面增加审核图片列
+
+**需求**：在设备管理列表中显示审核时提交的截图（reviewImage）
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `admin/src/pages/DeviceList.js` | 导入 Image 组件 |
+| `admin/src/pages/DeviceList.js` | 在表格列中添加"审核图片"列 |
+| `admin/src/pages/DeviceList.js` | 调整表格滚动宽度为 1300px |
+
+**新增列配置**：
+- 标题：审核图片
+- 字段：reviewImage
+- 宽度：90px
+- 渲染：有图片时显示 60x60 缩略图，无图片时显示"无图片"
+
+**部署状态**：✅ 已部署到服务器
+
+---
+
+## 2026-01-22 审核客户端增加评论AI文意审核
+
+**需求**：在 audit-client 中对找到的评论进行 AI 文意审核，**只通过引流评论，拒绝正常评论**（与黑名单扫描逻辑相反）
+
+**修改文件**：
+| 文件 | 修改内容 |
+|------|---------|
+| `audit-client/index.js` | 添加 CommentAIService 导入和初始化 |
+| `audit-client/index.js` | 在评论验证后增加 AI 审核逻辑 |
+
+**实现逻辑**：
+```
+评论验证通过 → AI审核评论文意
+  ├── spam（引流/黑产） → ✅ 通过
+  └── potential_lead（正常评论） → ❌ 拒绝
+```
+
+**AI 提示词**：复用 `harvest-client/services/CommentAIService.js` 中的黑名单扫描提示词
+
+**日志示例**：
+```
+🤖 [AI评论审核] 分析评论文意
+💬 评论内容: 已经要回来了，可以问我
+✅ [AI评论审核] 检测为引流/黑产: 声称已经成功，主动提供帮助
+✅ 任务通过（这是引流评论）
+```
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 采集队列统计优化和日志去重
+
+### 1. 客户端日志优化
+
+**问题**：AI 分析日志重复出现
+- `CommentAIService.js` 打印 "🤖 [AI分析] 正在分析评论内容..."
+- `BlacklistScanService.js` 打印 "🤖 [AI分析] 分析: 用户名..."
+- 同一条评论显示两次 AI 日志，造成误解
+
+**修复**：
+| 文件 | 修改内容 |
+|------|---------|
+| `harvest-client/services/CommentAIService.js` | 移除 AI 分析进度日志，保留特殊情况日志 |
+| `blacklist-scan-client/services/BlacklistScanService.js` | 保持原有日志（调用方负责打印） |
+| `harvest-client/services/CommentHarvestService.js` | 保持原有日志格式 |
+
+**保留的日志**：
+- ✅ 分隔线（━━━━━）
+- ✅ 步骤指示 [1/5]、[2/5]...
+- ✅ 提交详情日志
+- ✅ AI 分析特殊情况（关键词检测冲突）
+
+### 2. 采集队列统计增强
+
+**问题**："排队中"统计不够清晰
+- 用户看到 100+ 排队中，但客户端拿不到任务
+- 实际上大部分笔记在等待采集间隔
+
+**修复**：
+| 文件 | 修改内容 |
+|------|---------|
+| `server/routes/client.js` | `/discovery/stats` 返回 `harvestQueue` 对象 |
+| `admin/src/pages/DiscoveredNotes.js` | 显示详细分类：可采集 | 处理中 | 等待中 |
+
+**API 响应结构**：
+```json
+{
+  "harvestQueue": {
+    "ready": 1,        // 可立即采集
+    "processing": 120, // 正在处理中（已锁定）
+    "waiting": 384     // 等待采集间隔
+  },
+  "pending": 505       // 总数（向后兼容）
+}
+```
+
+**前端显示**：
+```
+┌─────────────────────┐
+│  采集队列    505 条 │
+│ 🟢 可采集: 1        │
+│ 🔄 处理中: 120      │
+│ ⏳ 等待中: 384      │
+└─────────────────────┘
+```
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 短链接接口兼容性和安全验证修复
+
+**问题1**：短链接不兼容
+- `/failed` 接口只搜索 `noteUrl`，但 `/pending` 返回短链接
+- 导致客户端用短链接报告失败时找不到记录
+
+**问题2**：缺少锁定所有权验证（安全问题）
+- `/complete` 和 `/failed` 接口未验证 `clientId`
+- 任何客户端都可以释放/完成别人的锁定
+
+**修复内容**：
+| 接口 | 行号 | 修复内容 |
+|------|------|---------|
+| `/harvest/complete` | 2967-3046 | 添加 clientId 参数 + 短链接搜索 + 锁定验证 |
+| `/harvest/failed` | 3050-3095 | 短链接搜索 + 锁定所有权验证 |
+| `/blacklist-scan/complete` | 4781-4828 | 短链接搜索 + 锁定所有权验证 |
+| `/blacklist-scan/failed` | 4993-5036 | 短链接搜索 + 锁定所有权验证 |
+
+**修复逻辑**：
+```javascript
+// 1. 先查询笔记（支持短链接）
+const note = await DiscoveredNote.findOne({
+  $or: [{ noteUrl }, { shortUrl: noteUrl }]
+});
+
+// 2. 验证锁定所有权
+const lockOwnerId = note.harvestLock?.clientId;
+const isLockExpired = lockExpiresAt && new Date(lockExpiresAt) < now;
+const isOwner = lockOwnerId === clientId;
+
+// 3. 只有持有者或锁过期才能释放
+if (lockOwnerId && !isOwner && !isLockExpired) {
+  return 403; // 拒绝访问
+}
+```
+
+**安全改进**：
+- ✅ 只有持有锁定的客户端才能完成/失败任务
+- ✅ 锁定过期后任何客户端都可以释放（防止死锁）
+- ✅ `/harvest/complete` 的 clientId 为可选参数（向后兼容）
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 生存天数积分显示修复
+
+**问题**：
+- AI审核记录中，生存天数超过1天的记录，总收益仍显示500（基础积分）
+- 没有加上每天30分的生存奖励
+
+**根本原因**：
+- 持续检查服务 `recordCheckResult` 方法只更新 `continuousCheck` 相关字段
+- 没有更新 `survivalDays`（生存天数）和 `points`（总积分）字段
+- 前端读取这两个字段时为 undefined，默认显示1天和基础积分
+
+**修复内容**：
+| 文件 | 修改 | 说明 |
+|------|------|------|
+| `server/services/continuousCheckService.js` | 394-407 | 检查成功时更新 survivalDays 和 points |
+
+**修复逻辑**：
+```javascript
+// 每次检查成功后
+updateData.survivalDays = 从创建日期到今天的天数;
+updateData.points = 原积分 + 本次奖励积分;
+```
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 系统监控 - 添加客户端健康度显示
+
+**新增内容**：
+- 系统监控页面新增客户端健康度显示
+- 显示暂停任务客户端数量
+- 显示警告状态客户端数量
+- 客户端列表新增"健康度"和"上次结果"列
+
+**修改内容**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/routes/admin.js` | 修改 | `/admin/monitoring` 返回客户端健康度数据 |
+| `admin/src/pages/MonitoringPage.js` | 修改 | 显示暂停、警告、正常状态 |
+
+**新增显示**：
+- 在线客户端数量
+- 暂停任务客户端数量（红色）
+- 警告状态客户端数量（橙色）
+- 健康度列：已暂停（红）、警告（橙）、正常（绿）
+- 上次结果：显示上次上传的条数
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 手机号重复问题修复
+
+**问题**：
+- 管理后台修改用户资料时，可以将多个用户设置为同一个手机号
+- 导致27个用户存在手机号重复（33%重复率）
+
+**根本原因**：
+- `PUT /xiaohongshu/api/user-management/:id` 接口只验证手机号长度，未检查重复
+- `PUT /xiaohongshu/api/user-management/profile` 接口也存在同样问题
+
+**修复内容**：
+| 文件 | 行号 | 修改 |
+|------|------|------|
+| `server/routes/user-management.js` | 233-247 | 添加管理员修改用户时的手机号重复检查 |
+| `server/routes/user-management.js` | 64-81 | 添加用户自己修改资料时的手机号重复检查 |
+
+**验证逻辑**：
+```javascript
+// 检查手机号是否已被其他用户使用（排除当前用户）
+const existingPhoneUser = await User.findOne({
+  phone: newPhone,
+  is_deleted: { $ne: true },
+  _id: { $ne: currentUserId }
+});
+```
+
+**部署状态**：✅ 已部署
+
+**附加修复**：
+- 修复 `server/routes/user.js` 文件损坏问题（第40-255行混入了小程序代码，已删除）
+
+**代码审查结论**：
+- ✅ 所有用户创建接口（注册、HR创建线索）都有手机号重复检查
+- ✅ 所有用户修改接口（刚修复）现在都有手机号重复检查
+- ✅ 已清理历史重复数据
+
+**数据清理**（2026-01-22）：
+软删除了3个重复手机号且无活动记录的用户：
+- `13874824770` (llliii) - 保留 `xx123456` (有交易记录)
+- `19571011109` (T^T) - 保留 `cyy5201314` (有交易记录)
+- `123` (手机号13594226812) - 保留 `feng` (有积分和大量交易)
+
+---
+
+## 2026-01-22 客户端健康管理 - 自动暂停失败客户端
+
+**功能说明**：
+- 当客户端连续多次上传失败或上传0条数据时，自动暂停对该客户端的任务分发
+- 提示该客户端可能已退出登录，需要检查
+
+**健康度规则**：
+- 连续 **3次失败** → 自动暂停任务分发
+- 上传 **0条数据** → 计为1次失败
+- 上传 **成功** → 重置失败计数，自动恢复分发
+
+**修改内容**：
+
+| 客户端 | 接口 | 说明 |
+|--------|-----|------|
+| **harvest** | `/harvest/pending` | ✅ 添加客户端健康检查 |
+| **harvest** | `/comments/submit` | ✅ 追踪上传结果 |
+| **harvest** | `/harvest/failed` | ✅ 追踪失败次数 |
+| **blacklist-scan** | `/blacklist-scan/pending` | ✅ 添加客户端健康检查 |
+| **blacklist-scan** | `/blacklist-scan/complete` | ✅ 追踪扫描结果 |
+| **discovery** | `/discovery/report` | ✅ 追踪上报结果 |
+
+**模型更新**：
+- `server/models/ClientHeartbeat.js` - 新增健康度追踪字段
+
+**管理 API**：
+- `GET /xiaohongshu/api/admin/clients/health` - 获取所有客户端健康状态
+- `POST /xiaohongshu/api/admin/clients/:clientId/resume` - 恢复客户端任务分发
+- `POST /xiaohongshu/api/admin/clients/:clientId/pause` - 手动暂停客户端
+
+**健康状态**：
+- `healthy` - 健康，正常运行
+- `warning` - 警告，连续失败2次
+- `blocked` - 已暂停，连续失败3次
+- `offline` - 离线，5分钟内无心跳
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 客户端统计 - 添加累计和今日数据展示
+
+**功能说明**：
+- 系统监控页面新增客户端详细统计显示
+- 不同类型客户端显示不同的统计数据
+- 包含今日统计和累计统计
+
+**新增统计字段**：
+
+| 客户端类型 | 今日统计 | 累计统计 |
+|-----------|---------|---------|
+| **discovery** | 发现笔记数 | 累计发现笔记数 |
+| **harvest** | 合格/采集评论数 | 累计合格/采集评论数 |
+| **blacklist-scan** | 黑名单/扫描评论数 | 累计黑名单/扫描评论数 |
+| **audit** | 完成审核数 | 累计完成审核数 |
+
+**修改内容**：
+
+| 文件 | 修改 | 说明 |
+|------|-----|------|
+| `server/models/ClientHeartbeat.js` | 新增字段 | 添加统计字段（totalNotesDiscovered, todayNotesDiscovered 等） |
+| `server/routes/client.js` | `/discovery/report` | 更新发现客户端统计 |
+| `server/routes/client.js` | `/comments/submit` | 更新采集客户端统计 |
+| `server/routes/client.js` | `/blacklist-scan/complete` | 更新黑名单扫描统计 |
+| `server/routes/admin.js` | `/admin/monitoring` | 返回客户端统计数据 |
+| `admin/src/pages/MonitoringPage.js` | 新增列 | 显示"今日统计"和"累计统计"列 |
+
+**前端显示效果**：
+- **发现客户端**: "5 笔记" / "120 笔记"
+- **采集客户端**: "3/50 合格" / "80/1500 合格" (合格数/采集数)
+- **黑名单扫描**: "2/100 黑名单" / "15/3000 黑名单" (黑名单数/扫描数)
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 客户端 - 1小时超时自动暂停
+
+**功能说明**：
+- 客户端如果超过1小时没有成功上传/上报数据，自动暂停任务分发
+- 防止失效客户端持续占用资源
+
+**超时规则**：
+- 超过 **1小时** 未成功上传 → 自动暂停
+- 成功上传后 → 自动恢复分发
+
+**修改内容**：
+
+| 客户端 | 接口 | 说明 |
+|--------|-----|------|
+| **discovery** | `/discovery/keywords` | ✅ 1小时超时检查 |
+| **harvest** | `/harvest/pending` | ✅ 1小时超时检查 |
+| **blacklist-scan** | `/blacklist-scan/pending` | ✅ 1小时超时检查 |
+
+**检查逻辑**：
+```javascript
+// 超时检查：如果超过1小时没有成功数据，自动暂停
+const TIMEOUT_HOURS = 1;
+if (client && client.lastSuccessUploadAt) {
+  const hoursSinceLastSuccess = (Date.now() - new Date(client.lastSuccessUploadAt).getTime()) / (1000 * 60 * 60);
+  if (hoursSinceLastSuccess > TIMEOUT_HOURS) {
+    // 自动暂停并返回提示
+  }
+}
+```
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-22 笔记审核 - 带教老师权限说明
+
+**权限范围**：
+- ✅ 能看到：自己名下的用户（`mentor_id = 自己`）
+- ✅ 能看到：未分配带教老师的用户（`mentor_id = null`）
+- ❌ 看不到：其他带教老师名下的用户
+
+---
+
+## 2026-01-21 短链接获取接口 - 修复查询条件覆盖问题
+
+**问题**：
+- 调用 `/fetch-one-without-short-url` 获取笔记后
+- 调用 `/batch-update-short-urls` 更新短链接
+- 再次调用 `/fetch-one-without-short-url` 返回**相同的笔记**
+
+**根本原因**：
+- JavaScript 对象中两个 `$or` 键相互覆盖
+- 第二个 `$or`（锁条件）覆盖了第一个 `$or`（短链接条件）
+- 导致 `shortUrl` 查询条件丢失，有短链接的笔记仍被返回
+
+**修复内容**：
+
+| 文件 | 行号 | 操作 |
+|------|-----|------|
+| `server/routes/client.js` | 2815-2832 | countDocuments 查询改用 `$and` 组合 |
+| `server/routes/client.js` | 2839-2854 | findOneAndUpdate 查询改用 `$and` 组合 |
+
+**修改前后对比**：
+```javascript
+// 修改前（有 bug）
+{
+  $or: [{ shortUrl: ... }],  // ← 第一个 $or
+  status: { $ne: 'rejected' },
+  $or: [{ lockedBy: ... }]   // ← 第二个 $or，覆盖第一个！
+}
+
+// 修改后（正确）
+{
+  $and: [
+    { $or: [{ shortUrl: ... }] },   // 短链接条件
+    { $or: [{ lockedBy: ... }] },   // 锁条件
+    { status: { $ne: 'rejected' } }
+  ]
+}
+```
+
+**验证结果**：
+- 第一次获取：`696476d0000000000a02bea8`
+- 更新短链接后：`shortUrl: http://xhslink.com/o/FIXED_TEST_123`
+- 第二次获取：`6969e519000000002203b464` ✅ **不同笔记**
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-21 API文档 - 添加锁机制说明
+
+**新增内容**：
+- 在 OpenAPI 文档中添加"锁机制说明（重要）"章节
+- 说明自动锁定机制防止多客户端重复处理
+- 详细说明工作流程：获取加锁 → 更新释放锁 → 超时自动释放
+
+**修改内容**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/api-docs/openapi.yaml` | 修改 | 添加锁机制文档说明 |
+
+**锁机制工作流程**：
+1. 获取时自动加锁：调用 `/fetch-one-without-short-url` 获取笔记时，系统自动锁定该笔记
+2. 更新时自动释放锁：调用 `/batch-update-short-urls` 或单条更新接口更新短链接后，系统自动释放锁
+3. 锁超时释放：如果处理失败或中断，锁会在30分钟后自动释放
+4. 防止重复获取：已锁定的笔记不会被其他客户端获取
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-21 黑名单功能 - 添加用户ID提取和主页跳转
+
+**新增功能**：
+- 评论采集时提取小红书用户链接ID（从 `data-user-id` 或 `/user/profile/{userId}` 获取）
+- 管理后台黑名单页面新增"用户主页链接ID"列
+- 添加"跳转主页"按钮，可直接跳转到小红书用户主页
+
+**修改内容**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `xiaohongshu-audit-clients/blacklist-scan-client/services/BlacklistScanService.js` | 修改 | 提取评论时同时提取 `userId` |
+| `xiaohongshu-audit-clients/harvest-client/services/CommentHarvestService.js` | 修改 | 提取评论时同时提取 `userId` |
+| `admin/src/pages/CommentBlacklist.js` | 修改 | 添加用户ID列和跳转按钮 |
+
+**用户ID说明**：
+- 格式：24位十六进制字符串（如 `66019220000000000b00c945`）
+- 来源：小红书用户主页链接 `/user/profile/{userId}`
+- 与数字小红书号（如 `42733302258`）是一一对应关系
+- 唯一且稳定，可用于黑名单去重
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-20 采集队列 - 锁定超时优化
+
+**问题**：
+- 采集客户端领取任务后没有正确释放锁定
+- 30 分钟超时太长，导致高优先级任务被占用
+- 优先级 10 的笔记应该 10 分钟采集一次，但被锁 30 分钟
+
+**修复内容**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/routes/client.js` | 修改 | 锁定超时从 30 分钟改为 10 分钟 |
+
+**修改前后对比**：
+```javascript
+// 修改前
+const lockTimeoutMinutes = 30;  // 30分钟
+
+// 修改后
+const lockTimeoutMinutes = 10;  // 10分钟，与优先级10的采集间隔一致
+```
+
+**效果**：
+- 客户端崩溃后，10 分钟后任务自动释放
+- 高优先级任务可以更及时地被重新分配
+- 减少任务堆积
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-20 采集队列 - Schema 默认值问题修复
+
+**问题**：优先级 10 的笔记显示"可采集"但没有进入采集队列
+
+**根本原因**：
+- `DiscoveredNote` Schema 中 `harvestInterval` 字段有 `default: 720`
+- Mongoose 在查询时自动填充默认值，导致采集间隔计算错误
+- 虽然显示 `harvestPriority: 10`，但实际使用 720 分钟（12小时）间隔
+
+**修复内容**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/models/DiscoveredNote.js` | 修改 | 移除 `harvestInterval` 默认值 |
+
+**采集间隔规则**（按 `harvestPriority`）：
+- 10 分 → 10 分钟
+- 5 分 → 1 小时
+- 2 分 → 6 小时
+- 1 分 → 12 小时
+
+**部署状态**：✅ 已部署，优先级 10 笔记正常进入采集队列
+
+---
+
+## 2026-01-20 搜索关键词管理 - 删除无效统计字段
+
+**背景**：搜索次数(searchCount)、发现笔记数(foundNotesCount)、最后使用时间(lastUsedAt)字段在Schema中定义，但从未有代码更新它们，属于无效字段。
+
+**修改文件**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/models/SearchKeyword.js` | 修改 | 删除 searchCount, foundNotesCount, lastUsedAt 字段 |
+| `server/routes/admin.js` | 修改 | 删除 searchCount 排序逻辑 |
+| `server/routes/client.js` | 修改 | 删除 searchCount 排序逻辑 |
+| `admin/src/pages/SearchKeywords.js` | 修改 | 删除统计列显示 |
+| `server/cleanup-keyword-fields.js` | 新建 | 数据库清理脚本（验证字段已不存在） |
+
+**删除内容**：
+
+1. **Schema字段**：searchCount, foundNotesCount, lastUsedAt
+2. **前端表格列**：搜索次数、发现笔记数、最后使用
+3. **API排序**：按 searchCount 降序排序
+
+**最终Schema结构**：
+```javascript
+{
+  keyword: String,      // 关键词（唯一）
+  category: String,     // 分类
+  status: String,       // 状态: active/inactive
+  createdAt: Date,      // 创建时间
+  updatedAt: Date       // 更新时间
+}
+```
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-20 笔记发现管理 - 筛选和分页修复
+
+**问题**：
+1. 前端使用内存过滤 `filteredNotes`，导致分页显示不正确
+2. 后端缺少 `keyword` 和 `harvestPriority` 筛选支持
+3. 分页总数与实际显示数量不符
+
+**修改文件**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/routes/client.js` | 修改 | `/discovery/list` 添加 keyword 和 harvestPriority 筛选 |
+| `admin/src/pages/DiscoveredNotes.js` | 修改 | 移除内存过滤，传递 harvestPriority 参数到后端 |
+
+**修复内容**：
+
+1. **后端新增筛选支持**：
+   - `keyword`: 模糊搜索标题、作者、搜索关键词
+   - `harvestPriority`: 按采集优先级筛选
+
+2. **前端修改**：
+   - 移除 `filteredNotes` 内存过滤逻辑
+   - 传递 `harvestPriority` 参数到后端
+   - 表格 `dataSource` 改为直接使用 `notes`
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-20 短链接审核客户端 - 审核逻辑完善
+
+**需求**：短链接审核客户端的审核逻辑需要与采集笔记客户端完全一致
+
+**修改文件**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `xiaohongshu-short-link-audit-client/services/ShortLinkAuditService.js` | 修改 | 添加时间检查（10天内）和404页面检测处理 |
+| `xiaohongshu-short-link-audit-client/services/BrowserAutomation.js` | 修改 | 添加404页面检测和时间文本提取 |
+
+**新增审核流程**（共5步）：
+
+| 步骤 | 名称 | 说明 |
+|------|------|------|
+| 1/5 | 访问短链接并提取内容 | 检测404页面、登录页面 |
+| 2/5 | 检查笔记是否已存在 | 防止重复上报 |
+| 3/5 | 检查笔记发布时间 | 只处理10天内的笔记 |
+| 4/5 | 内容审核 | 关键词检查 + AI分析 |
+| 5/5 | 上报到笔记发现管理 | 写入DiscoveredNote |
+
+**新增/更新的判断条件**：
+
+1. **404页面检测**：
+   - `页面不见了`
+   - `当前笔记暂时无法浏览`
+   - `内容不存在`
+   - `笔记已删除`
+   - 标题包含 `404`
+
+2. **时间检查（isTimeTextWithin24Hours）**：
+   - ✅ 接受：`小时前`、`分钟前`、`刚刚`、`今天`、`昨天`、`1-9天前`
+   - ❌ 拒绝：`10天前`或更多
+   - ❌ 拒绝：具体日期超过10天（240小时）
+
+**部署状态**：✅ 本地开发完成，待部署
+
+---
+
+## 2026-01-20 采集任务锁定机制
+
+**问题**：`/harvest/pending` API 缺少任务锁定机制，多个采集客户端可能同时获取相同的笔记进行采集
+
+**修改文件**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/models/DiscoveredNote.js` | 修改 | 添加 `harvestLock` 字段（clientId, lockedAt, lockedUntil） |
+| `server/routes/client.js` | 修改 | `/harvest/pending` 添加锁定逻辑 |
+| `server/routes/client.js` | 修改 | `/harvest/complete` 添加释放锁定 |
+| `server/routes/client.js` | 新增 | `/harvest/failed` 失败时释放锁定 |
+
+**锁定机制**：
+1. 超时释放：30分钟超时自动释放
+2. 原子锁定：使用 `findOneAndUpdate` 确保同一笔记只被一个客户端获取
+3. 完成释放：采集完成后释放锁定
+4. 失败释放：采集失败时释放锁定以便其他客户端重试
+
+**部署状态**：✅ 已部署
+
+---
+
+## 2026-01-20 关键词数据库化
+
+**需求**：将关键词从配置文件迁移到数据库，提供管理接口和外部访问接口
+
+**修改文件**：
+
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `server/models/SearchKeyword.js` | 新建 | 搜索关键词模型 |
+| `server/init/keywords.js` | 新建 | 关键词初始化脚本 |
+| `server/routes/client.js` | 修改 | `/discovery/keywords` 改为从数据库读取 |
+| `server/routes/client.js` | 新增 | `/public/keywords` 无需认证的公开接口 |
+| `server/routes/admin.js` | 新增 | 关键词管理 CRUD 接口 |
+
+**新增接口**：
+
+| 接口 | 方法 | 说明 |
+|------|-----|------|
+| `/xiaohongshu/api/client/discovery/keywords` | GET | 获取搜索关键词（discovery-client用） |
+| `/xiaohongshu/api/client/public/keywords` | GET | 公开接口，无需认证 |
+| `/xiaohongshu/api/admin/keywords` | GET | 分页获取关键词列表 |
+| `/xiaohongshu/api/admin/keywords/:id` | GET | 获取单个关键词 |
+| `/xiaohongshu/api/admin/keywords` | POST | 创建关键词 |
+| `/xiaohongshu/api/admin/keywords/:id` | PUT | 更新关键词 |
+| `/xiaohongshu/api/admin/keywords/:id` | DELETE | 删除关键词 |
+| `/xiaohongshu/api/admin/keywords/batch-import` | POST | 批量导入 |
+| `/xiaohongshu/api/admin/keywords/stats` | GET | 统计信息 |
+
+**数据库字段**：
+- `keyword`: 关键词（唯一索引）
+- `category`: 分类（减肥诈骗、护肤诈骗、医美诈骗、通用维权等）
+- `priority`: 优先级（1-10）
+- `status`: 状态（active/inactive）
+- `searchCount`: 搜索次数统计
+- `foundNotesCount`: 发现笔记数
+- `lastUsedAt`: 最后使用时间
+
+**部署状态**：✅ 已部署并初始化 283 个关键词
+
+**管理页面**：
+| 文件 | 操作 | 说明 |
+|------|-----|------|
+| `admin/src/pages/SearchKeywords.js` | 新建 | 搜索关键词管理页面 |
+| `admin/src/App.js` | 修改 | 添加路由 `/search-keywords` |
+| `admin/src/components/Layout.js` | 修改 | 添加菜单项 |
+
+**功能特性**：
+- 关键词列表展示（分页、搜索、筛选）
+- 添加/编辑/删除关键词
+- 批量导入关键词（支持 CSV 格式）
+- 状态切换（活跃/停用）
+- 统计数据展示（总数、活跃数、搜索次数）
+- 分类标签（减肥诈骗、护肤诈骗、医美诈骗等）
+- 优先级等级（高/中/低）
+
+---
+
 ## 2026-01-19 采集优先级分级系统
 
 **需求**：根据笔记内最新评论时间动态调整采集间隔，提高热点评论采集效率
@@ -6349,3 +9944,139 @@ if (existingReward) {
 - 将 Button 改为 `<a>` 标签 + href + target="_blank"
 - 两处：表格操作列、详情模态框
 
+
+
+### 2026-01-23 AI评论分析提示词优化
+
+**修改文件**: `server/services/aiContentAnalysisService.js`
+
+**优化内容**:
+- 新增引流识别规则：所有给建议、提醒他人、教别人的评论都归类为引流（spam）
+- 新增引流特征：像专家一样给建议、指导
+- 新增典型引流话术示例：
+  - "别被骗了，保留好订单"
+  - "记得保留聊天记录"
+  - "要注意xxx"（给建议）
+  - "身体不适优先去医院"（给建议）
+
+**测试验证**:
+评论："别被网上的伪专家忽悠，身体不适优先去医院检查。要是买了无资质产品，保留好订单、聊天记录，就算开封了也能维权退款"
+- 修改前：误判为 noise
+- 修改后：正确识别为 spam (置信度 0.95)
+
+**部署**: 已同步到服务器 wubug，PM2 服务已重启
+
+
+
+
+### 2026-01-23 新增第三方API接口（短链接管理）
+
+**修改文件**: `server/routes/client.js`
+
+**新增接口**:
+
+1. **GET /client/discovery/fetch-one-without-short-url**
+   - 功能：获取一条需要补充短链接的笔记
+   - 锁定机制：原子操作锁定30分钟，防止多客户端重复处理
+   - 响应：{ noteId, noteUrl, title, author, remaining }
+   - 支持请求头 `x-client-id` 标识客户端
+
+2. **POST /client/discovery/batch-update-short-urls**
+   - 功能：批量更新笔记短链接
+   - 请求体：{ updates: [{ noteId, shortUrl }] }
+   - 限制：单次最多100条
+   - 响应：{ total, successCount, failedCount, results }
+   - 更新成功后自动释放笔记锁定
+
+**第三方工作流程**:
+1. GET /client/discovery/keywords → 获取搜索关键词
+2. GET /client/discovery/fetch-one-without-short-url → 获取待处理笔记
+3. 第三方根据长链接找到短链接
+4. POST /client/discovery/batch-update-short-urls → 回传短链接
+
+**测试结果**: 所有API测试通过（6/6）
+
+**部署**: 已同步到服务器 wubug，PM2 服务已重启
+
+
+
+## 2026-01-31
+
+### 黑名单添加 clientId 字段
+
+**问题**：客户端调用 `/blacklist/client` API 添加黑名单时，服务端没有保存 `clientId`，导致无法区分来源。
+
+**解决**：修改 `server/routes/client.js`，在创建黑名单记录时添加 `clientId` 字段。
+
+**文件**：`server/routes/client.js`
+
+**修改前**：
+```javascript
+await CommentBlacklist.create({
+  nickname,
+  userId: '',
+  commentContent: commentContent || '',
+  reason: validReason,
+  reportCount: 1,
+  lastSeenAt: new Date()
+  // ❌ 缺少 clientId
+});
+```
+
+**修改后**：
+```javascript
+await CommentBlacklist.create({
+  nickname,
+  userId: '',
+  commentContent: commentContent || '',
+  reason: validReason,
+  reportCount: 1,
+  lastSeenAt: new Date(),
+  clientId: clientId  // ✅ 添加 clientId
+});
+```
+
+## 2026-01-31 更新服务器AI提示词
+
+**修改文件**: server/services/aiContentAnalysisService.js
+
+**更新内容**:
+- 维权类别从11类增加到12类，添加HPV类
+- 明确拒绝其他平台诈骗（闲鱼、淘宝、拼多多、京东）
+- 明确拒绝网络诈骗（刷单、杀猪盘、博彩、P2P等）
+- 核心规则置顶强调
+
+**影响**: note-delete-client 现在会正确拒绝非12个类别的维权内容
+
+## 2026-02-05
+
+### AI提示词更新后自动热加载
+
+**问题**：更新 AI 提示词后需要手动重启服务才能生效，采集客户端继续使用旧提示词。
+
+**解决**：在更新提示词 API 中添加自动调用 `reloadPrompts()`，更新后立即重新加载到内存。
+
+**文件**：`server/routes/admin.js`
+
+**修改后**：
+```javascript
+await prompt.save();
+
+// 自动重新加载提示词到内存
+try {
+  const aiContentAnalysisService = require('../services/aiContentAnalysisService');
+  await aiContentAnalysisService.reloadPrompts();
+  console.log(`🔄 [AI提示词] 已自动重新加载提示词`);
+} catch (reloadError) {
+  console.error(`⚠️ [AI提示词] 重新加载失败:`, reloadError.message);
+}
+```
+
+### 删除检测客户端优化
+
+**文件**：`xiaohongshu-audit-clients/deletion-check-client/services/NoteManagementService.js`
+
+**修改内容**：
+1. `extractNoteContent` 添加标签提取（标题、正文、标签）
+2. 移除内容长度 < 50 的跳过限制
+3. 检测 "Too many requests" 频率限制错误，直接判定为已删除

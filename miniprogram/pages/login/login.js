@@ -78,13 +78,13 @@ Page({
     });
   },
 
-  // 切换到注册页面
+  // 切换到修改账号页面
   switchToRegister: function() {
-    console.log('切换到注册页面');
+    console.log('切换到修改账号页面');
     this.setData({
       showRegister: true
     });
-    console.log('注册页面状态:', this.data.showRegister);
+    console.log('修改账号页面状态:', this.data.showRegister);
   },
 
   // 返回登录页面
@@ -177,13 +177,76 @@ Page({
     });
   },
 
-  // 用户注册
+  // 修改账号页面 - 获取手机号（使用已有的 wechat-login 接口）
+  onRegisterGetPhoneNumber: function(e) {
+    console.log('📱 修改账号页面获取手机号');
+
+    if (e.detail.errMsg === 'getPhoneNumber:ok') {
+      this.setData({ registerLoading: true });
+
+      wx.login({
+        success: (loginRes) => {
+          if (loginRes.code) {
+            const API_BASE = CONFIG.API_BASE_URL;
+            wx.request({
+              url: `${API_BASE}/xiaohongshu/api/auth/wechat-login`,
+              method: 'POST',
+              data: {
+                code: loginRes.code,
+                encryptedData: e.detail.encryptedData,
+                iv: e.detail.iv
+              },
+              success: (res) => {
+                this.setData({ registerLoading: false });
+                if (res.data.success && res.data.user && res.data.user.phone) {
+                  console.log('✅ 获取手机号成功:', res.data.user.phone);
+                  this.setData({
+                    'registerForm.phoneNumber': res.data.user.phone
+                  });
+                  wx.showToast({
+                    title: '获取成功',
+                    icon: 'success',
+                    duration: 1500
+                  });
+                } else if (res.data.message && res.data.message.includes('手机号未注册')) {
+                  // 手机号未在系统中，这是正常的，让用户继续填写其他信息
+                  console.log('ℹ️ 手机号未注册，用户需完成账号设置');
+                  // 这里不能从返回结果获取手机号，需要提示用户联系HR
+                  this.showError('该手机号尚未在系统中，请联系HR创建用户');
+                } else {
+                  console.error('获取手机号失败:', res.data.message);
+                  this.showError(res.data.message || '获取手机号失败');
+                }
+              },
+              fail: (err) => {
+                this.setData({ registerLoading: false });
+                console.error('获取手机号网络错误:', err);
+                this.showError('网络错误，请重试');
+              }
+            });
+          } else {
+            this.setData({ registerLoading: false });
+            this.showError('获取登录凭证失败');
+          }
+        },
+        fail: () => {
+          this.setData({ registerLoading: false });
+          this.showError('微信登录失败');
+        }
+      });
+    } else {
+      console.warn('用户拒绝授权手机号');
+      this.showError('需要授权手机号才能继续');
+    }
+  },
+
+  // 修改账号信息
   onRegister: function() {
     const { phoneNumber, username, nickname, password, confirmPassword, invitationCode } = this.data.registerForm;
 
     // 表单验证
     if (!phoneNumber || !username || !password) {
-      this.showError('请填写完整的注册信息');
+      this.showError('请填写完整的修改信息');
       return;
     }
 
@@ -222,27 +285,27 @@ Page({
       },
       success: (res) => {
         if (res.data.success) {
-          console.info('用户注册成功:', res.data.user.username);
+          console.info('账号信息修改成功:', res.data.user.username);
           wx.showToast({
-            title: '注册成功',
+            title: '保存成功',
             icon: 'success',
             duration: 1500
           });
-          // 注册成功后自动登录
+          // 保存成功后自动登录
           this.loginSuccess(res.data);
         } else {
-          console.error('用户注册失败:', res.data.message);
+          console.error('账号信息修改失败:', res.data.message);
 
           // 检查是否是没有手机号的错误
           if (res.data.message && res.data.message.includes('尚未在系统中注册')) {
-            this.showError('手机号为注册，请联系带教老师');
+            this.showError('手机号未在系统中存在，请联系HR创建用户');
           } else {
-            this.showError(res.data.message || '注册失败');
+            this.showError(res.data.message || '保存失败');
           }
         }
       },
       fail: (err) => {
-        console.error('用户注册网络错误:', err.errMsg);
+        console.error('网络请求错误:', err.errMsg);
         this.showError('网络错误，请重试');
       },
       complete: () => {
@@ -310,19 +373,19 @@ Page({
         } else {
           console.error('手机号授权失败:', res.data.message);
 
-          // 检查是否是没有手机号，如果是则跳转到注册页面
+          // 检查是否是没有手机号，如果是则跳转到修改账号页面
           if (res.data.message && res.data.message.includes('手机号未注册')) {
             this.setData({ loading: false }); // 重置加载状态
             wx.showModal({
-              title: '需要注册',
-              content: '该手机号尚未注册，请先完成注册',
+              title: '需要设置账号',
+              content: '该手机号尚未设置账号信息，请先完成设置',
               showCancel: false,
-              confirmText: '去注册',
+              confirmText: '去设置',
               success: (modalRes) => {
                 if (modalRes.confirm) {
                   this.setData({
                     showRegister: true,
-                    currentTab: 'account', // 切换到账号标签页显示注册表单
+                    currentTab: 'account', // 切换到账号标签页显示修改表单
                     'registerForm.phoneNumber': res.data.phoneNumber || '' // 使用后端返回的手机号预填
                   });
                 }

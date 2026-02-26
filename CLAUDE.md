@@ -1,6 +1,40 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working on code in this repository.
+
+## 快捷命令
+
+| 命令 | 说明 |
+|------|------|
+| `/sync-clients` | 同步审核客户端到服务器并自动重新打包 |
+| `/sync-clients --client audit-client` | 只同步指定客户端 |
+
+## MCP 工具
+
+| MCP | 用途 |
+|-----|------|
+| `chrome-devtools` | 浏览器自动化，用于测试小红书登录状态检测 |
+
+**配置位置**: `C:\Users\Administer\.claude\mcp.json`
+
+**使用场景**：
+- 测试 `checkIsLoggedIn()` 登录检测逻辑
+- 验证 Cookie 是否有效
+- 调试小红书页面结构变化
+
+## 服务器路径映射
+
+| URL路径 | 服务器实际路径 |
+|---------|---------------|
+| `https://www.wubug.cc/downloads/` | `/var/www/xiaohongshu-web/downloads/` |
+| `https://www.wubug.cc/downloads/main.jscript` | AutoX 采集脚本（红薯糖水） |
+| `https://www.wubug.cc/downloads/xiaohongshu-audit-clients.zip` | 审核客户端打包文件 |
+
+## 压缩格式规范
+
+- **只使用 ZIP 格式**，不要使用 TAR/TAR.GZ
+- Windows 用户更容易解压 ZIP 文件
+- 命令：`zip -r archive.zip directory/` 或 `zip archive.zip file1 file2`
 
 ## 项目概述
 
@@ -8,10 +42,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **核心功能**：
 - AI辅助的内容审核（笔记和评论）
-- 多角色用户管理（兼职、带教老师、HR、经理、财务、老板）
+- 多角色用户管理（8种角色）
 - 积分奖励和提现系统
 - 小红书账号设备管理和审核
 - 用户投诉处理
+
+## 用户角色定义
+
+系统使用基于角色的访问控制（RBAC），角色存储在 `User.role` 字段中。
+
+| 角色代码 | 显示名称 | 描述 | 可配置权限 |
+|---------|---------|------|-----------|
+| `boss` | 老板 | 最高权限，拥有所有菜单访问权限，可配置其他角色权限 | 全部菜单 |
+| `manager` | 主管 | 高级管理权限，可管理审核、内容、用户、设备、财务等 | 审核管理、内容发现、用户管理、设备管理、财务管理等 |
+| `hr` | HR | 人力管理权限，可审核和管理用户、设备 | 审核管理、AI自动审核、用户管理、设备管理 |
+| `mentor` | 带教老师 | 审核权限，可审核和管理用户、设备 | 审核管理、AI自动审核、用户管理、设备管理 |
+| `finance` | 财务 | 财务管理权限，可处理提现和财务统计 | 仪表板、审核管理、财务管理 |
+| `promoter` | 引流人员 | 评论管理权限，只能管理评论线索和黑名单 | 评论线索管理、评论黑名单 |
+| `part_time` | 兼职用户 | 最低权限，小程序端用户 | 仅小程序功能 |
+| `lead` | 线索 | 线索角色（系统内部使用） | - |
+
+**权限管理**：
+- 菜单定义存储在 `MenuDefinition` 集合中
+- 角色权限关联存储在 `RolePermission` 集合中
+- 老板可通过 `/xiaohongshu/permissions` 页面配置各角色权限
+- 修改后刷新页面即可生效，无需重新构建前端
+
+**重要：角色名称统一**
+- 代码中使用 `role` 字段（英文小写）
+- 显示时使用 `ROLE_LABELS` 映射为中文名称
+- "经理"统一称为"主管"
+- "推广人员"统一称为"引流人员"
 
 ## Claude 自动化开发流程
 
@@ -176,6 +237,15 @@ Transaction (交易)
   ├── userId → User
   ├── type (withdraw, commission)
   └── amount (金额，单位：分)
+
+CommentLead (评论线索)
+  ├── noteUrl (关联笔记)
+  └── aiAnalysis (AI分类结果)
+
+⚠️ **重要架构说明**：
+- **评论线索与积分无关**：`CommentLead` 仅保存采集的评论数据，供带教老师查看和联系
+- **审核客户端与积分无关**：audit、blacklist-scan、discovery、short-link 客户端只做内容验证，不创建 `ImageReview`，不发放积分
+- **只有小程序客资上传才发放积分**：用户在小程序上传笔记 → 创建 `ImageReview` → 带教审核通过 → 发放积分
 ```
 
 ## 重要开发规范
@@ -210,6 +280,13 @@ Transaction (交易)
 - 计算佣金必须设置封顶上限
 - 严禁在循环中执行 `User.save()`
 - 分润逻辑必须在数据库事务中运行
+
+**7. 浏览器自动化反检测规范**
+- ✅ **优先模拟人为操作**：点击、输入、滚动等，而非直接 URL 跳转
+- ❌ **避免直接 URL 访问**：特别是带参数的链接，容易被识别为机器人
+- ✅ **使用随机延迟**：操作之间添加合理延迟，模拟人类行为
+- ✅ **先访问基础页面**：再执行操作，而非直接访问深层链接
+- ✅ **逐步执行**：清空 → 输入 → 点击，而非直接设置结果
 
 ### API设计规范
 
@@ -386,6 +463,48 @@ OSS_REGION = "oss-cn-shenzhen"
 - ❌ 错误路径：`/var/www/xiaohongshu-web/admin/`
 - ✅ 正确路径：`/var/www/xiaohongshu-web/admin/public/`
 - 前端构建文件输出到 `admin/build/`，部署时必须复制到服务器的 `admin/public/` 目录
+
+### 客户端修改后的部署流程
+
+**上传 xiaohongshu-audit-clients 到服务器**：
+```bash
+# Windows
+scripts\sync-clients.bat
+
+# Linux/Mac
+bash scripts/sync-clients.sh
+```
+
+**上传 AutoX 采集脚本（红薯糖水）到服务器**：
+```bash
+# 本地路径: xiaohongshu-android-client-new/main.js
+# 上传为 main.jscript（让浏览器下载而非显示）
+scp xiaohongshu-android-client-new/main.js wubug:/var/www/xiaohongshu-web/downloads/main.jscript
+```
+
+**自动打包**：服务器上的自动打包服务会检测到文件变化，2秒内自动生成 `xiaohongshu-audit-clients.zip`。
+
+**下载地址**：
+- 审核客户端：`https://www.wubug.cc/downloads/xiaohongshu-audit-clients.zip`
+- AutoX 采集脚本：`https://www.wubug.cc/downloads/main.jscript`
+
+---
+
+**自动打包服务已安装**，无需手动打包。
+
+如果服务未安装，运行：
+```bash
+scp scripts/install-auto-pack.sh wubug:/tmp/
+ssh wubug "bash /tmp/install-auto-pack.sh"
+```
+
+**服务管理**：
+```bash
+# 查看状态
+ssh wubug "systemctl status auto-pack-clients"
+# 查看日志
+ssh wubug "journalctl -u auto-pack-clients -f"
+```
 
 ## 故障排查
 
@@ -1230,6 +1349,66 @@ pm2 restart xiaohongshu-api
 - **诊断技巧**：遇到"curl正常浏览器失败"时，优先检查CORS和OPTIONS请求
 - **端口绑定显式化**：Node.js在某些系统上默认监听IPv6，建议显式指定`127.0.0.1`
 
+### Docker MongoDB数据丢失与恢复 (2026-01-24)
+
+**问题**：Docker MongoDB容器被意外重建，导致生产数据丢失
+
+**故障现象**：
+- API返回 `MongoError: pool destroyed`
+- 数据库所有集合计数为0（users: 0, imagereviews: 0）
+- PM2显示API服务online但无法正常工作
+- PM2重启次数累计392次（历史累计）
+
+**根本原因**：
+1. Docker MongoDB容器在15:41被重建/删除
+2. 容器使用的是匿名卷（未命名），删除后数据难以找回
+3. 重建后使用新的空卷，导致数据丢失
+
+**诊断过程**：
+```bash
+# 1. 检查数据库为空
+docker exec mongo mongo --eval 'db.getSiblingDB("xiaohongshu_audit").users.count()'
+# 返回: 0 ❌
+
+# 2. 检查容器创建时间
+docker ps -a | grep mongo
+# 显示: Created 2026-01-24 15:41 (刚刚重建)
+
+# 3. 检查备份
+ls -la /root/mongo_backup/
+# 找到今天03:00的备份: xiaohongshu_audit_20260124_030001
+
+# 4. 发现Docker匿名卷包含旧数据
+docker volume ls  # 发现3个匿名卷
+# 检查卷3e768444...包含更新的数据（16:06-16:12修改）
+```
+
+**解决**：
+1. 从凌晨03:00备份恢复基础数据
+2. 发现Docker匿名卷 `3e768444769f...` 包含更新的数据
+3. 重建MongoDB容器挂载该卷：
+```bash
+docker run -d --name mongo --restart=always -p 27017:27017 \
+  -v 3e768444769f1796edcebc4f8fdecf3ba16e6fe0c6ee9c86f122ad584946d31d:/data/db \
+  mongo:4.4
+```
+
+**数据对比**：
+| 集合 | 03:00备份 | 旧卷数据 | 说明 |
+|------|----------|---------|------|
+| users | 109 | 109 | 相同 |
+| imagereviews | 1831 | 1831 | 相同 |
+| commentleads | 596 | 603 | 旧卷多7条 |
+| discoverednotes | - | 1129 | 旧卷独有 |
+
+**教训**：
+- **Docker卷必须命名**：匿名卷容器删除后极难找回，命名卷易于管理
+  - ❌ 错误：`docker run -v /data/db mongo`
+  - ✅ 正确：`docker run -v mongo_data:/data/db mongo`
+- **监控PM2重启次数**：短时间内大量重启是严重问题的信号
+- **定期备份验证**：建议每周验证备份可恢复性
+- **容器变更需谨慎**：删除/重建容器前确认数据卷挂载正确
+
 ### 通用开发经验
 
 | 问题 | 原因 | 解决方案 |
@@ -1247,6 +1426,53 @@ pm2 restart xiaohongshu-api
 ---
 
 ## 最新更新记录
+
+### 2026-02-05 AI提示词管理优化
+
+**提示词更新机制**：
+- **管理后台修改**：在 AI 提示词管理页面保存后，自动调用 `reloadPrompts()` 热更新，立即生效
+- **脚本直接修改数据库**：通过 `update-prompt-*.js` 脚本修改数据库后，需要手动热更新：
+  ```bash
+  ssh wubug "pm2 restart xiaohongshu-api"
+  ```
+- **热更新API**：`POST /xiaohongshu/api/admin/ai-prompts/reload`
+
+**提示词存储**：
+- 数据库集合：`aiprompts`
+- 服务启动时加载到内存 `aiContentAnalysisService.dbPrompts`
+- AI分析时使用内存中的提示词，避免每次查询数据库
+
+**严格提示词版本**：
+- 版本：v21
+- 只支持13个类别：减肥、医美、祛斑、祛痘、丰胸、护肤、眼袋、育发、玉石、女性调理、增高、HPV、赌石、保健品
+- 拒绝通用消费维权（苹果退款、淘宝退货、闲鱼被骗等）
+
+---
+
+### 2026-01-26 客户端Cookie登录检测
+
+**新增功能**：
+- `checkCookiesValid()` - 基于Cookie的登录状态检测
+  - 检查 `a1` Cookie（主要认证token，长度>50字符）
+  - 检查 `web_session` Cookie（会话ID）
+  - 检测URL是否被重定向到登录页
+  - 检测Cookie是否即将过期（24小时内）
+- `checkIsLoginPage()` - 优先Cookie检测，失败时回退DOM检测
+- `checkIsLoggedIn()` - 第零步增加Cookie快速检测
+
+**修改文件**：
+- `xiaohongshu-audit-clients/shared/services/BrowserAutomation.js`
+
+**客户端版本**：v1.3.1
+
+**优势**：
+| 对比项 | Cookie检测 | DOM检测 |
+|--------|-----------|---------|
+| 速度 | ~1ms | ~100-500ms |
+| 准确性 | 高（直接判断认证状态） | 中（可能误判） |
+| 维护性 | 低（Cookie变化不频繁） | 高（DOM结构变化需更新） |
+
+---
 
 ### 2026-01-07 服务器优化和数据恢复
 

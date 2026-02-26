@@ -242,30 +242,10 @@
             maxlength="50"
           />
         </view>
-        <view class="form-item">
-          <text class="form-label">账号链接</text>
-          <view class="url-input-container">
-            <input
-              class="form-input url-input"
-              value="{{editForm.accountUrl}}"
-              bindinput="onEditAccountUrlInput"
-              placeholder="请输入账号链接或粘贴分享文本"
-              confirm-type="done"
-              maxlength="500"
-            />
-            <button class="paste-btn" bindtap="pasteEditAccountUrl" size="mini">粘贴分享</button>
-          </view>
-          <view class="input-hint">
-            <text>支持小红薯分享文本自动提取链接</text>
-          </view>
-        </view>
-        <view class="form-hint">
-          <text>修改昵称需要通过AI审核验证账号真实性</text>
-        </view>
       </view>
       <view class="modal-footer">
         <button class="cancel-btn" bindtap="hideEditModal">取消</button>
-        <button class="confirm-btn" bindtap="editAccount" loading="{{editing}}">提交审核</button>
+        <button class="confirm-btn" bindtap="editAccount" loading="{{editing}}">确定</button>
       </view>
     </view>
   </view>

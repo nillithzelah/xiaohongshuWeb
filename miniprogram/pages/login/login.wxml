@@ -6,7 +6,7 @@
       <text class="logo-text">📱</text>
     </view>
     <view class="app-name">审核系统</view>
-    <view class="app-desc">本小程序仅限内部员工使用</view>
+    <view class="app-desc">本小程序仅限内部员工使用，已进行账号鉴权验证</view>
   </view>
 
   <!-- 主要内容区域 -->
@@ -33,8 +33,8 @@
       </button>
 
       <view class="switch-hint">
-        <text>还没有账号？</text>
-        <text class="link" bindtap="switchToRegister">立即注册</text>
+        <text>需要修改账号？</text>
+        <text class="link" bindtap="switchToRegister">修改账号</text>
       </view>
     </view>
 
@@ -76,28 +76,36 @@
       </button>
 
       <view class="switch-hint">
-        <text>还没有账号？</text>
-        <text class="link" bindtap="switchToRegister">立即注册</text>
+        <text>需要修改账号？</text>
+        <text class="link" bindtap="switchToRegister">修改账号</text>
       </view>
     </view>
 
-    <!-- 注册区域 -->
+    <!-- 修改账号区域 -->
     <view class="register-section" wx:if="{{showRegister}}">
       <view class="register-header">
       <view class="back-btn" bindtap="backToLogin">←</view>
-      <text class="register-title">注册账号</text>
+      <text class="register-title">修改账号信息</text>
     </view>
 
+    <!-- 手机号：只能通过微信授权获取 -->
     <view class="form-group">
       <input
-        class="form-input"
+        class="form-input phone-input"
         type="number"
-        placeholder="手机号（必须已在系统中存在）"
+        placeholder="点击右侧按钮获取手机号"
         placeholder-style="color: rgba(255, 255, 255, 0.8);"
         value="{{registerForm.phoneNumber}}"
-        bindinput="onRegisterInput"
-        data-field="phoneNumber"
+        disabled="{{true}}"
       />
+      <button
+        class="get-phone-btn"
+        open-type="getPhoneNumber"
+        bindgetphonenumber="onRegisterGetPhoneNumber"
+        disabled="{{registerLoading}}"
+      >
+        {{registerForm.phoneNumber ? '重新获取' : '获取'}}
+      </button>
     </view>
 
     <view class="form-group">
@@ -168,7 +176,7 @@
       bindtap="onRegister"
       disabled="{{registerLoading}}"
     >
-      <text>{{registerLoading ? '注册中...' : '注册'}}</text>
+      <text>{{registerLoading ? '保存中...' : '保存'}}</text>
     </button>
     </view>
 

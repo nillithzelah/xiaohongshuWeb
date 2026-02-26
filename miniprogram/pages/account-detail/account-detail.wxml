@@ -34,23 +34,6 @@
       </view>
     </view>
 
-    <!-- 积分号信息 -->
-    <view class="info-card">
-      <view class="card-header">
-        <text class="card-title">积分号信息</text>
-      </view>
-      <view class="info-list">
-        <view class="info-item">
-          <text class="info-label">积分号Z</text>
-          <text class="info-value">{{maskedIntegralZ}}</text>
-        </view>
-        <view class="info-item">
-          <text class="info-label">积分号W</text>
-          <text class="info-value">{{maskedIntegralW}}</text>
-        </view>
-      </view>
-    </view>
-
     <!-- 导师信息 -->
     <view class="info-card">
       <view class="card-header">

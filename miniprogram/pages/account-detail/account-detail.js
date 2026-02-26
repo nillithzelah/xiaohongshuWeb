@@ -10,8 +10,6 @@ const API_CONFIG = {
 Page({
   data: {
     userInfo: null,
-    maskedIntegralZ: '暂无',
-    maskedIntegralW: '暂无',
     mentorName: '暂无',
     parentName: '暂无',
     invitationCode: '暂无',
@@ -85,8 +83,6 @@ Page({
           })
           this.setData({
             userInfo: user,
-            maskedIntegralZ: this.maskString(user.integral_z),
-            maskedIntegralW: this.maskString(user.integral_w),
             mentorName: user.mentor ? (user.mentor.nickname || user.mentor.username) : '暂无',
             parentName: user.parent ? (user.parent.nickname || user.parent.username) : '暂无'
           })
