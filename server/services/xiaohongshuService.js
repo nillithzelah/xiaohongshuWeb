@@ -2,7 +2,6 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const CommentVerificationService = require('./CommentVerificationService');
-const cookiePoolService = require('./CookiePoolService');
 const rateLimiter = require('./RateLimiter');
 const { KEYWORD_CONFIGS } = require('../config/keywords');
 // 注意：不能在顶部导入asyncAiReviewService，否则会形成循环依赖
@@ -35,26 +34,18 @@ class XiaohongshuService {
   }
 
   /**
-   * 获取Cookie（从Cookie池轮询）
+   * 获取Cookie（直接使用环境变量）
    */
   async getCookie() {
-    try {
-      // 优先使用Cookie池，如果没有则使用环境变量
-      const cookieFromPool = await cookiePoolService.getNextCookie();
-      if (cookieFromPool && cookieFromPool.cookie) {
-        return cookieFromPool.cookie;
-      }
-      return process.env.XIAOHONGSHU_COOKIE || '';
-    } catch (error) {
-      console.error('获取Cookie失败:', error);
-      return process.env.XIAOHONGSHU_COOKIE || '';
-    }
+    return process.env.XIAOHONGSHU_COOKIE || '';
   }
 
   /**
    * 验证小红书笔记链接
    * @param {string} noteUrl - 小红书笔记链接
    * @returns {Promise<Object>} 验证结果
+   *
+   * 修复：短链接不需要Cookie，通过页面标题即可判断笔记是否存在
    */
   async validateNoteUrl(noteUrl) {
     try {
@@ -77,6 +68,9 @@ class XiaohongshuService {
         };
       }
 
+      // 判断是否是短链接
+      const isShortLink = noteUrl.includes('xhslink.com');
+
       // 3. 尝试访问笔记页面
       const pageResult = await this.checkNotePage(noteUrl);
       if (!pageResult.accessible) {
@@ -86,7 +80,17 @@ class XiaohongshuService {
         };
       }
 
-      // 4. 检查笔记状态（是否存在、是否公开等）
+      // 4. 短链接：通过页面标题已经判断了笔记是否存在，不需要额外检查
+      if (isShortLink) {
+        console.log('✅ [短链接验证] 页面可访问，笔记存在');
+        return {
+          valid: true,
+          noteId,
+          reason: '短链接验证通过（无需Cookie）'
+        };
+      }
+
+      // 5. 完整链接：需要检查笔记状态（可能需要Cookie）
       const noteStatus = await this.getNoteStatus(noteId, noteUrl);
       if (!noteStatus.exists) {
         // 如果是Cookie失效导致的问题，返回特殊标记让持续检查可以重试
@@ -106,7 +110,7 @@ class XiaohongshuService {
         };
       }
 
-      // 5. 基础审核通过
+      // 6. 基础审核通过
       return {
         valid: true,
         noteId,
@@ -325,7 +329,8 @@ class XiaohongshuService {
 
   /**
    * 检查笔记页面是否可访问
-   * 优化：先不带Cookie访问（公开笔记不需要），失败后再带Cookie重试
+   *
+   * 修复：短链接不需要Cookie，直接访问即可
    */
   async checkNotePage(url) {
     try {
@@ -340,16 +345,22 @@ class XiaohongshuService {
         };
       }
 
-      // 第一次尝试：不带Cookie访问（公开笔记和短链接不需要Cookie）
-      let response = await this._tryAccessPage(url, false);
+      // 判断是否是短链接
+      const isShortLink = url.includes('xhslink.com');
 
-      // 如果不带Cookie访问失败，且是因为需要登录，则带Cookie重试
-      if (!response.accessible && response.requiresLogin) {
-        console.log('🔄 [笔记访问] 不带Cookie访问需要登录，尝试带Cookie访问');
-        response = await this._tryAccessPage(url, true);
+      if (isShortLink) {
+        // 短链接不需要Cookie，直接访问
+        console.log('🔗 [笔记访问] 短链接，不需要Cookie');
+        return await this._tryAccessPage(url, false);
+      } else {
+        // 完整链接可能需要Cookie
+        let response = await this._tryAccessPage(url, false);
+        if (!response.accessible && response.requiresLogin) {
+          console.log('🔄 [笔记访问] 不带Cookie访问需要登录，尝试带Cookie访问');
+          response = await this._tryAccessPage(url, true);
+        }
+        return response;
       }
-
-      return response;
 
     } catch (error) {
       console.error('页面访问失败:', error.message);
@@ -362,12 +373,18 @@ class XiaohongshuService {
 
   /**
    * 尝试访问页面（可选择是否带Cookie）
+   *
+   * 修复：短链接不需要Cookie，页面中的"登录"文字是导航栏元素，不表示需要登录
+   * 判断标准：页面标题包含"页面不见了"或"404"才说明笔记不存在
    */
   async _tryAccessPage(url, withCookie) {
     try {
       const requestHeaders = { ...this.headers };
 
-      if (withCookie) {
+      // 检查是否是短链接（短链接不需要Cookie）
+      const isShortLink = url.includes('xhslink.com');
+
+      if (withCookie && !isShortLink) {
         const cookie = await this.getCookie();
         if (cookie) {
           requestHeaders.Cookie = cookie;
@@ -388,45 +405,35 @@ class XiaohongshuService {
         };
       }
 
-      // 检查页面内容是否包含笔记相关信息
+      // 检查页面标题判断笔记是否存在
       const $ = cheerio.load(response.data);
       const title = $('title').text();
-      const pageData = response.data.toLowerCase();
 
-      // 检测是否是登录页面
-      const loginPatterns = ['登录后推荐', '扫码登录', '请先登录', '登录后即可查看'];
-      const hasLoginPattern = loginPatterns.some(p => pageData.includes(p.toLowerCase()));
-
-      if (hasLoginPattern && !withCookie) {
-        // 不带Cookie时检测到登录页面，标记需要重试
+      // 页面标题包含"页面不见了"或"404"，说明笔记不存在
+      if (title && (title.includes('页面不见了') || title.includes('404') || title.includes('暂时无法浏览'))) {
         return {
           accessible: false,
-          requiresLogin: true
+          reason: '笔记不存在或已被删除'
         };
       }
 
-      // 如果页面标题包含"小红书"或笔记相关信息，说明页面正常
-      if (title && (title.includes('小红书') || title.includes('笔记'))) {
+      // 页面标题正常，说明笔记存在
+      // 短链接的标题格式："笔记标题 - 小红书"
+      if (title && title.includes('小红书')) {
         return {
           accessible: true,
-          title: title
-        };
-      }
-
-      // 检查是否是404页面或错误页面
-      if (response.data.includes('404') || response.data.includes('笔记不存在')) {
-        return {
-          accessible: false,
-          reason: '笔记不存在'
+          title: title,
+          noteExists: true
         };
       }
 
       return {
-        accessible: true
+        accessible: true,
+        noteExists: true
       };
 
     } catch (error) {
-      // 网络错误，可能是需要Cookie
+      // 网络错误
       if (error.response && error.response.status === 403 && !withCookie) {
         return {
           accessible: false,

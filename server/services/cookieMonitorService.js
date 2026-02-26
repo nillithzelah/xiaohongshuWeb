@@ -2,14 +2,13 @@
 const axios = require('axios');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const simpleCookiePool = require('./SimpleCookiePool');
 
 puppeteer.use(StealthPlugin());
 
 class CookieMonitorService {
   constructor() {
-    // 优先从Cookie池读取Cookie，其次从环境变量读取
-    this.cookie = simpleCookiePool.getCookieString() || process.env.XIAOHONGSHU_COOKIE || '';
+    // 直接从环境变量读取Cookie
+    this.cookie = process.env.XIAOHONGSHU_COOKIE || '';
     this.testUrl = 'https://www.xiaohongshu.com/explore/695b5cb00000000009038538';
     this.checkInterval = 6 * 60 * 60 * 1000; // 每6小时检查一次
     this.warningThreshold = 24 * 60 * 60 * 1000; // 提前24小时警告
@@ -47,35 +46,20 @@ class CookieMonitorService {
   init() {
     // 解析Cookie创建时间
     this.parseCookieCreateTime();
-    
+
     // 启动定时检查
     this.startMonitoring();
-    
+
     console.log('🍪 Cookie监控服务已启动');
     console.log(`检查间隔: ${this.checkInterval / 3600000}小时`);
     console.log(`警告阈值: ${this.warningThreshold / 3600000}小时`);
   }
 
   /**
-   * 解析Cookie创建时间（从Cookie池获取）
+   * 解析Cookie创建时间（从环境变量Cookie解析）
    */
   parseCookieCreateTime() {
-    // 从Cookie池获取第一个可用的Cookie信息
-    const poolCookies = simpleCookiePool.cookies || [];
-    if (poolCookies.length > 0) {
-      const firstCookie = poolCookies[0];
-      if (firstCookie.loadts) {
-        this.cookieCreateTime = new Date(firstCookie.loadts);
-        this.cookieAge = Date.now() - firstCookie.loadts;
-
-        console.log(`📅 Cookie池创建时间: ${this.cookieCreateTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
-        console.log(`📊 Cookie池已使用: ${Math.floor(this.cookieAge / 3600000)}小时`);
-        console.log(`📊 Cookie池数量: ${poolCookies.length}个`);
-        return;
-      }
-    }
-
-    // 回退到解析当前Cookie字符串
+    // 解析当前Cookie字符串
     const cookies = this.cookie.split('; ').reduce((acc, cookie) => {
       const [key, value] = cookie.split('=');
       if (key && value) {
@@ -100,7 +84,7 @@ class CookieMonitorService {
   startMonitoring() {
     // 立即执行一次检查
     this.checkCookieValidity();
-    
+
     // 定时检查
     setInterval(() => {
       this.checkCookieValidity();
@@ -108,33 +92,31 @@ class CookieMonitorService {
   }
 
   /**
-   * 检查Cookie有效性（增强版：使用Puppeteer检测登录页面）
+   * 检查Cookie有效性（轻量级：仅使用HTTP检查）
+   * 注：Chrome Puppeteer 检查已禁用，避免资源浪费和孤儿进程风险
    */
   async checkCookieValidity() {
     console.log('🔍 开始检查Cookie有效性...');
     let browser = null;
 
     try {
-      // 方法1：快速HTTP检查
+      // 仅使用HTTP检查（快速、轻量、足够检测Cookie失效）
       const httpValid = await this.checkWithHttp();
-
-      // 方法2：深度Puppeteer检查（检测登录页面）
-      const pageCheckResult = await this.checkWithPuppeteer(browser);
 
       this.lastCheckTime = new Date();
       this.totalChecks++;
 
-      // 综合判断
-      const isValid = httpValid && pageCheckResult.isValid;
+      // 仅使用HTTP检查结果（401/403表示Cookie失效）
+      const isValid = httpValid;
       this.isCookieValid = isValid;
 
       // 记录历史
       this.checkHistory.push({
         time: this.lastCheckTime,
         isValid: isValid,
-        isLoginPage: pageCheckResult.isLoginPage,
-        hasComments: pageCheckResult.hasComments,
-        method: 'http+puppeteer'
+        isLoginPage: false,  // HTTP检查不检测登录页
+        hasComments: false,  // HTTP检查不检测评论
+        method: 'http-only'
       });
 
       // 只保留最近50条记录
@@ -148,18 +130,10 @@ class CookieMonitorService {
       // 输出结果
       if (isValid) {
         this.successCount++;
-        console.log('✅ Cookie有效');
-        console.log(`📊 页面类型: ${pageCheckResult.isLoginPage ? '登录页' : '正常内容页'}`);
-        console.log(`📝 评论检测: ${pageCheckResult.hasComments ? '找到评论' : '未找到评论'}`);
+        console.log('✅ Cookie有效 (HTTP检查通过)');
       } else {
-        console.log('❌ Cookie已失效或即将失效');
-        if (pageCheckResult.isLoginPage) {
-          console.log('🚨 检测到登录页面，Cookie已失效');
-          this.sendAlert('Cookie已失效：检测到登录页面，请立即更新！');
-        } else {
-          console.log('⚠️ Cookie可能部分失效');
-          this.sendAlert('Cookie可能部分失效，建议更新');
-        }
+        console.log('❌ Cookie已失效 (HTTP返回401/403)');
+        this.sendAlert('Cookie已失效：HTTP检查失败，请立即更新！');
       }
 
       // 检查Cookie使用时长
@@ -366,7 +340,7 @@ class CookieMonitorService {
   sendAlert(message) {
     console.log(`🚨 警告: ${message}`);
     console.log(`📅 时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
-    
+
     // TODO: 可以集成邮件、短信或钉钉通知
     // 这里只是控制台输出，实际使用时可以替换为真实的通知方式
   }
@@ -375,41 +349,23 @@ class CookieMonitorService {
    * 获取Cookie状态（增强版）
    */
   getStatus() {
-    // 从Cookie池获取 Cookie 基础信息
-    const poolCookies = simpleCookiePool.cookies || [];
-    const poolStatus = simpleCookiePool.getStatus ? simpleCookiePool.getStatus() : {};
-
-    // 使用池中第一个Cookie的时间信息
-    let configAgeHours = 0;
-    let estimatedExpiry = 72; // 默认72小时
-    let loadts = Date.now();
-    let updatedAt = new Date().toISOString();
-
-    if (poolCookies.length > 0) {
-      const firstCookie = poolCookies[0];
-      loadts = firstCookie.loadts || Date.now();
-      estimatedExpiry = firstCookie.estimatedExpiry || 72;
-      configAgeHours = (Date.now() - loadts) / (1000 * 60 * 60);
-    } else if (this.cookieCreateTime) {
-      loadts = this.cookieCreateTime.getTime();
-      configAgeHours = (Date.now() - loadts) / (1000 * 60 * 60);
-    }
-
-    const configNeedsUpdate = configAgeHours > estimatedExpiry * 0.8;
+    const loadts = this.cookieCreateTime ? this.cookieCreateTime.getTime() : Date.now();
+    const configAgeHours = this.cookieCreateTime ? (Date.now() - loadts) / (1000 * 60 * 60) : 0;
+    const estimatedExpiry = 72; // 默认72小时
 
     return {
-      // Cookie池状态
+      // Cookie配置状态
       config: {
-        updatedAt: updatedAt,
+        updatedAt: new Date().toISOString(),
         loadts: loadts,
         loadDate: new Date(loadts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
         ageHours: Math.floor(configAgeHours),
         ageFormatted: `${Math.floor(configAgeHours)}小时${Math.floor((configAgeHours % 1) * 60)}分钟`,
         estimatedExpiry: estimatedExpiry,
-        needsUpdate: configNeedsUpdate,
+        needsUpdate: configAgeHours > estimatedExpiry * 0.8,
         isExpired: configAgeHours >= estimatedExpiry,
-        poolSize: poolCookies.length,
-        poolEnabled: poolCookies.filter(c => c.enabled !== false).length
+        poolSize: 1,
+        poolEnabled: 1
       },
       // 监控服务状态
       monitoring: {
