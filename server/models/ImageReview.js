@@ -1,5 +1,14 @@
 const mongoose = require('mongoose');
 
+// 导入常量
+const {
+  IMAGE_TYPES,
+  IMAGE_TYPE_LIST,
+  IMAGE_TYPE_PRICES,
+  REVIEW_STATUS_LIST,
+  DEVICE_STATUS_LIST
+} = require('../../shared/constants');
+
 const imageReviewSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -19,7 +28,7 @@ const imageReviewSchema = new mongoose.Schema({
   },
   imageType: {
     type: String,
-    enum: ['customer_resource', 'note', 'comment'],
+    enum: IMAGE_TYPE_LIST,
     required: true
   },
   // 支持多图MD5：将单图MD5改为数组
@@ -37,13 +46,8 @@ const imageReviewSchema = new mongoose.Schema({
     type: Number,
     required: true,
     default: function() {
-      // 根据图片类型设置默认价格
-      const priceMap = {
-        'customer_resource': 10,
-        'note': 8,
-        'comment': 3
-      };
-      return priceMap[this.imageType] || 0;
+      // 根据图片类型设置默认价格（使用常量配置）
+      return IMAGE_TYPE_PRICES[this.imageType] || 0;
     }
   },
   snapshotCommission1: {
@@ -111,11 +115,6 @@ const imageReviewSchema = new mongoose.Schema({
       }]
     }
   },
-  // 第一次审核失败原因（用于第二次审核失败时保持一致的原因描述）
-  firstReviewFailureReason: {
-    type: String,
-    default: null
-  },
   // 本地客户端处理锁定（防止多设备重复处理）
   processingLock: {
     clientId: String,      // 客户端唯一标识
@@ -125,8 +124,8 @@ const imageReviewSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'processing', 'ai_approved', 'mentor_approved', 'manager_rejected', 'manager_approved', 'finance_processing', 'completed', 'rejected', 'client_verification_pending', 'client_verification_failed'],
-    default: 'pending'
+    enum: REVIEW_STATUS_LIST,
+    default: REVIEW_STATUS_LIST[0] // pending
   },
   // 客户端验证尝试信息（用于本地客户端验证流程）
   clientVerification: {
@@ -140,6 +139,13 @@ const imageReviewSchema = new mongoose.Schema({
       success: Boolean,
       verified: Boolean,
       comment: String,
+      reason: String,         // 驳回原因（关键词+AI+评论验证）
+      contentAudit: {        // 内容审核结果
+        step: String,        // 审核步骤
+        keywordReason: String, // 关键词检查原因
+        aiReason: String,    // AI审核原因
+        passed: Boolean      // 是否通过
+      },
       verifiedAt: Date,
       screenshotUrl: String
     },
@@ -147,6 +153,13 @@ const imageReviewSchema = new mongoose.Schema({
       success: Boolean,
       verified: Boolean,
       comment: String,
+      reason: String,         // 驳回原因（关键词+AI+评论验证）
+      contentAudit: {        // 内容审核结果
+        step: String,        // 审核步骤
+        keywordReason: String, // 关键词检查原因
+        aiReason: String,    // AI审核原因
+        passed: Boolean      // 是否通过
+      },
       verifiedAt: Date,
       screenshotUrl: String
     },
@@ -183,7 +196,7 @@ const imageReviewSchema = new mongoose.Schema({
     accountName: String,
     status: {
       type: String,
-      enum: ['online', 'offline', 'protected', 'frozen', 'reviewing']
+      enum: DEVICE_STATUS_LIST
     },
     influence: {
       type: [String],
@@ -200,7 +213,7 @@ const imageReviewSchema = new mongoose.Schema({
     action: {
       type: String,
       enum: ['submit', 'mentor_pass', 'mentor_reject', 'manager_approve', 'manager_reject', 'finance_process', 'ai_auto_approved', 'ai_auto_rejected', 'daily_check_passed', 'daily_check_failed', 'note_deleted', 'points_reward', 'commission_reward', 'local_client_passed', 'local_client_rejected',
-        'review_start', 'review_delay', 'review_wait_complete', 'page_content_extracted', 'keyword_check', 'ai_content_analysis', 'await_client_verification', 'keyword_check_failed', 'ai_content_analysis_failed', 'system_error_rejected', 'skip_server_audit']
+        'skip_server_audit', 'review_start', 'review_wait_complete']  // 添加旧值以兼容历史数据
     },
     comment: String, // 操作意见
     timestamp: {

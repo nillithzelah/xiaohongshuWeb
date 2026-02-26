@@ -117,44 +117,89 @@ router.put('/assign-mentor/:leadId', authenticateToken, requireRole(['manager', 
     const Device = require('../models/Device');
 
     if (leadUser.xiaohongshuAccounts && leadUser.xiaohongshuAccounts.length > 0) {
+      // 优化：批量操作，避免 N+1 查询
+      const updateData = {
+        assignedUser: leadUser._id,
+        mentor_id: mentor_id,
+        updatedAt: new Date()
+      };
+
+      // 收集需要更新的设备 ID 和需要查找的昵称
+      const deviceIdsToUpdate = [];
+      const nicknamesToFind = [];
+      const accountIndexMap = new Map(); // 映射索引到设备
+
       for (let i = 0; i < leadUser.xiaohongshuAccounts.length; i++) {
         const account = leadUser.xiaohongshuAccounts[i];
-
-        // 如果已经有设备ID，说明HR创建时已创建设备，直接更新设备信息
         if (account.deviceId) {
-          await Device.findByIdAndUpdate(account.deviceId, {
-            assignedUser: leadUser._id,
-            mentor_id: mentor_id,
-            updatedAt: new Date()
-          });
+          deviceIdsToUpdate.push(account.deviceId);
+          accountIndexMap.set(i, { deviceId: account.deviceId });
         } else {
-          // 如果没有设备ID（兼容旧数据），按昵称查找设备并更新
-          const existingDevice = await Device.findOne({ accountName: account.nickname.trim() });
-          if (existingDevice) {
-            await Device.findByIdAndUpdate(existingDevice._id, {
-              assignedUser: leadUser._id,
-              mentor_id: mentor_id,
-              updatedAt: new Date()
-            });
-            // 更新账号关联
-            leadUser.xiaohongshuAccounts[i].deviceId = existingDevice._id;
-          } else {
-            // 如果设备不存在，创建新设备（兜底逻辑）
-            const device = new Device({
-              accountName: account.nickname,  // 小红书昵称
-              accountId: account.account,     // 小红书账号ID
-              assignedUser: leadUser._id,
-              mentor_id: mentor_id,
-              status: 'online',
-              influence: ['new'],
-              createdBy: req.user._id
-            });
-            await device.save();
-            leadUser.xiaohongshuAccounts[i].deviceId = device._id;
+          nicknamesToFind.push(account.nickname.trim());
+          accountIndexMap.set(i, { nickname: account.nickname.trim() });
+        }
+      }
+
+      // 批量更新已有设备 ID 的设备
+      if (deviceIdsToUpdate.length > 0) {
+        await Device.updateMany(
+          { _id: { $in: deviceIdsToUpdate } },
+          updateData
+        );
+      }
+
+      // 批量查找没有设备 ID 的账号对应的设备
+      const devicesToCreate = [];
+      if (nicknamesToFind.length > 0) {
+        const existingDevices = await Device.find({ accountName: { $in: nicknamesToFind } }).select('_id accountName');
+        const existingDeviceMap = new Map(existingDevices.map(d => [d.accountName, d._id]));
+
+        // 更新或创建设备
+        for (let i = 0; i < leadUser.xiaohongshuAccounts.length; i++) {
+          const account = leadUser.xiaohongshuAccounts[i];
+          if (!account.deviceId) {
+            const trimmedNickname = account.nickname.trim();
+            const existingId = existingDeviceMap.get(trimmedNickname);
+
+            if (existingId) {
+              // 批量更新现有设备（已在上面批量处理，这里只需记录ID）
+              account.deviceId = existingId;
+            } else {
+              // 记录需要创建的设备
+              devicesToCreate.push({
+                accountName: trimmedNickname,
+                accountId: account.account,
+                assignedUser: leadUser._id,
+                mentor_id: mentor_id,
+                status: 'online',
+                influence: ['new'],
+                createdBy: req.user._id
+              });
+            }
           }
         }
 
-        // 更新账号状态
+        // 批量创建新设备
+        if (devicesToCreate.length > 0) {
+          const createdDevices = await Device.insertMany(devicesToCreate);
+          const createdDeviceMap = new Map(createdDevices.map(d => [d.accountName, d._id]));
+
+          // 更新账号关联
+          for (let i = 0; i < leadUser.xiaohongshuAccounts.length; i++) {
+            const account = leadUser.xiaohongshuAccounts[i];
+            if (!account.deviceId) {
+              const trimmedNickname = account.nickname.trim();
+              const newId = createdDeviceMap.get(trimmedNickname);
+              if (newId) {
+                account.deviceId = newId;
+              }
+            }
+          }
+        }
+      }
+
+      // 更新账号状态
+      for (let i = 0; i < leadUser.xiaohongshuAccounts.length; i++) {
         leadUser.xiaohongshuAccounts[i].status = 'assigned';
       }
 

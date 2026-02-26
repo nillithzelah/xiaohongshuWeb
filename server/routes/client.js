@@ -18,8 +18,8 @@ const submitDeduplicationService = require('../services/submitDeduplicationServi
 const TimeUtils = require('../utils/timeUtils');
 const router = express.Router();
 
-// 创建 AI 分析服务实例
-const aiAnalysis = new aiContentAnalysisService();
+// 使用 AI 分析服务实例（已经是单例，不需要 new）
+const aiAnalysis = aiContentAnalysisService;
 
 // 验证 ObjectId 格式
 function isValidObjectId(id) {
@@ -333,7 +333,16 @@ router.post('/task/submit', authenticateToken, async (req, res) => {
     }
 
     // 如果找不到真实设备，且是开发环境，允许使用模拟设备
+    // 【安全修复】增加开发者角色检查，防止滥用
     if (!device && process.env.NODE_ENV !== 'production' && deviceId.startsWith('device_')) {
+      const developerRoles = ['boss', 'manager', 'hr', 'mentor'];
+      if (!developerRoles.includes(req.user.role)) {
+        return res.status(403).json({
+          success: false,
+          message: '无权使用测试设备'
+        });
+      }
+
       // 根据设备ID生成对应的模拟设备信息，与小程序保持一致
       const deviceNumber = deviceId.split('_')[1] || '001';
       device = {
@@ -791,7 +800,16 @@ router.post('/tasks/batch-submit', authenticateToken, async (req, res) => {
       }
 
       // 如果找不到真实设备，且是开发环境，允许使用模拟设备
+      // 【安全修复】增加开发者角色检查，防止滥用
       if (!device && process.env.NODE_ENV !== 'production' && deviceId.startsWith('device_')) {
+        const developerRoles = ['boss', 'manager', 'hr', 'mentor'];
+        if (!developerRoles.includes(req.user.role)) {
+          return res.status(403).json({
+            success: false,
+            message: '无权使用测试设备'
+          });
+        }
+
         // 根据设备ID生成对应的模拟设备信息，与小程序保持一致
         const deviceNumber = deviceId.split('_')[1] || '001';
         device = {
@@ -2386,6 +2404,7 @@ router.post('/discovery/report', async (req, res) => {
 /**
  * 获取已发现的笔记列表（可选，用于管理后台）
  * GET /xiaohongshu/api/client/discovery/list
+ * 支持筛选：status, harvestPriority, hasShortUrl, noteStatus, canHarvest, keyword
  */
 router.get('/discovery/list', async (req, res) => {
   try {
@@ -2393,13 +2412,133 @@ router.get('/discovery/list', async (req, res) => {
       status,
       limit = 50,
       skip = 0,
-      converted
+      converted,
+      harvestPriority,
+      hasShortUrl,
+      noteStatus,
+      canHarvest,
+      keyword
     } = req.query;
 
     const query = {};
 
+    // 基础状态筛选
     if (status) {
       query.status = status;
+    }
+
+    // 采集优先级筛选
+    if (harvestPriority) {
+      query.harvestPriority = parseInt(harvestPriority);
+    }
+
+    // 短链接筛选
+    if (hasShortUrl === 'yes') {
+      // 使用 $and 确保同时满足存在且非空
+      query.$and = query.$and || [];
+      query.$and.push({
+        shortUrl: { $exists: true, $nin: ['', null] }
+      });
+    } else if (hasShortUrl === 'no') {
+      query.$or = [
+        { shortUrl: { $exists: false } },
+        { shortUrl: null },
+        { shortUrl: '' }
+      ];
+    }
+
+    // 删除状态筛选
+    if (noteStatus) {
+      query.noteStatus = noteStatus;
+    }
+
+    // 使用数组收集所有需要 $and 组合的条件，避免 $or 被覆盖
+    const andConditions = [];
+
+    // 处理 hasShortUrl === 'no' 的情况（需要在 keyword 之前处理）
+    if (hasShortUrl === 'no' && !keyword) {
+      query.$or = [
+        { shortUrl: { $exists: false } },
+        { shortUrl: null },
+        { shortUrl: '' }
+      ];
+    }
+
+    // 关键词搜索（标题、作者、长链接、短链接）
+    if (keyword) {
+      const { escapeRegExp } = require('../utils/security');
+      const escapedKeyword = escapeRegExp(keyword);
+      const keywordRegex = { $regex: escapedKeyword, $options: 'i' };
+
+      // 收集关键词搜索条件
+      const keywordCondition = {
+        $or: [
+          { title: keywordRegex },
+          { author: keywordRegex },
+          { noteUrl: keywordRegex },
+          { shortUrl: keywordRegex }
+        ]
+      };
+
+      // 如果同时有 hasShortUrl='no'，需要组合条件
+      if (hasShortUrl === 'no') {
+        andConditions.push(
+          { $or: [{ shortUrl: { $exists: false } }, { shortUrl: null }, { shortUrl: '' }] },
+          keywordCondition
+        );
+      } else {
+        andConditions.push(keywordCondition);
+      }
+    }
+
+    // 可采集筛选（根据采集间隔和上次采集时间计算）
+    if (canHarvest === 'yes' || canHarvest === 'no') {
+      // 获取优先级间隔配置
+      const SystemConfig = require('../models/SystemConfig');
+      const configDoc = await SystemConfig.findOne({ key: 'harvest_priority_intervals' });
+      const intervals = configDoc?.value || { 10: 10, 5: 60, 2: 360, 1: 1440 };
+
+      // 构建可采集条件
+      const now = new Date();
+      const canHarvestConditions = [];
+
+      // 遍历每个优先级，构建对应的时间条件
+      for (const [priority, minutes] of Object.entries(intervals)) {
+        const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
+        canHarvestConditions.push({
+          harvestPriority: parseInt(priority),
+          $or: [
+            { commentsHarvestedAt: { $exists: false } },
+            { commentsHarvestedAt: null },
+            { commentsHarvestedAt: { $lte: cutoffTime } }
+          ]
+        });
+      }
+
+      // 添加默认优先级（1）的条件，用于没有设置优先级的笔记
+      const defaultCutoff = new Date(now.getTime() - 1440 * 60 * 1000);
+      canHarvestConditions.push({
+        harvestPriority: { $exists: false },
+        $or: [
+          { commentsHarvestedAt: { $exists: false } },
+          { commentsHarvestedAt: null },
+          { commentsHarvestedAt: { $lte: defaultCutoff } }
+        ]
+      });
+
+      if (canHarvest === 'yes') {
+        // 可采集：满足任一优先级的时间条件，添加到 andConditions
+        andConditions.push({ $or: canHarvestConditions });
+      } else if (canHarvest === 'no') {
+        // 排队中：不满足任何优先级的时间条件
+        andConditions.push({ $nor: canHarvestConditions });
+      }
+    }
+
+    // 统一应用 $and 条件（如果有多个条件需要组合）
+    if (andConditions.length > 0) {
+      query.$and = query.$and || [];
+      query.$and.push(...andConditions);
     }
 
     const notes = await DiscoveredNote.find(query)
@@ -2438,8 +2577,39 @@ router.get('/discovery/stats', async (req, res) => {
   try {
     const total = await DiscoveredNote.countDocuments();
     const verified = await DiscoveredNote.countDocuments({ status: 'verified' });
+
+    // 获取优先级间隔配置
+    const SystemConfig = require('../models/SystemConfig');
+    const configDoc = await SystemConfig.findOne({ key: 'harvest_priority_intervals' });
+    const intervals = configDoc?.value || { 10: 10, 5: 60, 2: 360, 1: 1440 };
+
+    // 待采集队列：删除状态正常 + 可加入队列（满足采集间隔条件）
+    const now = new Date();
+    const canHarvestConditions = [];
+    for (const [priority, minutes] of Object.entries(intervals)) {
+      const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
+      canHarvestConditions.push({
+        harvestPriority: parseInt(priority),
+        $or: [
+          { commentsHarvestedAt: { $exists: false } },
+          { commentsHarvestedAt: null },
+          { commentsHarvestedAt: { $lte: cutoffTime } }
+        ]
+      });
+    }
+    const defaultCutoff = new Date(now.getTime() - 1440 * 60 * 1000);
+    canHarvestConditions.push({
+      harvestPriority: { $exists: false },
+      $or: [
+        { commentsHarvestedAt: { $exists: false } },
+        { commentsHarvestedAt: null },
+        { commentsHarvestedAt: { $lte: defaultCutoff } }
+      ]
+    });
+
     const pending = await DiscoveredNote.countDocuments({
-      status: { $in: ['discovered', 'verified'] }
+      noteStatus: 'active',
+      $or: canHarvestConditions
     });
 
     // 最近7天发现的笔记数量
@@ -2449,18 +2619,292 @@ router.get('/discovery/stats', async (req, res) => {
       discoverTime: { $gte: sevenDaysAgo }
     });
 
+    // 在线采集设备数量（基于 ClientHeartbeat 心跳判断）
+    // 只统计最近5分钟内有心跳的采集客户端（harvest 类型）
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const onlineHarvestDevices = await ClientHeartbeat.countDocuments({
+      clientType: 'harvest',
+      lastHeartbeat: { $gte: fiveMinutesAgo }
+    });
+
+    // 正在分发：已被锁定的笔记数量
+    const processing = await DiscoveredNote.countDocuments({
+      noteStatus: 'active',
+      'harvestLock.lockedUntil': { $gt: now }
+    });
+
     res.json({
       success: true,
       data: {
         total,
         verified,
         pending,
-        recent
+        recent,
+        onlineHarvestDevices,
+        pendingStats: {
+          processing,  // 正在分发
+          ready: pending // 可加入队列
+        }
       }
     });
 
   } catch (error) {
     console.error('❌ [笔记发现] 获取统计失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * 获取采集队列管理数据
+ * GET /xiaohongshu/api/client/discovery/harvest-queue
+ *
+ * 用于管理后台的采集队列管理页面
+ * 支持待采集队列和已完成队列的查询
+ */
+router.get('/discovery/harvest-queue', async (req, res) => {
+  try {
+    const {
+      tab = 'pending',           // pending: 待采集, processing: 正在分发, completed: 已完成
+      skip = 0,
+      limit = 50,
+      keyword
+    } = req.query;
+
+    const now = new Date();
+
+    // 获取优先级间隔配置
+    const SystemConfig = require('../models/SystemConfig');
+    const configDoc = await SystemConfig.findOne({ key: 'harvest_priority_intervals' });
+    const intervals = configDoc?.value || { 10: 10, 5: 60, 2: 360, 1: 1440 };
+
+    // 计算下次可采集时间的函数
+    const getNextHarvestTime = (priority, lastHarvestAt) => {
+      const minutes = intervals[priority] || intervals[1];
+      return new Date(new Date(lastHarvestAt).getTime() + minutes * 60 * 1000);
+    };
+
+    // 构建 query 条件
+    const query = {};
+
+    if (tab === 'pending') {
+      // 待采集队列：删除状态正常 + 可加入队列（满足采集间隔条件）
+      query.noteStatus = 'active';
+
+      // 构建可采集条件：满足任一优先级的时间间隔
+      const canHarvestConditions = [];
+      for (const [priority, minutes] of Object.entries(intervals)) {
+        const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
+        canHarvestConditions.push({
+          harvestPriority: parseInt(priority),
+          $or: [
+            { commentsHarvestedAt: { $exists: false } },
+            { commentsHarvestedAt: null },
+            { commentsHarvestedAt: { $lte: cutoffTime } }
+          ]
+        });
+      }
+
+      // 添加默认优先级（1）的条件，用于没有设置优先级的笔记
+      const defaultCutoff = new Date(now.getTime() - 1440 * 60 * 1000);
+      canHarvestConditions.push({
+        harvestPriority: { $exists: false },
+        $or: [
+          { commentsHarvestedAt: { $exists: false } },
+          { commentsHarvestedAt: null },
+          { commentsHarvestedAt: { $lte: defaultCutoff } }
+        ]
+      });
+
+      // 满足任一优先级的时间条件
+      query.$or = canHarvestConditions;
+    } else if (tab === 'processing') {
+      // 正在分发：已被锁定的笔记
+      query.noteStatus = 'active';
+      query['harvestLock.lockedUntil'] = { $gt: now };
+    } else if (tab === 'completed') {
+      // 已完成队列：已采集过
+      query.commentsHarvested = true;
+    }
+
+    // 关键词搜索
+    if (keyword) {
+      const { escapeRegExp } = require('../utils/security');
+      const escapedKeyword = escapeRegExp(keyword);
+      const keywordRegex = { $regex: escapedKeyword, $options: 'i' };
+      const keywordCondition = {
+        $or: [
+          { title: keywordRegex },
+          { author: keywordRegex },
+          { noteUrl: keywordRegex },
+          { shortUrl: keywordRegex }
+        ]
+      };
+
+      // 如果待采集队列已有 $or 条件，需要用 $and 组合
+      if (tab === 'pending') {
+        query.$and = [
+          { $or: query.$or },
+          keywordCondition
+        ];
+        delete query.$or;
+      } else {
+        // processing 和 completed tab 使用 $and 组合
+        query.$and = [
+          { ...query },
+          keywordCondition
+        ];
+      }
+    }
+
+    // 查询笔记
+    const notes = await DiscoveredNote.find(query)
+      .sort({ harvestPriority: -1, discoverTime: -1 })
+      .limit(parseInt(limit))
+      .skip(parseInt(skip))
+      .lean();
+
+    const total = await DiscoveredNote.countDocuments(query);
+
+    // 计算 queueStatus 和 waitTime
+    const enrichedNotes = notes.map(note => {
+      let queueStatus = 'ready';
+      let waitTime = '可立即采集';
+
+      // 检查是否正在被采集
+      if (note.harvestLock && note.harvestLock.lockedUntil && new Date(note.harvestLock.lockedUntil) > now) {
+        queueStatus = 'processing';
+        waitTime = '采集中...';
+      } else if (tab === 'completed' && note.commentsHarvestedAt) {
+        // 已完成队列显示最后采集时间
+        const harvestedAt = new Date(note.commentsHarvestedAt);
+        const nextTime = getNextHarvestTime(note.harvestPriority || 1, harvestedAt);
+        if (nextTime > now) {
+          const diffMs = nextTime - now;
+          const diffMins = Math.floor(diffMs / 60000);
+          if (diffMins < 60) {
+            waitTime = `下次采集: ${diffMins}分钟后`;
+          } else {
+            const diffHours = Math.floor(diffMins / 60);
+            waitTime = `下次采集: ${diffHours}小时后`;
+          }
+        } else {
+          waitTime = '可再次采集';
+        }
+      } else if (tab === 'pending' && note.commentsHarvestedAt) {
+        // 待采集队列但之前采集过（重新采集）
+        const harvestedAt = new Date(note.commentsHarvestedAt);
+        const nextTime = getNextHarvestTime(note.harvestPriority || 1, harvestedAt);
+        if (nextTime > now) {
+          queueStatus = 'waiting';
+          const diffMs = nextTime - now;
+          const diffMins = Math.floor(diffMs / 60000);
+          if (diffMins < 60) {
+            waitTime = `等待: ${diffMins}分钟`;
+          } else {
+            const diffHours = Math.floor(diffMins / 60);
+            waitTime = `等待: ${diffHours}小时`;
+          }
+        }
+      }
+
+      return {
+        ...note,
+        queueStatus,
+        waitTime
+      };
+    });
+
+    // 统计数据
+    let stats;
+    if (tab === 'pending') {
+      // 待采集队列统计
+      const [readyTotal, processingTotal] = await Promise.all([
+        // 可加入队列：满足采集间隔条件且没有被锁定
+        (async () => {
+          const canHarvestConditions = [];
+          for (const [priority, minutes] of Object.entries(intervals)) {
+            const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
+            canHarvestConditions.push({
+              harvestPriority: parseInt(priority),
+              $or: [
+                { commentsHarvestedAt: { $exists: false } },
+                { commentsHarvestedAt: null },
+                { commentsHarvestedAt: { $lte: cutoffTime } }
+              ]
+            });
+          }
+          const defaultCutoff = new Date(now.getTime() - 1440 * 60 * 1000);
+          canHarvestConditions.push({
+            harvestPriority: { $exists: false },
+            $or: [
+              { commentsHarvestedAt: { $exists: false } },
+              { commentsHarvestedAt: null },
+              { commentsHarvestedAt: { $lte: defaultCutoff } }
+            ]
+          });
+          return await DiscoveredNote.countDocuments({
+            noteStatus: 'active',
+            $or: canHarvestConditions,
+            $or: [
+              { harvestLock: { $exists: false } },
+              { harvestLock: null },
+              { 'harvestLock.lockedUntil': { $lte: now } },
+              { 'harvestLock.lockedUntil': { $exists: false } }
+            ]
+          });
+        })(),
+        // 正在分发：有锁定且未过期
+        DiscoveredNote.countDocuments({
+          noteStatus: 'active',
+          'harvestLock.lockedUntil': { $gt: now }
+        })
+      ]);
+
+      stats = {
+        processing: processingTotal,  // 正在分发
+        ready: readyTotal             // 可加入队列
+      };
+    } else {
+      // 已完成队列统计
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const [completedTotal, todayTotal] = await Promise.all([
+        // 已完成总数
+        DiscoveredNote.countDocuments({
+          commentsHarvested: true
+        }),
+        // 今日完成（今天采集的）
+        DiscoveredNote.countDocuments({
+          commentsHarvested: true,
+          commentsHarvestedAt: { $gte: today }
+        })
+      ]);
+
+      stats = {
+        total: completedTotal,  // 已完成总数
+        today: todayTotal       // 今日完成
+      };
+    }
+
+    res.json({
+      success: true,
+      data: {
+        notes: enrichedNotes,
+        pagination: {
+          total,
+          limit: parseInt(limit),
+          skip: parseInt(skip)
+        },
+        stats
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [采集队列] 获取队列数据失败:', error);
     res.status(500).json({
       success: false,
       message: error.message
@@ -3268,8 +3712,8 @@ router.get('/harvest/pending', async (req, res) => {
     // 查询所有需要采集的笔记
     const notes = await DiscoveredNote.find({
       needsCommentHarvest: true,
-      createdAt: { $gte: tenDaysAgo },
-      status: { $in: ['discovered', 'verified'] }
+      noteStatus: 'active',
+      createdAt: { $gte: tenDaysAgo }
     })
     .select('noteUrl noteId title author keyword commentsHarvestedAt lastCommentTime createdAt');
 

@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const WebSocket = require('ws');
 
 // 设置服务器时区为北京时间
 process.env.TZ = 'Asia/Shanghai';
@@ -11,6 +13,10 @@ process.env.TZ = 'Asia/Shanghai';
 dotenv.config({ path: './server/.env' });
 
 const app = express();
+
+// 信任反向代理（Nginx）设置的 X-Forwarded-For 头
+// 这样限流功能可以正确识别真实用户IP
+app.set('trust proxy', true);
 
 // 安全的CORS配置 - 仅允许白名单域名
 const allowedOrigins = (
@@ -37,6 +43,36 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// 安全响应头 - 使用 Helmet
+app.use(helmet({
+  // Content-Security-Policy: 限制资源加载来源
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  // 防止点击劫持
+  frameguard: { action: 'deny' },
+  // XSS 保护
+  xssFilter: true,
+  // 禁止 MIME 类型嗅探
+  noSniff: true,
+  // HSTS (仅在 HTTPS 时启用)
+  hsts: process.env.NODE_ENV === 'production' ? {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  } : false
 }));
 
 // 速率限制中间件 - 防止暴力攻击
@@ -85,20 +121,48 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/xiaoho
 
 console.log('🔍 正在连接数据库:', MONGODB_URI);
 
-// 强制连接数据库 - 如果连接失败，程序直接退出
-mongoose.connect(MONGODB_URI)
-.then(() => {
-  console.log('✅ MongoDB 连接成功');
+// 数据库连接函数（带重连机制）
+async function connectToDatabase() {
+  const maxRetries = 5;
+  const retryDelay = 5000; // 5秒
 
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await mongoose.connect(MONGODB_URI);
+      console.log('✅ MongoDB 连接成功');
+      return true;
+    } catch (error) {
+      console.error(`❌ MongoDB 连接失败 (尝试 ${attempt}/${maxRetries}):`, error.message);
+
+      if (attempt < maxRetries) {
+        const delay = retryDelay * attempt; // 递增延迟
+        console.log(`🔄 ${delay / 1000}秒后重连...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error('💡 请确保 MongoDB 服务正在运行，并且连接字符串正确');
+        console.error('🔧 默认连接字符串: mongodb://127.0.0.1:27017/xiaohongshu_audit');
+        console.error('💥 已达到最大重试次数，程序退出');
+        process.exit(1);
+      }
+    }
+  }
+  return false;
+}
+
+// 连接数据库并启动服务
+connectToDatabase().then(() => {
   // 只有在数据库连接成功后才注册路由和启动服务器
   registerRoutes();
   startServer();
-})
-.catch((error) => {
-  console.error('❌ MongoDB 连接失败:', error.message);
-  console.error('💡 请确保 MongoDB 服务正在运行，并且连接字符串正确');
-  console.error('🔧 默认连接字符串: mongodb://127.0.0.1:27017/xiaohongshu_audit');
-  process.exit(1); // 强制退出程序
+});
+
+// 监听数据库断开事件
+mongoose.connection.on('disconnected', () => {
+  console.warn('⚠️ MongoDB 连接已断开');
+});
+
+mongoose.connection.on('error', (error) => {
+  console.error('❌ MongoDB 连接错误:', error.message);
 });
 
 // 注册路由函数
@@ -133,10 +197,28 @@ function registerRoutes() {
   apiRouter.use('/complaints', require('./routes/complaints'));
   console.log('✅ /xiaohongshu/api/complaints 路由已注册');
 
+  apiRouter.use('/short-link-pool', require('./routes/shortLinkPool'));
+  console.log('✅ /xiaohongshu/api/short-link-pool 路由已注册');
+
+  apiRouter.use('/permissions', require('./routes/permissions'));
+  console.log('✅ /xiaohongshu/api/permissions 路由已注册');
+
   // 测试设备路由是否正确加载
   const devicesRouter = require('./routes/devices');
   console.log('📋 设备路由对象:', typeof devicesRouter);
   console.log('📋 设备路由栈长度:', devicesRouter.stack ? devicesRouter.stack.length : 'N/A');
+
+  // 健康检查端点（用于监控和负载均衡器）
+  apiRouter.get('/health', (req, res) => {
+    const health = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      environment: process.env.NODE_ENV || 'development'
+    };
+    res.json(health);
+  });
 
   // 测试路由
   apiRouter.get('/test', (req, res) => {
@@ -154,12 +236,34 @@ function registerRoutes() {
   // 挂载到 /xiaohongshu 前缀
   app.use('/xiaohongshu/api', apiRouter);
 
+  // 全局错误处理中间件（必须在所有路由之后）
+  const { errorHandler } = require('./utils/response');
+  app.use(errorHandler);
+
   console.log('🎉 所有路由注册完成');
 }
 
 // 启动服务器函数
 function startServer() {
   const PORT = process.env.PORT || 5000;
+  const WS_PORT = process.env.WS_PORT || 5001;
+
+  // 创建 WebSocket 服务器
+  const wss = new WebSocket.Server({ port: WS_PORT });
+
+  wss.on('connection', (ws) => {
+    console.log(`📡 [WebSocket] 客户端已连接，当前连接数: ${wss.clients.size}`);
+    ws.on('close', () => {
+      console.log(`📡 [WebSocket] 客户端断开连接，剩余连接数: ${wss.clients.size}`);
+    });
+    ws.on('error', (error) => {
+      console.error('📡 [WebSocket] 连接错误:', error.message);
+    });
+  });
+
+  // 将 wss 挂载到 app，供路由使用
+  app.set('wss', wss);
+  console.log(`✅ [WebSocket] 服务启动成功，监听端口 ${WS_PORT}`);
 
   // 显式绑定到 127.0.0.1 (IPv4) 确保与 Nginx proxy_pass 兼容
   const server = app.listen(PORT, '127.0.0.1', () => {
@@ -178,6 +282,11 @@ function startServer() {
     harvestScheduler.start();
     console.log('✅ 评论采集队列定时任务启动成功');
 
+    // 启动客户端健康度服务
+    const clientHealthService = require('./services/clientHealthService');
+    clientHealthService.start();
+    console.log('✅ 客户端健康度服务启动成功');
+
     // 启动Cookie监控服务
     const cookieMonitorService = require('./services/cookieMonitorService');
     console.log('🍪 Cookie监控服务已加载');
@@ -192,6 +301,14 @@ function startServer() {
       console.log('✅ 异步AI审核服务已加载（已恢复pending任务）');
     }).catch(err => {
       console.error('❌ 加载pending任务失败:', err);
+    });
+
+    // 初始化 AI 内容分析服务（从数据库加载提示词）
+    const aiContentAnalysisService = require('./services/aiContentAnalysisService');
+    aiContentAnalysisService.initialize().then(() => {
+      console.log('✅ AI内容分析服务初始化完成');
+    }).catch(err => {
+      console.error('❌ AI内容分析服务初始化失败:', err);
     });
   });
 

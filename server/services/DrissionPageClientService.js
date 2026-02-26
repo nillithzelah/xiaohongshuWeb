@@ -4,7 +4,6 @@
  */
 
 const axios = require('axios');
-const simpleCookiePool = require('./SimpleCookiePool');
 
 class DrissionPageClientService {
   constructor() {
@@ -23,18 +22,9 @@ class DrissionPageClientService {
    * @returns {Promise<Object>} 验证结果
    */
   async verifyCommentExists(noteUrl, commentContent, commentAuthor, cookieString = null) {
-    // 如果没有提供cookie，从Cookie池获取
-    let currentCookie = null;
+    // 如果没有提供cookie，使用环境变量
     if (!cookieString) {
-      currentCookie = simpleCookiePool.getCookie();
-      if (currentCookie) {
-        cookieString = currentCookie.value;
-      } else {
-        cookieString = process.env.XIAOHONGSHU_COOKIE || '';
-      }
-    } else if (typeof cookieString === 'object' && cookieString.value) {
-      currentCookie = cookieString;
-      cookieString = currentCookie.value;
+      cookieString = process.env.XIAOHONGSHU_COOKIE || '';
     }
 
     let retryCount = 0;
@@ -45,7 +35,7 @@ class DrissionPageClientService {
           url: noteUrl,
           author: commentAuthor,
           content: commentContent.substring(0, 50) + '...',
-          cookieName: currentCookie?.name || '环境变量Cookie',
+          cookieSource: '环境变量Cookie',
           retryCount
         });
 
@@ -75,25 +65,9 @@ class DrissionPageClientService {
           scannedComments: result.scanned_comments
         });
 
-        // 如果 Cookie 失效，切换到下一个 Cookie 并重试
+        // 如果 Cookie 失效，不再重试（使用环境变量只有一个Cookie）
         if (result.needs_cookie_update || result.error?.includes('Cookie') || result.error?.includes('登录')) {
-          console.log('🔄 [DrissionPage] Cookie 失效，切换到下一个 Cookie...');
-
-          if (currentCookie && currentCookie.id) {
-            retryCount++;
-            if (retryCount < this.maxRetries) {
-              currentCookie = simpleCookiePool.skipAndGetNext(
-                currentCookie.id,
-                result.reason || 'Cookie失效'
-              );
-
-              if (currentCookie) {
-                cookieString = currentCookie.value;
-                console.log(`✅ [DrissionPage] 已切换到新Cookie: ${currentCookie.name}`);
-                continue;
-              }
-            }
-          }
+          console.warn('⚠️ [DrissionPage] Cookie 失效，请更新环境变量 XIAOHONGSHU_COOKIE');
         }
 
         return result;

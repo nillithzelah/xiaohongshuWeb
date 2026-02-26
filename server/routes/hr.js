@@ -1,7 +1,7 @@
 const express = require('express');
 const User = require('../models/User');
 const Device = require('../models/Device');
-const { authenticateToken, requireRole } = require('../middleware/auth');
+const { authenticateToken, requireRole, Role } = require('../middleware/auth');
 const router = express.Router();
 
 // 创建线索（HR创建潜在客户）
@@ -17,23 +17,27 @@ router.post('/create-lead', authenticateToken, requireRole(['hr', 'boss']), asyn
       });
     }
 
-    // 检查手机号是否已存在
-    const existingUser = await User.findOne({
-      phone,
-      is_deleted: { $ne: true }
-    });
+    // 检查手机号是否已存在（包括已删除用户，防止重复创建）
+    const existingUser = await User.findOne({ phone });
 
     if (existingUser) {
+      // 如果手机号存在但用户已删除，提示需要先恢复或使用其他手机号
+      if (existingUser.is_deleted) {
+        return res.status(400).json({
+          success: false,
+          message: '该手机号已被使用（用户已删除），请使用其他手机号或联系管理员恢复'
+        });
+      }
       return res.status(400).json({
         success: false,
         message: '该手机号已存在'
       });
     }
 
-    // 检查昵称作为用户名是否已存在，如果存在则添加后缀
+    // 检查昵称作为用户名是否已存在，如果存在则添加后缀（包括已删除用户）
     let username = nickname;
     let counter = 1;
-    while (await User.findOne({ username, is_deleted: { $ne: true } })) {
+    while (await User.findOne({ username })) {
       username = `${nickname}_${counter}`;
       counter++;
     }
@@ -58,25 +62,47 @@ router.post('/create-lead', authenticateToken, requireRole(['hr', 'boss']), asyn
 
     // 为每个小红书账号创建设备记录
     // 注意：phone 是客户联系电话，xiaohongshuAccounts[].account 才是小红书账号
+    // 优化：一次性查询所有可能存在的设备，避免 N+1 查询
+    const accountNames = xiaohongshuAccounts.map(acc => acc.nickname.trim());
+    const existingDevices = await Device.find({ accountName: { $in: accountNames } }).select('_id accountName');
+    const existingDeviceMap = new Map(existingDevices.map(d => [d.accountName, d._id]));
+
     const devices = [];
+    const devicesToCreate = [];
+
     for (const account of xiaohongshuAccounts) {
-      // 检查设备是否已存在（按小红书昵称查询）
-      const existingDevice = await Device.findOne({ accountName: account.nickname.trim() });
-      if (existingDevice) {
+      const trimmedNickname = account.nickname.trim();
+      const existingId = existingDeviceMap.get(trimmedNickname);
+
+      if (existingId) {
         // 设备已存在，只记录ID
-        devices.push(existingDevice._id);
+        devices.push(existingId);
       } else {
-        // 创建设备 - accountName 使用小红书昵称
-        const device = new Device({
-          accountName: account.nickname.trim(),  // 小红书昵称
-          accountId: account.account.trim(),     // 小红书账号ID
+        // 记录需要创建的设备（稍后批量插入）
+        const deviceData = {
+          accountName: trimmedNickname,
+          accountId: account.account.trim(),
           assignedUser: null,
           status: 'online',
-          influence: ['new'], // 默认新号
+          influence: ['new'],
           createdBy: req.user._id
-        });
-        await device.save();
-        devices.push(device._id);
+        };
+        devicesToCreate.push(deviceData);
+        // 使用临时占位符，批量插入后替换
+        devices.push(null);
+      }
+    }
+
+    // 批量创建新设备
+    if (devicesToCreate.length > 0) {
+      const createdDevices = await Device.insertMany(devicesToCreate);
+      // 替换占位符为实际 ID
+      let createIndex = 0;
+      for (let i = 0; i < devices.length; i++) {
+        if (devices[i] === null) {
+          devices[i] = createdDevices[createIndex]._id;
+          createIndex++;
+        }
       }
     }
 
@@ -137,7 +163,7 @@ router.get('/my-leads', authenticateToken, requireRole(['hr', 'boss', 'manager']
     };
 
     // HR只能看到自己创建的线索，主管和老板可以看到所有线索
-    if (req.user.role === 'hr') {
+    if (Role.isHr(req)) {
       query.hr_id = req.user.id;
     }
 

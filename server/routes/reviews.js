@@ -3,9 +3,10 @@ const ImageReview = require('../models/ImageReview');
 const User = require('../models/User');
 const TaskConfig = require('../models/TaskConfig');
 const CommentLimit = require('../models/CommentLimit');
-const { authenticateToken, requireRole } = require('../middleware/auth');
+const { authenticateToken, requireRole, Role, getStatusQueryForRole, getValidStatusesForRole } = require('../middleware/auth');
 const notificationService = require('../services/notificationService');
 const reviewOptimizationService = require('../services/reviewOptimizationService');
+const { escapeRegExp, validateSearchKeyword } = require('../utils/security');
 const router = express.Router();
 
 // 获取我的审核记录（用户）
@@ -49,13 +50,8 @@ router.get('/pending', authenticateToken, requireRole(['mentor', 'manager', 'bos
         'processingLock.lockedUntil': { $lt: now }
       },
       {
-        $set: {
-          status: 'pending',
-          'processingLock.clientId': null,
-          'processingLock.lockedAt': null,
-          'processingLock.heartbeatAt': null,
-          'processingLock.lockedUntil': null
-        }
+        $set: { status: 'pending' },
+        $unset: { processingLock: 1 }  // 完全删除锁定字段，避免留下空对象
       }
     );
 
@@ -66,15 +62,16 @@ router.get('/pending', authenticateToken, requireRole(['mentor', 'manager', 'bos
     // 数据权限过滤
     let query = { status };
 
-    if (req.user.role === 'mentor') {
+    if (Role.isMentor(req)) {
       // 带教老师可以看到：
       // 1. 自己名下用户的审核 + 未分配带教老师的用户的审核（status = pending）
       // 2. 自己提交的待人工复审的笔记（status = ai_approved）
+      // 看不到其他带教老师名下的用户
       const mentorUsers = await User.find({
         $or: [
-          { mentor_id: req.user._id },
-          { mentor_id: null },
-          { mentor_id: { $exists: false } }
+          { mentor_id: req.user._id },              // 自己名下的用户
+          { mentor_id: null },                      // 未分配带教老师的用户
+          { mentor_id: { $exists: false } }         // 没有 mentor_id 字段的用户
         ],
         role: 'part_time'
       }).select('_id');
@@ -89,7 +86,7 @@ router.get('/pending', authenticateToken, requireRole(['mentor', 'manager', 'bos
         // 其他状态显示自己名下用户的审核
         query.userId = { $in: mentorUserIds };
       }
-    } else if (req.user.role === 'hr') {
+    } else if (Role.isHr(req)) {
       // HR 只能看到自己创建的用户的审核 + 未分配HR的用户的审核
       const hrUsers = await User.find({
         $or: [
@@ -142,20 +139,20 @@ router.post('/:id/review', authenticateToken, requireRole(['mentor', 'manager', 
       return res.status(404).json({ success: false, message: '审核记录不存在' });
     }
 
-    const isManagerOrBoss = ['manager', 'boss'].includes(req.user.role);
-    const isMentor = req.user.role === 'mentor';
+    const isManagerOrBoss = Role.isAdmin(req);
+    const isMentor = Role.isMentor(req);
 
     // 不允许操作的状态
     const noActionStatuses = ['manager_approved', 'finance_processing', 'completed'];
 
-    // 带教老师可以处理 pending 和 ai_approved 状态（如果是自己的笔记）
+    // 带教老师可以处理 pending、ai_approved、mentor_approved 状态（如果是自己的笔记）
     if (isMentor) {
-      const validStatuses = ['pending', 'ai_approved'];
+      const validStatuses = ['pending', 'ai_approved', 'mentor_approved'];
       if (!validStatuses.includes(review.status)) {
         return res.status(400).json({ success: false, message: '该记录已被审核' });
       }
-      // 如果是 ai_approved 状态，只能操作自己名下用户的笔记
-      if (review.status === 'ai_approved') {
+      // 如果是 ai_approved 或 mentor_approved 状态，只能操作自己名下用户的笔记
+      if (['ai_approved', 'mentor_approved'].includes(review.status)) {
         // 检查笔记提交者是否属于当前带教老师名下
         const submitter = await User.findById(review.userId);
         if (!submitter || submitter.mentor_id?.toString() !== req.user._id.toString()) {
@@ -385,7 +382,7 @@ router.post('/:id/review', authenticateToken, requireRole(['mentor', 'manager', 
       _id: review._id,
       status: review.status,
       imageType: review.imageType,
-      imageUrl: review.imageUrl,
+      imageUrls: review.imageUrls,
       createdAt: review.createdAt,
       auditHistory: review.auditHistory,
       userId: review.userId?._id || review.userId,
@@ -416,14 +413,14 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'mana
       return res.status(404).json({ success: false, message: '审核记录不存在' });
     }
 
-    // 带教老师可以处理 pending 和 ai_approved 状态的记录
-    const validStatuses = req.user.role === 'mentor' ? ['pending', 'ai_approved'] : ['pending'];
+    // 带教老师可以处理 pending、ai_approved、mentor_approved 状态的记录
+    const validStatuses = getValidStatusesForRole(req.user.role);
     if (!validStatuses.includes(review.status)) {
       return res.status(400).json({ success: false, message: '该记录已被审核或状态不允许此操作' });
     }
 
     // 带教老师权限过滤：只能操作自己下属用户的审核
-    if (req.user.role === 'mentor') {
+    if (Role.isMentor(req)) {
       const mentorUsers = await User.find({
         $or: [
           { mentor_id: req.user._id },
@@ -513,7 +510,7 @@ router.put('/:id/mentor-review', authenticateToken, requireRole(['mentor', 'mana
 });
 
 // 主管确认（支持人工复审AI审核通过的记录）
-router.put('/:id/manager-approve', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+router.put('/:id/manager-approve', authenticateToken, requireRole(['mentor', 'manager', 'boss']), async (req, res) => {
   try {
     const { id } = req.params;
     const { approved, comment } = req.body;
@@ -852,7 +849,7 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
         if (parentUser && !parentUser.is_deleted) {
           // 验证上级用户状态
           if (!parentUser.wallet) {
-            parentUser.wallet = { balance: 0, total_earned: 0 };
+            parentUser.wallet = {};
           }
 
           // 直接发放一级佣金（进入待打款状态）
@@ -885,7 +882,7 @@ router.put('/:id/finance-process', authenticateToken, requireRole(['finance', 'b
           if (grandParentUser && !grandParentUser.is_deleted) {
             // 验证二级上级用户状态
             if (!grandParentUser.wallet) {
-              grandParentUser.wallet = { balance: 0, total_earned: 0 };
+              grandParentUser.wallet = {};
             }
 
             // 直接发放二级佣金（进入待打款状态）
@@ -1140,8 +1137,8 @@ router.put('/reject-all-pending', authenticateToken, requireRole(['manager', 'bo
   }
 });
 
-// 主管批量确认 (只有manager和boss可以调用)
-router.put('/batch-manager-approve', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
+// 主管批量确认 (mentor、manager和boss可以调用)
+router.put('/batch-manager-approve', authenticateToken, requireRole(['mentor', 'manager', 'boss']), async (req, res) => {
   const mongoose = require('mongoose');
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1414,14 +1411,14 @@ router.put('/batch-cs-review', authenticateToken, requireRole(['mentor', 'manage
       return res.status(400).json({ success: false, message: '驳回理由不能为空' });
     }
 
-    // 基础过滤条件：带教老师可以操作 pending 和 ai_approved 状态的任务
+    // 基础过滤条件：带教老师可以操作 pending、ai_approved、mentor_approved 状态的任务
     const filter = {
       _id: { $in: ids },
-      status: req.user.role === 'mentor' ? { $in: ['pending', 'ai_approved'] } : 'pending'
+      status: getStatusQueryForRole(req.user.role)
     };
 
     // 带教老师权限过滤：只能操作自己下属用户的审核
-    if (req.user.role === 'mentor') {
+    if (Role.isMentor(req)) {
       const mentorUsers = await User.find({
         $or: [
           { mentor_id: req.user._id },
@@ -1511,14 +1508,14 @@ router.put('/batch-mentor-review', authenticateToken, requireRole(['mentor', 'ma
       return res.status(400).json({ success: false, message: '驳回理由不能为空' });
     }
 
-    // 基础过滤条件：带教老师可以操作 pending 和 ai_approved 状态的任务
+    // 基础过滤条件：带教老师可以操作 pending、ai_approved、mentor_approved 状态的任务
     const filter = {
       _id: { $in: ids },
-      status: req.user.role === 'mentor' ? { $in: ['pending', 'ai_approved'] } : 'pending'
+      status: getStatusQueryForRole(req.user.role)
     };
 
     // 带教老师权限过滤：只能操作自己下属用户的审核
-    if (req.user.role === 'mentor') {
+    if (Role.isMentor(req)) {
       const mentorUsers = await User.find({
         $or: [
           { mentor_id: req.user._id },
@@ -1604,15 +1601,24 @@ router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manag
 
     // 如果有noteId，按ID后6位搜索
     if (noteId) {
-      query._id = { $regex: noteId, $options: 'i' };
+      query._id = { $regex: escapeRegExp(noteId), $options: 'i' };
     }
 
     // 如果有keyword，搜索用户名匹配的用户ID
     if (keyword) {
+      // 【安全修复】验证搜索关键词，防止 ReDoS 攻击
+      const validation = validateSearchKeyword(keyword);
+      if (!validation.safe) {
+        return res.status(400).json({
+          success: false,
+          message: validation.error || '搜索关键词无效'
+        });
+      }
+
       const matchedUsers = await User.find({
         $or: [
-          { username: { $regex: keyword, $options: 'i' } },
-          { nickname: { $regex: keyword, $options: 'i' } }
+          { username: { $regex: validation.escaped, $options: 'i' } },
+          { nickname: { $regex: validation.escaped, $options: 'i' } }
         ]
       }).select('_id');
       const userIds = matchedUsers.map(user => user._id);
@@ -1658,12 +1664,18 @@ router.get('/ai-auto-approved', authenticateToken, requireRole(['mentor', 'manag
 
     // 为每个审核记录计算收益
     for (const review of reviews) {
-      // 计算生存天数：从主管审核通过开始到今天的天数（上限7天，因为持续检查只有7天）
-      // 注意：持续检查只在主管审核通过(manager_approve)后才开始，不是从AI审核通过开始
-      const managerApproveTime = review.auditHistory?.find(h => h.action === 'manager_approve')?.timestamp;
-      let survivalDays = managerApproveTime ? Math.floor((Date.now() - new Date(managerApproveTime).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 0;
-      // 持续检查只有7天，生存天数上限为7
-      survivalDays = Math.min(survivalDays, 7);
+      // 计算生存天数：使用实际持续检查成功的次数（从第0天开始）
+      // 第0天 = 审核通过发放500积分
+      // 第1天 = 第1次检查成功，第2天 = 第2次检查成功，...
+      let survivalDays = 0;
+
+      // 统计成功检查的次数
+      if (review.continuousCheck?.enabled && review.continuousCheck?.checkHistory?.length > 0) {
+        const successChecks = review.continuousCheck.checkHistory.filter(
+          check => check.result === 'success'
+        );
+        survivalDays = successChecks.length;
+      }
 
       // 【修复】使用实际的持续检查奖励记录计算收益，而非理论计算
       // 从 continuousCheck.checkHistory 中统计实际发放的积分

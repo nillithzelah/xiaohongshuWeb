@@ -121,7 +121,12 @@ router.get('/monitoring', authenticateToken, requireRole(['boss', 'manager']), a
       // 客户端状态：获取5分钟内有心跳的客户端
       ClientHeartbeat.find({
         lastHeartbeat: { $gte: fiveMinutesAgo }
-      }).select('clientId status lastHeartbeat taskIds').sort({ lastHeartbeat: -1 })
+      })
+      .select('clientId status lastHeartbeat taskIds clientType description remark ' +
+              'todayNotesDiscovered todayNotesProcessed todayValidLeads ' +
+              'todayCommentsScanned todayBlacklisted todayReviewsCompleted ' +
+              'consecutiveFailures taskDistributionPaused lastSuccessUploadAt')
+      .sort({ lastHeartbeat: -1 })
     ]);
 
     // 处理今日采集评论数
@@ -132,7 +137,21 @@ router.get('/monitoring', authenticateToken, requireRole(['boss', 'manager']), a
       clientId: client.clientId,
       lastHeartbeat: client.lastHeartbeat,
       status: client.status || 'online',
-      taskCount: client.taskIds ? client.taskIds.length : 0
+      taskCount: client.taskIds ? client.taskIds.length : 0,
+      clientType: client.clientType,
+      description: client.description,
+      remark: client.remark,
+      // 今日统计字段
+      todayNotesDiscovered: client.todayNotesDiscovered || 0,
+      todayNotesProcessed: client.todayNotesProcessed || 0,
+      todayValidLeads: client.todayValidLeads || 0,
+      todayCommentsScanned: client.todayCommentsScanned || 0,
+      todayBlacklisted: client.todayBlacklisted || 0,
+      todayReviewsCompleted: client.todayReviewsCompleted || 0,
+      // 健康度相关
+      consecutiveFailures: client.consecutiveFailures || 0,
+      taskDistributionPaused: client.taskDistributionPaused || false,
+      lastSuccessUploadAt: client.lastSuccessUploadAt
     }));
 
     const monitoringData = {
@@ -2363,6 +2382,156 @@ router.post('/cookies/:id/mark-expired', authenticateToken, requireRole(['boss',
     res.status(500).json({
       success: false,
       message: '标记Cookie失效失败'
+    });
+  }
+});
+
+// ==================== AI 提示词管理 API ====================
+
+const AiPrompt = require('../models/AiPrompt');
+
+/**
+ * 获取所有 AI 提示词
+ * GET /xiaohongshu/api/admin/ai-prompts
+ */
+router.get('/ai-prompts', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const prompts = await AiPrompt.find().sort({ type: 1, name: 1 });
+    res.json({
+      success: true,
+      data: prompts
+    });
+  } catch (error) {
+    console.error('获取 AI 提示词失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取 AI 提示词失败'
+    });
+  }
+});
+
+/**
+ * 创建 AI 提示词
+ * POST /xiaohongshu/api/admin/ai-prompts
+ */
+router.post('/ai-prompts', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const data = req.body;
+    const prompt = new AiPrompt({
+      ...data,
+      updatedBy: req.user.username
+    });
+    await prompt.save();
+    res.json({
+      success: true,
+      data: prompt
+    });
+  } catch (error) {
+    console.error('创建 AI 提示词失败:', error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: '提示词名称已存在'
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: '创建 AI 提示词失败'
+    });
+  }
+});
+
+/**
+ * 更新 AI 提示词
+ * PUT /xiaohongshu/api/admin/ai-prompts/:name
+ */
+router.put('/ai-prompts/:name', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { name } = req.params;
+    const data = req.body;
+    const prompt = await AiPrompt.findOneAndUpdate(
+      { name },
+      {
+        ...data,
+        updatedBy: req.user.username,
+        updatedAt: new Date()
+      },
+      { new: true }
+    );
+    if (!prompt) {
+      return res.status(404).json({
+        success: false,
+        message: '提示词不存在'
+      });
+    }
+    res.json({
+      success: true,
+      data: prompt
+    });
+  } catch (error) {
+    console.error('更新 AI 提示词失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '更新 AI 提示词失败'
+    });
+  }
+});
+
+/**
+ * 删除 AI 提示词
+ * DELETE /xiaohongshu/api/admin/ai-prompts/:name
+ */
+router.delete('/ai-prompts/:name', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await AiPrompt.deleteOne({ name });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '提示词不存在'
+      });
+    }
+    res.json({
+      success: true,
+      message: '删除成功'
+    });
+  } catch (error) {
+    console.error('删除 AI 提示词失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '删除 AI 提示词失败'
+    });
+  }
+});
+
+/**
+ * 测试 AI 提示词
+ * POST /xiaohongshu/api/admin/ai-prompts/:name/test
+ */
+router.post('/ai-prompts/:name/test', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { testData } = req.body;
+    const prompt = await AiPrompt.findOne({ name });
+    if (!prompt) {
+      return res.status(404).json({
+        success: false,
+        message: '提示词不存在'
+      });
+    }
+    // 调用 AI 服务进行测试
+    const aiService = require('../services/aiContentAnalysisService');
+    // 构建测试请求
+    const testResult = await aiService.testPrompt(prompt, testData);
+    res.json({
+      success: true,
+      data: testResult
+    });
+  } catch (error) {
+    console.error('测试 AI 提示词失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || '测试 AI 提示词失败'
     });
   }
 });

@@ -3,8 +3,8 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const Device = require('../models/Device');
 const User = require('../models/User');
-const { authenticateToken, requireRole } = require('../middleware/auth');
-const simpleCookiePool = require('../services/SimpleCookiePool');
+const { authenticateToken, requireRole, Role } = require('../middleware/auth');
+const { escapeRegExp } = require('../utils/security');
 const router = express.Router();
 
 // 设备AI预审核函数
@@ -94,10 +94,10 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
     };
 
     // 权限控制：part_time 用户只能看到自己创建的设备
-    if (req.user.role === 'part_time') {
+    if (Role.isPartTime(req)) {
       query.createdBy = req.user._id;
       console.log('👤 part_time 用户，仅显示自己创建的设备');
-    } else if (req.user.role === 'mentor') {
+    } else if (Role.isMentor(req)) {
       // 带教老师只能看到自己名下用户提交的设备
       const assignedUsers = await User.find({ mentor_id: req.user._id }).select('_id');
       const assignedUserIds = assignedUsers.map(u => u._id);
@@ -179,11 +179,11 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
 
     // 搜索设备账号名
     if (keyword) {
-      query.accountName = { $regex: keyword, $options: 'i' };
+      query.accountName = { $regex: escapeRegExp(keyword), $options: 'i' };
     }
 
     // 数据权限过滤
-    if (req.user.role === 'hr') {
+    if (Role.isHr(req)) {
       // HR 可以看到：
       // 1. 分配给 hr_id = 自己的用户的设备
       // 2. 分配给 hr_id = null（未分配HR）的用户的设备
@@ -205,7 +205,7 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
         { assignedUser: { $in: hrUserIds } },
         { assignedUser: null }
       ];
-    } else if (req.user.role === 'mentor') {
+    } else if (Role.isMentor(req)) {
       // 带教老师可以看到：
       // 1. 分配给 mentor_id = 自己的用户的设备
       // 2. 分配给 mentor_id = null（未分配带教老师）的用户的设备
@@ -275,6 +275,171 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
   }
 });
 
+// ==================== 设备修改申请路由（必须在 /:id 之前）====================
+
+// 获取设备修改申请列表（管理员）
+router.get('/modify-requests', authenticateToken, requireRole(['manager', 'boss', 'hr', 'mentor']), async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+
+    const query = {};
+    if (status) {
+      query.status = status;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [requests, total] = await Promise.all([
+      DeviceModifyRequest.find(query)
+        .populate('device', 'accountName accountUrl')
+        .populate('applicant', 'username nickname phone')
+        .populate('reviewer', 'username nickname')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      DeviceModifyRequest.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        requests,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [修改申请] 获取列表失败:', error);
+    res.status(500).json({ success: false, message: '获取申请列表失败' });
+  }
+});
+
+// 审核设备修改申请（管理员）
+router.post('/modify-requests/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr', 'mentor']), async (req, res) => {
+  try {
+    const { action, rejectReason, note } = req.body;
+    const requestId = req.params.id;
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: '无效的审核操作' });
+    }
+
+    const modifyRequest = await DeviceModifyRequest.findById(requestId)
+      .populate('device');
+
+    if (!modifyRequest) {
+      return res.status(404).json({ success: false, message: '申请不存在' });
+    }
+
+    if (modifyRequest.status !== 'pending') {
+      return res.status(400).json({ success: false, message: '该申请已被处理' });
+    }
+
+    if (action === 'approve') {
+      // 审核通过：更新设备信息
+      const device = modifyRequest.device;
+      if (!device) {
+        return res.status(404).json({ success: false, message: '关联设备不存在' });
+      }
+
+      // 检查新账号名是否已存在（仅限账号名修改）
+      if (modifyRequest.modifyType === 'account_name') {
+        const existingDevice = await Device.findOne({
+          accountName: modifyRequest.newValue,
+          _id: { $ne: device._id }
+        });
+        if (existingDevice) {
+          return res.status(400).json({ success: false, message: '该账号名已被使用，无法通过审核' });
+        }
+        device.accountName = modifyRequest.newValue;
+      } else if (modifyRequest.modifyType === 'account_url') {
+        device.accountUrl = modifyRequest.newValue;
+      }
+
+      await device.save();
+
+      // 更新申请状态
+      modifyRequest.status = 'approved';
+      modifyRequest.reviewedAt = new Date();
+      modifyRequest.reviewer = req.user._id;
+      modifyRequest.note = note || '';
+      await modifyRequest.save();
+
+      console.log('✅ [修改申请] 审核通过:', {
+        requestId: modifyRequest._id,
+        deviceId: device._id,
+        modifyType: modifyRequest.modifyType,
+        newValue: modifyRequest.newValue
+      });
+
+      res.json({
+        success: true,
+        message: '修改申请已通过，设备信息已更新',
+        data: { device, request: modifyRequest }
+      });
+
+    } else {
+      // 审核拒绝
+      modifyRequest.status = 'rejected';
+      modifyRequest.reviewedAt = new Date();
+      modifyRequest.reviewer = req.user._id;
+      modifyRequest.rejectReason = rejectReason || '管理员拒绝';
+      modifyRequest.note = note || '';
+      await modifyRequest.save();
+
+      console.log('✅ [修改申请] 已拒绝:', {
+        requestId: modifyRequest._id,
+        reason: rejectReason
+      });
+
+      res.json({
+        success: true,
+        message: '修改申请已拒绝',
+        data: { request: modifyRequest }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [修改申请] 审核失败:', error);
+    res.status(500).json({ success: false, message: '审核申请失败' });
+  }
+});
+
+// 获取用户的修改申请列表
+router.get('/my-modify-requests', authenticateToken, async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    const query = { applicant: req.user._id };
+    if (status) {
+      query.status = status;
+    }
+
+    const requests = await DeviceModifyRequest.find(query)
+      .populate('device', 'accountName accountUrl')
+      .populate('reviewer', 'username nickname')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      success: true,
+      data: { requests }
+    });
+
+  } catch (error) {
+    console.error('❌ [修改申请] 获取我的申请失败:', error);
+    res.status(500).json({ success: false, message: '获取申请列表失败' });
+  }
+});
+
+// ==================== 设备详情路由（必须在具体路由之后）====================
+
 // 获取单个设备详情
 router.get('/:id', authenticateToken, requireRole(deviceRoles), async (req, res) => {
   try {
@@ -304,7 +469,7 @@ router.get('/:id', authenticateToken, requireRole(deviceRoles), async (req, res)
 router.post('/', authenticateToken, async (req, res) => {
   try {
 
-    const { phone, accountId, accountName, assignedUser, status, influence, onlineDuration, points, remark, reviewImage } = req.body;
+    const { phone, accountId, accountName, accountUrl, assignedUser, status, influence, onlineDuration, points, remark, reviewImage } = req.body;
 
     // 验证必填字段
     if (!accountName) {
@@ -322,6 +487,7 @@ router.post('/', authenticateToken, async (req, res) => {
       phone,
       accountId,
       accountName,
+      accountUrl: accountUrl || '', // 存储账号链接
       assignedUser: assignedUser || req.user._id, // 如果没有指定assignedUser，自动分配给当前用户
       status: 'reviewing', // 创建设备时设为审核中状态，表示正在等待审核
       influence,
@@ -410,14 +576,15 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // 更新设备
-router.put('/:id', authenticateToken, requireRole(deviceRoles), async (req, res) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
-    const { phone, accountId, accountName, assignedUser, status, influence, onlineDuration, points, remark, reviewImage } = req.body;
+    const { phone, accountId, accountName, accountUrl, assignedUser, status, influence, onlineDuration, points, remark, reviewImage } = req.body;
 
     console.log('🔄 更新设备请求:', {
       id: req.params.id,
       body: req.body,
-      user: req.user?.username
+      user: req.user?.username,
+      role: req.user?.role
     });
 
     // 查找设备
@@ -426,26 +593,41 @@ router.put('/:id', authenticateToken, requireRole(deviceRoles), async (req, res)
       return res.status(404).json({ success: false, message: '设备不存在' });
     }
 
-    // 准备更新数据
-    let updateData = {
-      phone,
-      accountId,
-      accountName,
-      assignedUser: assignedUser || req.user._id, // 如果没有指定assignedUser，自动分配给当前用户
-      status,
-      influence,
-      onlineDuration,
-      remark
-    };
+    // 权限检查：管理员可以修改任何设备，part_time 用户只能修改分配给自己的设备
+    const isAdmin = deviceRoles.includes(req.user.role);
+    const isOwner = device.assignedUser && device.assignedUser.toString() === req.user._id.toString();
 
-    // 字段级权限控制：积分字段
-     if (req.user.role === 'mentor') {
-       // 带教老师更新时，剔除points字段，防止他们修改积分
-       // 积分保持原值不变
-     } else {
-       // manager 和 boss 可以修改积分
-       updateData.points = points;
-     }
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ success: false, message: '权限不足，只有管理员或设备所有者可以修改设备' });
+    }
+
+    // 准备更新数据：只包含明确传来的字段
+    let updateData = {};
+
+    // part_time 用户只能修改账号昵称和链接
+    if (req.user.role === 'part_time') {
+      if (accountName !== undefined) updateData.accountName = accountName;
+      if (accountUrl !== undefined) updateData.accountUrl = accountUrl;
+    } else {
+      // 管理员可以修改所有字段
+      if (phone !== undefined) updateData.phone = phone;
+      if (accountId !== undefined) updateData.accountId = accountId;
+      if (accountName !== undefined) updateData.accountName = accountName;
+      if (accountUrl !== undefined) updateData.accountUrl = accountUrl;
+      if (assignedUser !== undefined) updateData.assignedUser = assignedUser || req.user._id;
+      if (status !== undefined) updateData.status = status;
+      if (influence !== undefined) updateData.influence = influence;
+      if (onlineDuration !== undefined) updateData.onlineDuration = onlineDuration;
+      if (remark !== undefined) updateData.remark = remark;
+
+      // 字段级权限控制：积分字段
+      if (req.user.role === 'mentor') {
+        // 带教老师更新时，不修改积分字段
+      } else {
+        // manager 和 boss 可以修改积分
+        if (points !== undefined) updateData.points = points;
+      }
+    }
 
     console.log('📝 准备更新数据:', updateData);
 
@@ -587,7 +769,8 @@ router.get('/users/list', authenticateToken, requireRole(deviceRoles), async (re
 
     const query = {
       role: 'part_time', // 只查询普通兼职用户，带教老师不分配设备
-      is_deleted: { $ne: true }
+      is_deleted: { $ne: true },
+      isLocked: { $ne: true } // 排除已锁定的用户（锁定等同于伪删除）
     };
 
     console.log('🔍 查询条件:', query);
@@ -800,6 +983,112 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
       success: false,
       message: '审核设备失败'
     });
+  }
+});
+
+// ==================== 设备修改申请 API ====================
+
+// 提交设备修改申请（兼职用户）
+router.post('/:id/modify-request', authenticateToken, async (req, res) => {
+  try {
+    const { accountName, accountUrl, reason } = req.body;
+
+    console.log('📝 [修改申请] 收到申请:', {
+      deviceId: req.params.id,
+      userId: req.user._id,
+      accountName,
+      accountUrl,
+      reason
+    });
+
+    // 查找设备
+    const device = await Device.findById(req.params.id);
+    if (!device) {
+      return res.status(404).json({ success: false, message: '设备不存在' });
+    }
+
+    // 验证权限：只能修改分配给自己的设备
+    const isOwner = device.assignedUser && device.assignedUser.toString() === req.user._id.toString();
+    const isAdmin = ['manager', 'boss', 'hr', 'mentor'].includes(req.user.role);
+
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ success: false, message: '权限不足，只能申请修改自己的设备' });
+    }
+
+    // 检查是否有待审核的申请
+    const pendingRequest = await DeviceModifyRequest.findOne({
+      device: req.params.id,
+      status: 'pending'
+    });
+
+    if (pendingRequest) {
+      return res.status(400).json({ success: false, message: '该设备有待审核的修改申请，请等待审核完成' });
+    }
+
+    // 创建修改申请
+    const modifyRequests = [];
+
+    // 账号名修改申请
+    if (accountName && accountName.trim() !== device.accountName) {
+      // 检查新账号名是否已存在
+      const existingDevice = await Device.findOne({
+        accountName: accountName.trim(),
+        _id: { $ne: req.params.id }
+      });
+      if (existingDevice) {
+        return res.status(400).json({ success: false, message: '该账号名已被使用' });
+      }
+
+      modifyRequests.push({
+        device: device._id,
+        deviceAccountName: device.accountName,
+        applicant: req.user._id,
+        modifyType: 'account_name',
+        oldValue: device.accountName,
+        newValue: accountName.trim(),
+        reason: reason || '修改账号昵称',
+        status: 'pending'
+      });
+    }
+
+    // 账号链接修改申请
+    if (accountUrl && accountUrl.trim() !== device.accountUrl) {
+      modifyRequests.push({
+        device: device._id,
+        deviceAccountName: device.accountName,
+        applicant: req.user._id,
+        modifyType: 'account_url',
+        oldValue: device.accountUrl || '',
+        newValue: accountUrl.trim(),
+        reason: reason || '修改账号链接',
+        status: 'pending'
+      });
+    }
+
+    if (modifyRequests.length === 0) {
+      return res.status(400).json({ success: false, message: '没有需要修改的内容' });
+    }
+
+    // 批量创建申请
+    const createdRequests = await DeviceModifyRequest.insertMany(modifyRequests);
+
+    console.log('✅ [修改申请] 创建成功:', {
+      requestId: createdRequests.map(r => r._id),
+      deviceId: device._id
+    });
+
+    res.json({
+      success: true,
+      message: '修改申请已提交，请等待审核',
+      data: {
+        requests: createdRequests,
+        count: createdRequests.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [修改申请] 创建失败:', error);
+    res.status(500).json({ success: false, message: '提交申请失败' });
   }
 });
 

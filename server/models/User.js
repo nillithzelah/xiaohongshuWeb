@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
+// 导入用户角色常量
+const { USER_ROLES, USER_ROLE_LIST } = require('../../shared/constants');
+
 const userSchema = new mongoose.Schema({
   openid: {
     type: String,
@@ -21,7 +24,7 @@ const userSchema = new mongoose.Schema({
   password: {
     type: String,
     required: function() {
-      return ['mentor', 'boss', 'finance', 'manager', 'hr'].includes(this.role);
+      return [USER_ROLES.MENTOR, USER_ROLES.BOSS, USER_ROLES.FINANCE, USER_ROLES.MANAGER, USER_ROLES.HR].includes(this.role);
     }
   },
   avatar: {
@@ -30,13 +33,17 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['part_time', 'mentor', 'boss', 'finance', 'manager', 'hr', 'lead'],
-    default: 'part_time'
+    enum: USER_ROLE_LIST,
+    default: USER_ROLES.PART_TIME
   },
 
   // 基本信息
   nickname: { type: String, maxLength: 50 },
-  phone: { type: String, maxLength: 20 },
+  phone: {
+    type: String,
+    maxLength: 20,
+    sparse: true // 允许多个null，但非null值必须唯一
+  },
   wechat: { type: String, maxLength: 50 },
   notes: { type: String, maxLength: 500 },
 
@@ -148,6 +155,26 @@ const userSchema = new mongoose.Schema({
     }
   }],
 
+  // 锁定状态（HR可以锁定兼职用户）
+  isLocked: {
+    type: Boolean,
+    default: false
+  },
+  lockedAt: {
+    type: Date,
+    default: null
+  },
+  lockedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  lockedReason: {
+    type: String,
+    maxLength: 500,
+    default: null
+  },
+
   // 软删除相关字段
   is_deleted: {
     type: Boolean,
@@ -164,9 +191,22 @@ const userSchema = new mongoose.Schema({
   }
 });
 
+// 索引定义
+userSchema.index({ phone: 1 }, { unique: true, sparse: true }); // 手机号唯一索引（允许null）
+userSchema.index({ username: 1 }, { unique: true, sparse: true }); // 用户名唯一索引（允许null）
+userSchema.index({ is_deleted: 1, phone: 1 }); // 用于查找已删除的手机号
+
 // 密码加密和邀请码生成中间件
 userSchema.pre('save', async function(next) {
   try {
+    // 自动去除字符串字段的首尾空格（防止手机号/用户名带空格导致登录失败）
+    const stringFields = ['username', 'phone', 'wechat', 'nickname'];
+    stringFields.forEach(field => {
+      if (this[field] && typeof this[field] === 'string') {
+        this[field] = this[field].trim();
+      }
+    });
+
     // 密码加密逻辑
     if (this.isModified('password') && this.password) {
       // 如果密码已经是bcrypt哈希，跳过加密
@@ -185,18 +225,15 @@ userSchema.pre('save', async function(next) {
     }
 
     // 确保钱包金额字段为分单位整数（避免浮点数精度问题）
-    if (this.isModified('wallet.total_earned') && this.wallet?.total_earned !== undefined) {
-      this.wallet.total_earned = Math.round(this.wallet.total_earned);
-    }
-
     if (this.isModified('wallet.total_withdrawn') && this.wallet?.total_withdrawn !== undefined) {
       this.wallet.total_withdrawn = Math.round(this.wallet.total_withdrawn);
     }
 
     // 自动生成邀请码（仅对新用户且没有邀请码时）
     if (this.isNew && !this.invitationCode && this.username) {
-      // 使用用户名作为邀请码（确保唯一性）
-      this.invitationCode = this.username;
+      // 使用用户名+时间戳后缀作为邀请码，确保唯一性
+      const timestamp = Date.now().toString(36);
+      this.invitationCode = `${this.username}_${timestamp}`;
       console.log('🎫 自动生成邀请码:', this.invitationCode);
     }
 

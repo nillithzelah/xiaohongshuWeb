@@ -50,8 +50,8 @@ class AsyncAiReviewService {
       expireMarkCooldown: 60000 // 标记过期的冷却时间：60秒
     };
 
-    // 初始化AI内容分析服务实例
-    this.aiContentAnalysisService = new aiContentAnalysisService();
+    // 使用AI内容分析服务单例实例
+    this.aiContentAnalysisService = aiContentAnalysisService;
   }
 
   /**
@@ -662,13 +662,6 @@ class AsyncAiReviewService {
    * 处理客户端验证成功的情况
    */
   async processClientVerificationSuccess(review, clientVerification) {
-    const updateData = {
-      status: review.imageType === 'note' ? 'ai_approved' : 'completed',
-      clientVerification: clientVerification
-    };
-
-    updateData.auditHistory = review.auditHistory || [];
-
     // 构建详细的验证成功消息
     const currentResult = clientVerification.attempt === 1
       ? clientVerification.firstResult
@@ -685,7 +678,7 @@ class AsyncAiReviewService {
       successComment += `\n已自动发放积分奖励`;
     }
 
-    updateData.auditHistory.push({
+    const historyItem = {
       operator: null,
       operatorName: '客户端验证系统',
       action: 'local_client_passed',
@@ -697,9 +690,16 @@ class AsyncAiReviewService {
         verified: currentResult?.verified,
         screenshotUrl: currentResult?.screenshotUrl
       }
-    });
+    };
 
-    await ImageReview.findByIdAndUpdate(review._id, updateData);
+    // 使用 $push 追加审核历史，避免覆盖现有记录
+    await ImageReview.findByIdAndUpdate(review._id, {
+      $set: {
+        status: review.imageType === 'note' ? 'ai_approved' : 'completed',
+        clientVerification: clientVerification
+      },
+      $push: { auditHistory: historyItem }
+    });
 
     // 如果是评论类型，直接发放积分
     if (review.imageType === 'comment') {
@@ -730,14 +730,7 @@ class AsyncAiReviewService {
     }
     failureComment += `最终结果: 验证未通过，任务驳回`;
 
-    const updateData = {
-      status: 'rejected',
-      rejectionReason: finalReason,  // 使用完整的 reason
-      clientVerification: clientVerification
-    };
-
-    updateData.auditHistory = review.auditHistory || [];
-    updateData.auditHistory.push({
+    const historyItem = {
       operator: null,
       operatorName: '客户端验证系统',
       action: 'local_client_rejected',
@@ -758,9 +751,17 @@ class AsyncAiReviewService {
           contentAudit: secondResult?.contentAudit
         } : null
       }
-    });
+    };
 
-    await ImageReview.findByIdAndUpdate(review._id, updateData);
+    // 使用 $push 追加审核历史，避免覆盖现有记录
+    await ImageReview.findByIdAndUpdate(review._id, {
+      $set: {
+        status: 'rejected',
+        rejectionReason: finalReason,
+        clientVerification: clientVerification
+      },
+      $push: { auditHistory: historyItem }
+    });
 
     console.log(`❌ 客户端验证最终驳回: ${review._id}, 原因: ${finalReason}`);
   }
@@ -989,6 +990,9 @@ class AsyncAiReviewService {
     // 根据审核结果决定状态
     console.log(`📋 更新审核结果: passed=${aiReviewResult.aiReview.passed}, confidence=${aiReviewResult.aiReview.confidence}, reasons=${JSON.stringify(aiReviewResult.aiReview.reasons)}`);
 
+    // 用于收集需要追加的审核历史记录
+    const auditHistoryItems = [];
+
     if (aiReviewResult.aiReview.passed && aiReviewResult.aiReview.confidence >= 0.7) {
       console.log('✅ 审核通过条件满足，执行通过逻辑');
       // 审核通过，执行后续逻辑
@@ -1002,8 +1006,7 @@ class AsyncAiReviewService {
           updateData.status = 'completed'; // 评论AI审核通过，直接完成
         }
 
-        updateData.auditHistory = review.auditHistory || [];
-        updateData.auditHistory.push({
+        auditHistoryItems.push({
           operator: null,
           operatorName: 'AI审核系统',
           action: 'ai_auto_approved',
@@ -1013,7 +1016,7 @@ class AsyncAiReviewService {
 
         // 评论类型：添加积分发放记录到 auditHistory
         if (review.imageType === 'comment' && approvalResult.pointsReward > 0) {
-          updateData.auditHistory.push({
+          auditHistoryItems.push({
             operator: null,
             operatorName: 'AI审核系统',
             action: 'points_reward',
@@ -1027,8 +1030,7 @@ class AsyncAiReviewService {
         // 审核被限制条件拒绝
         updateData.status = 'manager_rejected';
         updateData.rejectionReason = approvalResult.reason;
-        updateData.auditHistory = review.auditHistory || [];
-        updateData.auditHistory.push({
+        auditHistoryItems.push({
           operator: null,
           operatorName: 'AI审核系统',
           action: 'ai_auto_rejected',
@@ -1044,8 +1046,7 @@ class AsyncAiReviewService {
       updateData.rejectionReason = aiReviewResult.aiReview.reasons && aiReviewResult.aiReview.reasons.length > 0
         ? aiReviewResult.aiReview.reasons.join('；')
         : '不符合笔记要求';
-      updateData.auditHistory = review.auditHistory || [];
-      updateData.auditHistory.push({
+      auditHistoryItems.push({
         operator: null,
         operatorName: 'AI审核系统',
         action: 'ai_auto_rejected',
@@ -1055,7 +1056,10 @@ class AsyncAiReviewService {
       console.log(`❌ 审核失败，状态设置为rejected: ${updateData.rejectionReason}`);
     }
 
-    // 更新审核记录
+    // 更新审核记录（使用 $push 追加审核历史，避免覆盖现有记录）
+    if (auditHistoryItems.length > 0) {
+      updateData.$push = { auditHistory: { $each: auditHistoryItems } };
+    }
     await ImageReview.findByIdAndUpdate(review._id, updateData);
 
     // AI自动审核通过后，自动发放两级推荐佣金（仅对评论直接通过的情况）
@@ -1827,9 +1831,8 @@ class AsyncAiReviewService {
       const axios = require('axios');
       const cheerio = require('cheerio');
 
-      // 获取Cookie（SimpleCookiePool 导出的是实例，不是类，不能用 new）
-      const simpleCookiePool = require('./SimpleCookiePool');
-      const cookieString = simpleCookiePool.getCookieString() || process.env.XIAOHONGSHU_COOKIE || '';
+      // 获取Cookie（直接使用环境变量）
+      const cookieString = process.env.XIAOHONGSHU_COOKIE || '';
 
       const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -1894,11 +1897,32 @@ class AsyncAiReviewService {
         }
       }
 
-      // 如果所有选择器都失败，使用meta描述
+      // 如果正文内容不足，尝试提取标签（hashtags）作为补充
+      if (!content || content.length < 10) {
+        const tags = [];
+        // 小红书标签通常是包含 # 的链接或文本
+        $('a[href*="/topic/"], a[href*="/tag/"], .tags a, .tag-list a').each((i, elem) => {
+          const tagText = $(elem).text().trim();
+          if (tagText && tagText.length > 0) {
+            // 如果标签不包含 #，手动添加
+            const formattedTag = tagText.startsWith('#') ? tagText : `#${tagText}`;
+            tags.push(formattedTag);
+          }
+        });
+
+        // 如果找到了标签，将其作为内容
+        if (tags.length > 0) {
+          content = tags.join(' ');
+          source = 'hashtags';
+          console.log(`🏷️ [标签提取] 找到 ${tags.length} 个标签: ${tags.join(', ')}`);
+        }
+      }
+
+      // 如果仍然没有内容，使用meta描述
       if (!content) {
         const metaDesc = $('meta[name="description"]').attr('content') ||
                          $('meta[property="og:description"]').attr('content') || '';
-        if (metaDesc && metaDesc.length > 10) {
+        if (metaDesc && metaDesc.length > 5) {  // 降低阈值，5个字符也接受
           content = metaDesc;
           source = 'meta';
         }
@@ -1928,15 +1952,16 @@ class AsyncAiReviewService {
     try {
       console.log('🔑 开始关键词检查...');
 
-      // 检查内容是否为空
-      if ((!title || title.trim() === '') && (!content || content.trim() === '')) {
-        console.log('⚠️ 页面内容为空，无法进行关键词检查');
+      // 检查内容是否为空（只检查内容，允许标题为空）
+      // 有些笔记没有标题，但只要内容不为空就应该继续处理
+      if (!content || content.trim() === '') {
+        console.log('⚠️ 页面内容为空，无法进行关键词检查（标题为空是允许的）');
         return { passed: false, reason: '页面内容为空', score: 0 };
       }
 
       const cheerio = require('cheerio');
       // 构建模拟HTML用于关键词检查
-      const html = `<title>${title}</title><meta name="description" content="${content.substring(0, 200)}"><body>${content}</body>`;
+      const html = `<title>${title || '(无标题)'}</title><meta name="description" content="${content.substring(0, 200)}"><body>${content}</body>`;
       const $ = cheerio.load(html);
 
       // 调用关键词检查（xiaohongshuService 是已导入的实例，不是类）

@@ -75,17 +75,21 @@ class ContinuousCheckService {
        // 过滤掉超过检查期限的笔记
        const validReviewsToCheck = [];
        for (const review of reviewsToCheck) {
-         const createdAt = new Date(review.createdAt);
-         const daysSinceCreation = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+         // 【修复】基于主管审核通过时间计算，而非笔记创建时间
+         // 持续检查应该从审核通过后开始计算，而不是从笔记提交时开始
+         const managerApproveRecord = review.auditHistory?.find(h => h.action === 'manager_approve');
+         const checkStartTime = managerApproveRecord?.timestamp ? new Date(managerApproveRecord.timestamp) : new Date(review.createdAt);
+         const daysSinceCheckStart = Math.floor((now - checkStartTime) / (1000 * 60 * 60 * 24));
 
-         if (daysSinceCreation <= maxCheckDays) {
+         if (daysSinceCheckStart <= maxCheckDays) {
            validReviewsToCheck.push(review);
          } else {
            // 超过检查期限，停止持续检查
-           console.log(`⏰ [持续检查] 笔记 ${review._id} 已超过${maxCheckDays}天检查期限 (${daysSinceCreation}天)，停止检查`);
+           console.log(`⏰ [持续检查] 笔记 ${review._id} 已超过${maxCheckDays}天检查期限 (${daysSinceCheckStart}天)，停止检查`);
            await ImageReview.findByIdAndUpdate(review._id, {
              'continuousCheck.status': 'expired',
-             'continuousCheck.endReason': `超过${maxCheckDays}天检查期限`
+             'continuousCheck.endReason': `超过${maxCheckDays}天检查期限`,
+             'continuousCheck.endedAt': new Date()
            });
          }
        }

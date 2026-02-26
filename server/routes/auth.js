@@ -23,11 +23,18 @@ const phoneLoginLimiter = rateLimit({
   skipSuccessfulRequests: false
 });
 
-// 从环境变量获取JWT密钥，如果未设置则抛出错误
+// JWT_SECRET 检查已在 middleware/auth.js 中完成，此处直接使用
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET || JWT_SECRET.length < 32) {
-  throw new Error('JWT_SECRET环境变量必须设置且至少32个字符');
-}
+
+// ==================== 登录失败次数限制 ====================
+// 使用持久化存储，解决服务重启后记录丢失的问题
+const {
+  checkLoginLockout,
+  recordLoginFailure,
+  clearLoginAttempts,
+  getRemainingAttempts,
+  MAX_LOGIN_ATTEMPTS
+} = require('../utils/loginAttemptsStore');
 
 // 测试路由
 router.get('/test-auth', (req, res) => {
@@ -80,6 +87,79 @@ router.post('/refresh-token', async (req, res) => {
 const generateUserToken = (userId, username) => {
   return jwt.sign({ userId, username }, JWT_SECRET, { expiresIn: '7d' });
 };
+
+// 解密手机号（仅返回手机号，不做登录操作）
+router.post('/decrypt-phone', async (req, res) => {
+  try {
+    const { code, encryptedData, iv } = req.body;
+
+    console.log('📱 解密手机号请求');
+
+    if (!code || !encryptedData || !iv) {
+      return res.status(400).json({ success: false, message: '缺少必要参数' });
+    }
+
+    // 调用微信API获取session_key
+    const https = require('https');
+    const appId = process.env.WX_APP_ID || process.env.WECHAT_APP_ID || 'your_app_id';
+    const appSecret = process.env.WX_APP_SECRET || process.env.WECHAT_APP_SECRET || 'your_app_secret';
+    const wechatApiUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${appId}&secret=${appSecret}&js_code=${code}&grant_type=authorization_code`;
+
+    const wechatData = await new Promise((resolve, reject) => {
+      const request = https.get(wechatApiUrl, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(new Error('解析微信API响应失败'));
+          }
+        });
+      }).on('error', reject);
+
+      request.setTimeout(30000, () => {
+        request.destroy();
+        reject(new Error('微信API请求超时'));
+      });
+    });
+
+    if (wechatData.errcode) {
+      throw new Error(`微信API错误: ${wechatData.errmsg}`);
+    }
+
+    const sessionKey = wechatData.session_key;
+
+    // 解密手机号
+    const crypto = require('crypto');
+
+    // 验证格式
+    const sessionKeyBuffer = Buffer.from(sessionKey, 'base64');
+    const ivBuffer = Buffer.from(iv, 'base64');
+    const encryptedBuffer = Buffer.from(encryptedData, 'base64');
+
+    // AES-128-CBC 解密
+    const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKeyBuffer, ivBuffer);
+    decipher.setAutoPadding(true);
+
+    let decrypted = decipher.update(encryptedBuffer, null, 'utf8');
+    decrypted += decipher.final('utf8');
+
+    const phoneData = JSON.parse(decrypted);
+    const phoneNumber = phoneData.phoneNumber;
+
+    console.log('✅ 解密手机号成功:', phoneNumber);
+
+    res.json({
+      success: true,
+      phoneNumber: phoneNumber
+    });
+
+  } catch (error) {
+    console.error('解密手机号错误:', error);
+    res.status(500).json({ success: false, message: '解密手机号失败' });
+  }
+});
 
 // 微信小程序登录/注册
 router.post('/wechat-login', loginLimiter, async (req, res) => {
@@ -162,7 +242,7 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           }
 
           const sessionKey = wechatData.session_key;
-          console.log('📱 获取到session_key:', sessionKey);
+          console.log('📱 获取到session_key: [REDACTED]'); // 【安全修复】脱敏敏感信息
 
           // 验证session_key格式
           if (!sessionKey || typeof sessionKey !== 'string') {
@@ -197,7 +277,7 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
 
           // 2. 使用session_key解密手机号数据
           console.log('🔐 开始AES解密过程...');
-          console.log('🔐 session_key (base64):', sessionKey.substring(0, 10) + '...');
+          console.log('🔐 session_key长度:', sessionKey.length, '字符');
           console.log('🔐 iv (base64):', iv.substring(0, 10) + '...');
           console.log('🔐 encryptedData长度:', encryptedData.length);
 
@@ -391,13 +471,11 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
 //   });
 // });
 
-// 管理员登录路由 (临时禁用登录限制测试)
+// 管理员登录路由 (带登录次数限制)
 router.post('/admin-login', async (req, res) => {
   try {
     console.log('🎯 收到管理员登录请求:', req.body);
     const { username, password } = req.body;
-
-    console.log('🔍 查找用户:', username);
 
     if (!username || !password) {
       console.log('❌ 参数不完整');
@@ -408,6 +486,18 @@ router.post('/admin-login', async (req, res) => {
     const cleanUsername = username.trim();
     console.log('🧹 清理后的用户名:', cleanUsername);
 
+    // ==================== 检查登录锁定状态 ====================
+    const lockoutCheck = checkLoginLockout(cleanUsername);
+    if (lockoutCheck.locked) {
+      console.log(`🔒 账户 ${cleanUsername} 已锁定，剩余时间: ${lockoutCheck.remainingMinutes}分钟`);
+      return res.status(429).json({
+        success: false,
+        message: lockoutCheck.message,
+        locked: true,
+        remainingMinutes: lockoutCheck.remainingMinutes
+      });
+    }
+
     // 从数据库查找用户
     console.log('🔍 开始数据库查询...');
     const user = await User.findOne({
@@ -416,13 +506,22 @@ router.post('/admin-login', async (req, res) => {
     });
     console.log('📋 查询结果:', user ? { username: user.username, role: user.role, hasPassword: !!user.password } : '用户不存在');
 
+    // 【安全修复】用户不存在时也记录失败，防止用户名枚举攻击
+    // 注意：错误消息与密码错误时保持一致
     if (!user) {
-      console.log('❌ 用户不存在');
-      return res.status(401).json({ success: false, message: '用户名或密码错误' });
+      console.log('❌ 登录失败: 用户名或密码错误');
+      // 记录登录失败（即使是不存在的用户，也要记录以防止枚举）
+      const failureResult = recordLoginFailure(cleanUsername);
+      console.log(`📝 登录失败记录: 剩余尝试次数 ${failureResult.remainingAttempts}`);
+      return res.status(401).json({
+        success: false,
+        message: failureResult.message,
+        remainingAttempts: failureResult.remainingAttempts
+      });
     }
 
     // 检查用户角色是否为管理员角色
-    const adminRoles = ['mentor', 'boss', 'finance', 'manager', 'hr'];
+    const adminRoles = ['mentor', 'boss', 'finance', 'manager', 'hr', 'promoter'];
     console.log('🔍 检查角色:', user.role, '是否在', adminRoles);
     if (!adminRoles.includes(user.role)) {
       console.log('❌ 角色权限不足');
@@ -438,16 +537,32 @@ router.post('/admin-login', async (req, res) => {
       isPasswordValid = await user.comparePassword(password);
       console.log(`🔐 bcrypt验证结果: ${isPasswordValid}`);
     } else {
-      // 如果用户没有密码，允许开发环境下登录（空密码或admin123）
-      if (password === '' || password === 'admin123') {
-        isPasswordValid = true;
-      }
+      // 【安全修复】移除空密码登录逻辑，未设置密码的账户禁止登录
+      console.log('❌ 用户未设置密码，拒绝登录');
+      return res.status(403).json({
+        success: false,
+        message: '账户未设置密码，请联系管理员重置密码'
+      });
     }
 
     if (!isPasswordValid) {
       console.log('❌ 密码验证失败');
-      return res.status(401).json({ success: false, message: '用户名或密码错误' });
+      // 记录登录失败
+      const failureResult = recordLoginFailure(cleanUsername);
+      console.log(`📝 登录失败记录: 剩余尝试次数 ${failureResult.remainingAttempts}, 是否锁定: ${failureResult.shouldLock}`);
+
+      return res.status(401).json({
+        success: false,
+        message: failureResult.message,
+        remainingAttempts: failureResult.remainingAttempts,
+        locked: failureResult.shouldLock,
+        lockedUntil: failureResult.lockedUntil
+      });
     }
+
+    // ==================== 登录成功，清除失败记录 ====================
+    clearLoginAttempts(cleanUsername);
+    console.log(`✅ 登录成功，已清除 ${cleanUsername} 的失败记录`);
 
     // 生成token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
@@ -486,11 +601,12 @@ router.post('/register', authenticateToken, async (req, res) => {
 
     // 定义允许创建的角色映射
     const allowedRoles = {
-      'boss': ['part_time', 'mentor', 'hr', 'manager', 'finance'], // 老板可以创建所有角色
-      'manager': ['part_time', 'mentor', 'hr'], // 经理管理 兼职、带教、HR
+      'boss': ['part_time', 'mentor', 'hr', 'manager', 'finance', 'promoter'], // 老板可以创建所有角色
+      'manager': ['part_time', 'mentor', 'hr', 'promoter'], // 经理管理 兼职、带教、HR、引流人员
       'hr': ['part_time', 'lead'], // HR 负责招募 兼职 和 线索
       'mentor': ['part_time'], // 带教老师可以创建兼职用户
       'finance': [], // 财务禁止创建任何用户
+      'promoter': [], // 引流人员禁止创建任何用户
       'part_time': [] // 兼职用户禁止创建任何用户
     };
 
@@ -560,7 +676,14 @@ router.post('/register', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('注册错误:', error);
-    res.status(500).json({ success: false, message: '注册失败' });
+    // 返回详细错误信息用于调试
+    const errorMessage = error.message || '注册失败';
+    if (error.code === 11000) {
+      // 唯一索引冲突
+      res.status(400).json({ success: false, message: '用户名或邀请码已存在' });
+    } else {
+      res.status(500).json({ success: false, message: errorMessage });
+    }
   }
 });
 
@@ -618,11 +741,14 @@ router.post('/phone-login', phoneLoginLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: '缺少手机号' });
     }
 
-    console.log('📱 手机号登录请求:', phoneNumber);
+    // 去除首尾空格
+    const cleanPhone = phoneNumber.trim();
+
+    console.log('📱 手机号登录请求:', cleanPhone);
 
     // 优先查找已有的兼职用户（通过手机号匹配）
     let user = await User.findOne({
-      phone: phoneNumber,
+      phone: cleanPhone,
       role: 'part_time', // 只匹配兼职用户
       is_deleted: { $ne: true }
     });
@@ -667,22 +793,26 @@ router.post('/user-register', async (req, res) => {
   try {
     const { phoneNumber, username, password, nickname, invitationCode } = req.body;
 
-    console.log('📝 用户注册请求:', { phoneNumber, username, nickname });
+    // 去除首尾空格
+    const cleanPhone = phoneNumber ? phoneNumber.trim() : '';
+    const cleanUsername = username ? username.trim() : '';
+
+    console.log('📝 用户注册请求:', { phoneNumber: cleanPhone, username: cleanUsername, nickname });
 
     // 参数验证
-    if (!phoneNumber || !username || !password) {
+    if (!cleanPhone || !cleanUsername || !password) {
       return res.status(400).json({ success: false, message: '手机号、用户名和密码不能为空' });
     }
 
     // 检查手机号格式
     const phoneRegex = /^1[3-9]\d{9}$/;
-    if (!phoneRegex.test(phoneNumber)) {
+    if (!phoneRegex.test(cleanPhone)) {
       return res.status(400).json({ success: false, message: '手机号格式不正确' });
     }
 
     // 检查用户名格式（字母数字下划线，4-20字符）
     const usernameRegex = /^[a-zA-Z0-9_]{4,20}$/;
-    if (!usernameRegex.test(username)) {
+    if (!usernameRegex.test(cleanUsername)) {
       return res.status(400).json({ success: false, message: '用户名格式不正确（4-20位字母数字下划线）' });
     }
 
@@ -691,54 +821,47 @@ router.post('/user-register', async (req, res) => {
       return res.status(400).json({ success: false, message: '密码至少需要6位字符' });
     }
 
-    // 检查用户名是否已被使用
-    const existingUsernameUser = await User.findOne({
-      username,
-      is_deleted: { $ne: true }
-    });
-
-    if (existingUsernameUser) {
-      return res.status(400).json({ success: false, message: '用户名已被使用' });
-    }
-
-    // 检查手机号是否已被使用
-    const existingPhoneUser = await User.findOne({
-      phone: phoneNumber,
-      is_deleted: { $ne: true }
-    });
+    // 检查手机号是否已被使用（包括已删除用户，防止重复创建）
+    const existingPhoneUser = await User.findOne({ phone: cleanPhone });
 
     let user;
 
     if (existingPhoneUser) {
-      // 手机号已存在，检查是否已设置用户名密码
-      if (existingPhoneUser.username && existingPhoneUser.password) {
+      // 手机号已存在，检查用户状态
+      if (existingPhoneUser.is_deleted) {
+        // 用户已删除，不允许用同一手机号重新注册
         return res.status(400).json({
           success: false,
-          message: '该手机号已被注册账号，请直接登录'
+          message: '该手机号已被使用（账号已删除），请联系管理员恢复'
         });
       }
 
-      // 手机号存在但未设置用户名密码
-      console.log('📱 手机号已存在，更新账号信息:', existingPhoneUser.username);
+      // 手机号存在，更新用户信息（无论是否已有账号）
+      console.log('📱 手机号已存在，更新账号信息:', existingPhoneUser.username || '未设置');
 
-      // 检查用户是否已被分配给带教老师（HR创建的线索）
-      const isAssignedToMentor = existingPhoneUser.mentor_id !== null
-        && existingPhoneUser.mentor_id !== undefined;
+      // 判断是否已有完整账号信息
+      const hasAccount = existingPhoneUser.username && existingPhoneUser.password;
 
-      if (isAssignedToMentor) {
-        console.log('📋 用户已被分配给带教老师，更新账号信息并保留系统设置');
+      // 检查用户名是否被其他用户占用（排除自己）
+      const usernameTaken = await User.findOne({
+        username: cleanUsername,
+        _id: { $ne: existingPhoneUser._id }  // 排除当前用户自己
+      });
+      if (usernameTaken) {
+        return res.status(400).json({ success: false, message: '用户名已被使用' });
+      }
 
-        // 对于已分配用户，只更新用户主动设置的信息
-        // 保留HR和主管设置的系统信息（如微信、小红书账号、mentor_id等）
-        existingPhoneUser.username = username;
-        existingPhoneUser.password = password;
+      if (hasAccount) {
+        // 已有账号：更新兼职用户管理里的用户
+        console.log('👤 已有账号，更新用户信息');
 
-        // 如果用户提供了昵称，则更新；否则保持原有昵称
+        existingPhoneUser.username = cleanUsername;  // 更新用户名
+        existingPhoneUser.password = password;  // 更新密码
         if (nickname && nickname.trim()) {
-          existingPhoneUser.nickname = nickname.trim();
+          existingPhoneUser.nickname = nickname.trim();  // 更新昵称
         }
 
-        // 如果提供了邀请码，设置上级用户（但不覆盖已有的mentor分配）
+        // 处理邀请码（只在没有parent_id时设置）
         if (invitationCode && invitationCode.trim() && !existingPhoneUser.parent_id) {
           const parentUser = await User.findOne({
             username: invitationCode.trim(),
@@ -750,18 +873,26 @@ router.post('/user-register', async (req, res) => {
           }
         }
 
-        console.log('🔄 已分配用户账号信息更新完成，保留系统配置');
       } else {
-        console.log('🆕 临时账号，设置完整账号信息');
+        // 无账号：分配带教老师里的线索用户，设置完整账号
+        console.log('📋 线索用户，设置账号信息并保留系统设置');
 
-        // 对于临时账号（如phone-login创建的），设置完整的账号信息
-        existingPhoneUser.username = username;
+        // 更新用户信息，保留HR设置的系统信息（微信、小红书、mentor_id等）
+        existingPhoneUser.username = cleanUsername;
         existingPhoneUser.password = password;
-        existingPhoneUser.nickname = nickname || username;
-        existingPhoneUser.role = existingPhoneUser.role || 'part_time';
+        if (nickname && nickname.trim()) {
+          existingPhoneUser.nickname = nickname.trim();
+        } else {
+          existingPhoneUser.nickname = existingPhoneUser.nickname || cleanUsername;
+        }
 
-        // 处理邀请码
-        if (invitationCode && invitationCode.trim()) {
+        // 确保有角色
+        if (!existingPhoneUser.role) {
+          existingPhoneUser.role = 'part_time';
+        }
+
+        // 处理邀请码（只在没有parent_id时设置）
+        if (invitationCode && invitationCode.trim() && !existingPhoneUser.parent_id) {
           const parentUser = await User.findOne({
             username: invitationCode.trim(),
             is_deleted: { $ne: true }
@@ -771,44 +902,20 @@ router.post('/user-register', async (req, res) => {
             console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
           }
         }
+
+        console.log('🔄 线索用户账号设置完成，保留系统配置');
       }
 
       await existingPhoneUser.save();
       user = existingPhoneUser;
-      console.log('👤 更新用户成功:', username, phoneNumber);
+      console.log('👤 更新用户成功:', cleanUsername, cleanPhone);
     } else {
-      // 手机号不存在，创建新用户
-      console.log('🆕 创建新用户:', username, phoneNumber);
-
-      // 处理邀请码
-      let parentId = null;
-      if (invitationCode && invitationCode.trim()) {
-        const parentUser = await User.findOne({
-          username: invitationCode.trim(),
-          is_deleted: { $ne: true }
-        });
-
-        if (!parentUser) {
-          return res.status(400).json({ success: false, message: '邀请码无效，请检查后重新输入' });
-        }
-        parentId = parentUser._id;
-        console.log('✅ 邀请码验证通过，上级用户:', parentUser.username);
-      }
-
-      // 创建新用户
-      user = new User({
-        username,
-        password,
-        phone: phoneNumber,
-        nickname: nickname || username,
-        role: 'part_time',
-        points: 0,
-        parent_id: parentId,
-        training_status: '已筛选' // 自动设置培训状态
+      // 手机号不存在，拒绝创建，提示联系HR
+      console.log('❌ 手机号未在系统中存在，拒绝注册:', cleanPhone);
+      return res.status(404).json({
+        success: false,
+        message: '该手机号尚未在系统中注册，请联系HR创建用户后再进行注册'
       });
-
-      await user.save();
-      console.log('👤 新用户注册成功:', username, phoneNumber);
     }
 
     // 自动登录，返回token
@@ -844,15 +951,18 @@ router.get('/check-phone', async (req, res) => {
       return res.status(400).json({ success: false, message: '手机号不能为空' });
     }
 
+    // 去除首尾空格
+    const cleanPhone = phoneNumber.trim();
+
     // 检查手机号格式
     const phoneRegex = /^1[3-9]\d{9}$/;
-    if (!phoneRegex.test(phoneNumber)) {
+    if (!phoneRegex.test(cleanPhone)) {
       return res.status(400).json({ success: false, message: '手机号格式不正确' });
     }
 
     // 查找手机号是否已被注册
     const existingUser = await User.findOne({
-      phone: phoneNumber,
+      phone: cleanPhone,
       is_deleted: { $ne: true }
     });
 
@@ -873,16 +983,19 @@ router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { phoneNumber, password } = req.body;
 
-    console.log('🔐 账号密码登录请求:', phoneNumber);
+    // 去除首尾空格
+    const cleanPhone = phoneNumber ? phoneNumber.trim() : '';
+
+    console.log('🔐 账号密码登录请求:', cleanPhone);
 
     // 参数验证
-    if (!phoneNumber || !password) {
+    if (!cleanPhone || !password) {
       return res.status(400).json({ success: false, message: '手机号和密码不能为空' });
     }
 
     // 查找用户
     const user = await User.findOne({
-      phone: phoneNumber,
+      phone: cleanPhone,
       is_deleted: { $ne: true }
     });
 

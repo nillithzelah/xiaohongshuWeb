@@ -1,6 +1,6 @@
 const express = require('express');
 const User = require('../models/User');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, Role, canManageUser } = require('../middleware/auth');
 const router = express.Router();
 
 // 获取用户资料
@@ -59,6 +59,25 @@ router.put('/profile', authenticateToken, async (req, res) => {
     }
     if (avatar && avatar.length > 500) {
       return res.status(400).json({ success: false, message: '头像URL长度不能超过500个字符' });
+    }
+
+    // 手机号重复检查：如果要修改手机号，检查是否已被其他用户使用
+    if (phone !== undefined) {
+      const currentUser = await User.findById(req.user._id);
+      if (phone !== currentUser.phone) {
+        const existingPhoneUser = await User.findOne({
+          phone: phone,
+          is_deleted: { $ne: true },
+          _id: { $ne: req.user._id }  // 排除当前用户
+        });
+
+        if (existingPhoneUser) {
+          return res.status(400).json({
+            success: false,
+            message: '该手机号已被其他用户使用'
+          });
+        }
+      }
     }
 
     const user = await User.findByIdAndUpdate(
@@ -143,7 +162,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       role: targetUser.role
     });
 
-    if (req.user.role === 'boss' || req.user.role === 'manager') {
+    if (Role.isAdmin(req)) {
       // 老板和主管可以修改所有字段
       allowedFields = ['nickname', 'phone', 'wechat', 'notes', 'integral_w', 'integral_z', 'role', 'alipay_qr_code'];
 
@@ -151,10 +170,10 @@ router.put('/:id', authenticateToken, async (req, res) => {
       if (targetUser.role === 'part_time') {
         allowedFields.push('hr_id', 'mentor_id', 'parent_id');
       }
-    } else if (req.user.role === 'hr' && targetUser.hr_id?.toString() === req.user.id) {
+    } else if (Role.isHr(req) && targetUser.hr_id?.toString() === req.user.id) {
       // HR 可以修改自己名下的兼职用户的基本信息和积分
       allowedFields = ['nickname', 'phone', 'wechat', 'notes', 'integral_w', 'integral_z', 'alipay_qr_code'];
-    } else if (req.user.role === 'mentor' && targetUser.mentor_id?.toString() === req.user.id) {
+    } else if (Role.isMentor(req) && targetUser.mentor_id?.toString() === req.user.id) {
       // 带教老师可以修改自己名下的用户，包括积分和上级用户
       allowedFields = ['integral_w', 'integral_z', 'parent_id', 'alipay_qr_code'];
     } else if (req.user._id.toString() === id) {
@@ -230,6 +249,22 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: '没有有效的更新字段' });
     }
 
+    // 手机号重复检查：如果要修改手机号，检查是否已被其他用户使用
+    if (updateData.phone !== undefined && updateData.phone !== targetUser.phone) {
+      const existingPhoneUser = await User.findOne({
+        phone: updateData.phone,
+        is_deleted: { $ne: true },
+        _id: { $ne: id }  // 排除当前用户
+      });
+
+      if (existingPhoneUser) {
+        return res.status(400).json({
+          success: false,
+          message: '该手机号已被其他用户使用'
+        });
+      }
+    }
+
     // 如果要修改 parent_id，记录警告日志
     if (updateData.parent_id !== undefined) {
       const oldParentId = targetUser.parent_id ? targetUser.parent_id.toString() : null;
@@ -298,7 +333,10 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const { page = 1, limit = 10, role, keyword, managed_by, viewType, training_status } = req.query;
 
-    let query = {};
+    let query = {
+      // 排除已锁定的用户（锁定等同于伪删除）
+      isLocked: { $ne: true }
+    };
 
     // 根据viewType限制查询范围
     if (viewType === 'staff') {
@@ -323,13 +361,13 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // 数据权限过滤条件：HR 和 Mentor 只能看到自己的用户或未分配的用户
     let permissionFilter = null;
-    if (req.user.role === 'hr') {
+    if (Role.isHr(req)) {
       permissionFilter = [
         { hr_id: req.user._id },           // 自己创建的用户
         { hr_id: null },                   // 未分配 HR 的用户
         { hr_id: { $exists: false } }     // 没有 hr_id 字段的用户
       ];
-    } else if (req.user.role === 'mentor') {
+    } else if (Role.isMentor(req)) {
       permissionFilter = [
         { mentor_id: req.user._id },           // 自己名下的用户
         { mentor_id: null },                   // 未分配 Mentor 的用户
@@ -675,6 +713,59 @@ router.put('/:id/change-password', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('管理员修改密码错误:', error);
     res.status(500).json({ success: false, message: '修改密码失败' });
+  }
+});
+
+// 锁定/解锁用户（HR专用功能）
+router.put('/:id/lock', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isLocked, lockedReason } = req.body;
+
+    // 权限检查：只有 HR、经理和老板可以锁定/解锁用户
+    if (!['hr', 'manager', 'boss'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: '没有权限执行此操作' });
+    }
+
+    // 查找目标用户
+    const targetUser = await User.findById(id);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    // HR 只能锁定兼职用户
+    if (Role.isHr(req) && targetUser.role !== 'part_time') {
+      return res.status(403).json({ success: false, message: 'HR 只能锁定兼职用户' });
+    }
+
+    // 更新锁定状态
+    targetUser.isLocked = isLocked === true;
+    if (isLocked) {
+      targetUser.lockedAt = new Date();
+      targetUser.lockedBy = req.user._id;
+      targetUser.lockedReason = lockedReason || null;
+      console.log(`🔒 [用户锁定] HR ${req.user.username} 锁定了用户 ${targetUser.username}，原因: ${lockedReason || '无'}`);
+    } else {
+      targetUser.lockedAt = null;
+      targetUser.lockedBy = null;
+      targetUser.lockedReason = null;
+      console.log(`🔓 [用户解锁] HR ${req.user.username} 解锁了用户 ${targetUser.username}`);
+    }
+
+    await targetUser.save();
+
+    res.json({
+      success: true,
+      message: isLocked ? '用户已锁定' : '用户已解锁',
+      data: {
+        isLocked: targetUser.isLocked,
+        lockedAt: targetUser.lockedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('锁定/解锁用户错误:', error);
+    res.status(500).json({ success: false, message: '操作失败' });
   }
 });
 

@@ -150,10 +150,12 @@ class ReviewOptimizationService {
 
     if (currentUserId && currentUserRole === 'mentor') {
       // 带教老师：可以看到自己名下用户的记录 + 未分配带教老师的用户的记录 + 自己提交的 ai_approved 记录
+      // 看不到其他带教老师名下的用户
       const assignedUsers = await User.find({
         $or: [
-          { mentor_id: currentUserId },
-          { mentor_id: null }
+          { mentor_id: currentUserId },           // 自己名下的用户
+          { mentor_id: null },                     // 未分配带教老师的用户
+          { mentor_id: { $exists: false } }        // 没有 mentor_id 字段的用户
         ],
         role: 'part_time'
       }).select('_id');

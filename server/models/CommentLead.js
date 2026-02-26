@@ -28,7 +28,7 @@ const commentLeadSchema = new mongoose.Schema({
   // 状态
   status: {
     type: String,
-    enum: ['pending', 'contacted', 'converted', 'invalid'],
+    enum: ['pending', 'processed', 'contacted', 'converted', 'invalid'],
     default: 'pending'
   },
 
@@ -41,11 +41,22 @@ const commentLeadSchema = new mongoose.Schema({
 
   // 发现信息
   clientId: { type: String, default: null },
-  discoverTime: { type: Date, default: Date.now }
+  discoverTime: { type: Date, default: Date.now },
+
+  // 操作人员追踪
+  lastOperatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  lastOperatedAt: {
+    type: Date,
+    default: null
+  }
 }, { timestamps: true });
 
 // 复合索引
-commentLeadSchema.index({ noteUrl: 1, commentAuthor: 1 }, { unique: true });
+commentLeadSchema.index({ noteUrl: 1, commentAuthor: 1, commentContent: 1 }, { unique: true });
 commentLeadSchema.index({ status: 1, discoverTime: -1 });
 commentLeadSchema.index({ keyword: 1, discoverTime: -1 });
 
