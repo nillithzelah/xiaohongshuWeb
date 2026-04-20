@@ -8,1051 +8,28 @@ const Complaint = require('../models/Complaint');
 const DiscoveredNote = require('../models/DiscoveredNote');
 const ClientHeartbeat = require('../models/ClientHeartbeat');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const logger = require('../utils/logger');
 const router = express.Router();
 
-// 获取仪表盘统计数据 (老板专用)
-router.get('/stats', authenticateToken, requireRole(['boss', 'manager', 'finance', 'mentor', 'hr']), async (req, res) => {
-  try {
-    console.log('📊 收到统计数据请求');
-
-    // 并行执行所有查询，速度更快
-    const [
-      totalReviews,
-      pendingReviews,
-      mentorReviewing,
-      completedReviews,
-      rejectedReviews,
-      totalUsers
-    ] = await Promise.all([
-      ImageReview.countDocuments(), // 总审核数
-      ImageReview.countDocuments({ status: 'pending' }), // 待审核
-      ImageReview.countDocuments({ status: 'mentor_approved' }), // 带教老师审核中（待经理确认）
-      ImageReview.countDocuments({ status: 'completed' }), // 已完成
-      ImageReview.countDocuments({ status: 'rejected' }), // 已拒绝
-      User.countDocuments({ role: 'part_time' }) // 总用户数 (只算兼职用户)
-    ]);
-
-    const stats = {
-      totalReviews,
-      pendingReviews,
-      inProgressReviews: mentorReviewing, // 把带教老师审核过的也算作处理中
-      completedReviews,
-      rejectedReviews,
-      totalUsers
-    };
-
-    console.log('📊 返回统计数据:', stats);
-
-    res.json({
-      success: true,
-      stats
-    });
-
-  } catch (error) {
-    console.error('获取统计数据失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取统计数据失败'
-    });
-  }
-});
-
-/**
- * 系统监控数据
- * GET /xiaohongshu/api/admin/monitoring
- *
- * 返回系统运行状态数据，包括审核队列、采集任务、客户端状态
- */
-router.get('/monitoring', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
-  try {
-    console.log('📊 [监控] 收到监控数据请求');
-
-    // 计算今天的开始时间（北京时间）
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-
-    // 计算5分钟前的时间（用于判断客户端在线状态）
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-
-    // 并行执行所有查询
-    const [
-      // 审核队列数据
-      pendingNotes,
-      pendingComments,
-      inProgress,
-      todayCompleted,
-
-      // 采集任务数据
-      pendingHarvest,
-      todayDiscoveredNotes,
-      todayHarvestedNotes,
-      todayHarvestCommentsTotal,
-
-      // 客户端数据（从 ClientHeartbeat 中获取）
-      onlineClients
-    ] = await Promise.all([
-      // 审核队列
-      ImageReview.countDocuments({ imageType: 'note', status: 'pending' }),
-      ImageReview.countDocuments({ imageType: 'comment', status: 'pending' }),
-      ImageReview.countDocuments({ status: 'processing' }),
-      ImageReview.countDocuments({
-        updatedAt: { $gte: todayStart },
-        status: { $in: ['completed', 'rejected'] }
-      }),
-
-      // 采集任务
-      DiscoveredNote.countDocuments({
-        needsCommentHarvest: true,
-        commentsHarvested: { $ne: true }
-      }),
-      DiscoveredNote.countDocuments({
-        createdAt: { $gte: todayStart }
-      }),
-      DiscoveredNote.countDocuments({
-        commentsHarvestedAt: { $gte: todayStart }
-      }),
-      // 聚合查询：今日采集的评论总数
-      DiscoveredNote.aggregate([
-        { $match: { commentsHarvestedAt: { $gte: todayStart } } },
-        { $group: { _id: null, total: { $sum: '$lastCommentCount' } } }
-      ]),
-
-      // 客户端状态：获取5分钟内有心跳的客户端
-      ClientHeartbeat.find({
-        lastHeartbeat: { $gte: fiveMinutesAgo }
-      })
-      .select('clientId status lastHeartbeat taskIds clientType description remark ' +
-              'todayNotesDiscovered todayNotesProcessed todayValidLeads ' +
-              'todayCommentsScanned todayBlacklisted todayReviewsCompleted ' +
-              'consecutiveFailures taskDistributionPaused lastSuccessUploadAt')
-      .sort({ lastHeartbeat: -1 })
-    ]);
-
-    // 处理今日采集评论数
-    const todayComments = todayHarvestCommentsTotal.length > 0 ? todayHarvestCommentsTotal[0].total : 0;
-
-    // 整理客户端列表
-    const clientsList = onlineClients.map(client => ({
-      clientId: client.clientId,
-      lastHeartbeat: client.lastHeartbeat,
-      status: client.status || 'online',
-      taskCount: client.taskIds ? client.taskIds.length : 0,
-      clientType: client.clientType,
-      description: client.description,
-      remark: client.remark,
-      // 今日统计字段
-      todayNotesDiscovered: client.todayNotesDiscovered || 0,
-      todayNotesProcessed: client.todayNotesProcessed || 0,
-      todayValidLeads: client.todayValidLeads || 0,
-      todayCommentsScanned: client.todayCommentsScanned || 0,
-      todayBlacklisted: client.todayBlacklisted || 0,
-      todayReviewsCompleted: client.todayReviewsCompleted || 0,
-      // 健康度相关
-      consecutiveFailures: client.consecutiveFailures || 0,
-      taskDistributionPaused: client.taskDistributionPaused || false,
-      lastSuccessUploadAt: client.lastSuccessUploadAt
-    }));
-
-    const monitoringData = {
-      audit: {
-        pendingNotes,
-        pendingComments,
-        inProgress,
-        todayCompleted
-      },
-      harvest: {
-        pendingHarvest,
-        todayNotes: todayDiscoveredNotes,
-        todayComments: todayComments
-      },
-      clients: {
-        online: clientsList.length,
-        list: clientsList
-      }
-    };
-
-    console.log('📊 [监控] 返回监控数据:', monitoringData);
-
-    res.json({
-      success: true,
-      data: monitoringData
-    });
-
-  } catch (error) {
-    console.error('❌ [监控] 获取监控数据失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取监控数据失败'
-    });
-  }
-});
-
-// HR专用仪表盘统计
-router.get('/dashboard/hr', authenticateToken, requireRole(['hr']), async (req, res) => {
-  try {
-    const hrId = req.user._id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-
-    // 今日新增线索数（该HR名下的今日新增用户）
-    const todayNewLeads = await User.countDocuments({
-      role: 'part_time',
-      hr_id: hrId,
-      createdAt: { $gte: today, $lt: tomorrow },
-      is_deleted: { $ne: true }
-    });
-
-    // 本月累计客户数（该HR名下的本月累计用户）
-    const monthlyClients = await User.countDocuments({
-      role: 'part_time',
-      hr_id: hrId,
-      createdAt: { $gte: monthStart },
-      is_deleted: { $ne: true }
-    });
-
-    // 待跟进客户数（该HR名下还没有分配给带教老师的用户）
-    const pendingFollowups = await User.countDocuments({
-      role: 'part_time',
-      hr_id: hrId,
-      mentor_id: null,
-      is_deleted: { $ne: true }
-    });
-
-    // 最近录入的 5 条线索（该HR录入的最新用户）
-    const recentLeads = await User.find({
-      role: 'part_time',
-      hr_id: hrId,
-      is_deleted: { $ne: true }
-    })
-    .sort({ createdAt: -1 })
-    .limit(5)
-    .select('username nickname phone wechat createdAt');
-
-    res.json({
-      success: true,
-      stats: {
-        todayNewLeads,
-        monthlyClients,
-        pendingFollowups
-      },
-      recentLeads
-    });
-  } catch (error) {
-    console.error('获取销售仪表盘数据失败:', error);
-    res.status(500).json({ success: false, message: '获取数据失败' });
-  }
-});
-
-// 主管专用仪表盘统计
-router.get('/dashboard/manager', authenticateToken, requireRole(['manager']), async (req, res) => {
-  try {
-    // 团队总客户数（所有用户数量）
-    const teamTotalClients = await User.countDocuments({
-      role: 'part_time',
-      is_deleted: { $ne: true }
-    });
-
-    // 待分配线索数 (hr_id不为空但mentor_id为空，即分配给HR但还没有分配给带教老师)
-    const unassignedLeads = await User.countDocuments({
-      role: 'part_time',
-      hr_id: { $ne: null },
-      mentor_id: null,
-      is_deleted: { $ne: true }
-    });
-
-    // HR业绩排行榜（按客户数量排序）
-    const hrRanking = await User.aggregate([
-      {
-        $match: {
-          role: 'hr',
-          is_deleted: { $ne: true }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: 'hr_id',
-          as: 'clients'
-        }
-      },
-      {
-        $project: {
-          username: 1,
-          nickname: 1,
-          clientCount: { $size: '$clients' }
-        }
-      },
-      {
-        $sort: { clientCount: -1 }
-      },
-      {
-        $limit: 10
-      }
-    ]);
-
-    res.json({
-      success: true,
-      stats: {
-        teamPerformance: teamTotalClients,
-        unassignedLeads,
-        conversionRate: 0 // 暂时设为0，后续可以计算转化率
-      },
-      hrRanking
-    });
-  } catch (error) {
-    console.error('获取主管仪表盘数据失败:', error);
-    res.status(500).json({ success: false, message: '获取数据失败' });
-  }
-});
-
-// 带教老师专用仪表盘统计
-router.get('/dashboard/mentor', authenticateToken, requireRole(['mentor']), async (req, res) => {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    // 待审核任务数 (status: pending)
-    const pendingReviews = await ImageReview.countDocuments({
-      status: 'pending'
-    });
-
-    // 我的活跃客户数（分配给我的用户数量）
-    const activeClients = await User.countDocuments({
-      role: 'part_time',
-      mentor_id: req.user._id,
-      is_deleted: { $ne: true }
-    });
-
-    // 今日已审核数（今日更新的审核记录）
-    const completedToday = await ImageReview.countDocuments({
-      status: { $in: ['mentor_approved', 'completed', 'rejected'] },
-      updatedAt: { $gte: today, $lt: tomorrow }
-    });
-
-    // 最近的 5 条待审核任务
-    const recentPendingReviews = await ImageReview.find({
-      status: 'pending'
-    })
-    .populate('userId', 'username nickname')
-    .sort({ createdAt: -1 })
-    .limit(5);
-
-    res.json({
-      success: true,
-      stats: {
-        pendingReviews,
-        activeClients,
-        completedToday
-      },
-      pendingReviewsList: recentPendingReviews
-    });
-  } catch (error) {
-    console.error('获取客服仪表盘数据失败:', error);
-    res.status(500).json({ success: false, message: '获取数据失败' });
-  }
-});
-
-// ============ 财务管理相关路由 ============
-
-// 获取财务统计数据（当日、当月、总提现）
-router.get('/finance/stats', authenticateToken, requireRole(['boss', 'finance', 'manager']), async (req, res) => {
-  try {
-    const TimeUtils = require('../utils/timeUtils');
-    const now = new Date(TimeUtils.getBeijingTime());
-
-    // 当天开始和结束时间（北京时间）
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
-
-    // 当月开始时间
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-
-    // 查询所有已完成交易（只统计point_exchange类型，这是真正的提现）
-    // task_reward是任务奖励，referral_bonus是推荐奖励，不算用户提现
-    const completedTransactions = await Transaction.find({ status: 'completed', type: 'point_exchange' });
-
-    // 计算统计数据
-    let totalWithdrawn = 0;
-    let todayWithdrawn = 0;
-    let monthWithdrawn = 0;
-    let totalWithdrawnCount = 0;
-    let todayWithdrawnCount = 0;
-    let monthWithdrawnCount = 0;
-
-    completedTransactions.forEach(t => {
-      const amount = t.amount || 0;
-      const txTime = new Date(t.createdAt);
-
-      totalWithdrawn += amount;
-      totalWithdrawnCount += 1;
-
-      // 判断是否是今日（使用本地时区比较）
-      if (txTime >= todayStart && txTime <= todayEnd) {
-        todayWithdrawn += amount;
-        todayWithdrawnCount += 1;
-      }
-
-      // 判断是否是本月
-      if (txTime >= monthStart) {
-        monthWithdrawn += amount;
-        monthWithdrawnCount += 1;
-      }
-    });
-
-    // 查询待打款金额（只统计有效兼职用户的pending交易）
-    const pendingResult = await Transaction.aggregate([
-      { $match: { status: 'pending' } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' },
-      {
-        $match: {
-          'user.is_deleted': { $ne: true },
-          'user.role': 'part_time'
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          totalAmount: { $sum: '$amount' },
-          totalCount: { $sum: 1 }
-        }
-      }
-    ]);
-
-    const pendingAmount = pendingResult[0]?.totalAmount || 0;
-    const pendingCount = pendingResult[0]?.totalCount || 0;
-
-    // 查询兼职用户数量
-    const partTimeUserCount = await User.countDocuments({ role: 'part_time', is_deleted: { $ne: true } });
-
-    res.json({
-      success: true,
-      stats: {
-        // 总提现
-        totalWithdrawn: Math.round(totalWithdrawn * 100) / 100,
-        totalWithdrawnCount,
-        // 当日提现
-        todayWithdrawn: Math.round(todayWithdrawn * 100) / 100,
-        todayWithdrawnCount,
-        // 当月提现
-        monthWithdrawn: Math.round(monthWithdrawn * 100) / 100,
-        monthWithdrawnCount,
-        // 待打款
-        pendingAmount: Math.round(pendingAmount * 100) / 100,
-        pendingCount,
-        // 兼职用户数
-        partTimeUserCount
-      }
-    });
-  } catch (error) {
-    console.error('获取财务统计失败:', error);
-    res.status(500).json({ success: false, message: '获取财务统计失败' });
-  }
-});
-
-// 获取提现记录列表（包含用户维度的统计）
-router.get('/finance/withdrawal-records', authenticateToken, requireRole(['boss', 'finance', 'manager']), async (req, res) => {
-  try {
-    const TimeUtils = require('../utils/timeUtils');
-    const { startDate, endDate } = req.query;
-
-    // 构建时间范围筛选条件
-    let dateFilter = {};
-    if (startDate || endDate) {
-      dateFilter.createdAt = {};
-      // startDate 格式: YYYY-MM-DD，转换为北京时间当天的开始时间
-      if (startDate) {
-        const start = new Date(startDate + 'T00:00:00+08:00');
-        dateFilter.createdAt.$gte = start;
-      }
-      // endDate 格式: YYYY-MM-DD，转换为北京时间当天的结束时间
-      if (endDate) {
-        const end = new Date(endDate + 'T23:59:59+08:00');
-        dateFilter.createdAt.$lte = end;
-      }
-    }
-
-    // 聚合查询：按用户统计提现记录（只统计point_exchange类型）
-    // task_reward是任务奖励，referral_bonus是推荐奖励，不算用户提现
-    const matchCondition = {
-      status: 'completed',
-      type: 'point_exchange',
-      ...dateFilter
-    };
-
-    const records = await Transaction.aggregate([
-      { $match: matchCondition },
-      {
-        $group: {
-          _id: '$user_id',
-          totalWithdrawn: { $sum: '$amount' },
-          totalCount: { $sum: 1 },
-          lastWithdrawAt: { $max: '$createdAt' },
-          firstWithdrawAt: { $min: '$createdAt' },
-          transactionIds: { $push: '$_id' }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' },
-      {
-        $match: {
-          'user.is_deleted': { $ne: true },
-          'user.role': 'part_time'
-        }
-      },
-      {
-        $project: {
-          userId: '$_id',
-          username: '$user.username',
-          nickname: '$user.nickname',
-          phone: '$user.phone',
-          totalWithdrawn: 1,
-          totalCount: 1,
-          lastWithdrawAt: 1,
-          firstWithdrawAt: 1
-        }
-      },
-      { $sort: { lastWithdrawAt: -1 } }
-    ]);
-
-    // 格式化结果
-    const result = records.map(record => ({
-      userId: record.userId,
-      username: record.username,
-      nickname: record.nickname,
-      phone: record.phone,
-      totalWithdrawn: Math.round(record.totalWithdrawn * 100) / 100,
-      totalCount: record.totalCount,
-      lastWithdrawAtFormatted: record.lastWithdrawAt
-        ? TimeUtils.formatBeijingTime(new Date(record.lastWithdrawAt))
-        : null
-    }));
-
-    // 计算当前选择时间段的汇总
-    const summary = {
-      totalAmount: 0,
-      totalCount: 0,
-      userCount: result.length
-    };
-    result.forEach(r => {
-      summary.totalAmount += r.totalWithdrawn;
-      summary.totalCount += r.totalCount;
-    });
-    summary.totalAmount = Math.round(summary.totalAmount * 100) / 100;
-
-    res.json({
-      success: true,
-      records: result,
-      summary: summary
-    });
-  } catch (error) {
-    console.error('获取提现记录失败:', error);
-    res.status(500).json({ success: false, message: '获取提现记录失败' });
-  }
-});
-
-// 获取兼职用户待打款列表
-router.get('/finance/part-time-pending', authenticateToken, requireRole(['boss', 'finance', 'manager']), async (req, res) => {
-  try {
-    console.log('🔍 查询兼职用户待打款列表...');
-
-    // 获取兼职用户（part_time）的待打款记录
-    const userSummaries = await Transaction.aggregate([
-      {
-        $match: { status: 'pending' }
-      },
-      {
-        $group: {
-          _id: '$user_id',
-          totalAmount: { $sum: '$amount' },
-          transactionCount: { $sum: 1 },
-          transactionIds: { $push: '$_id' },
-          types: { $addToSet: '$type' },
-          earliestCreated: { $min: '$createdAt' },
-          latestCreated: { $max: '$createdAt' }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      {
-        $unwind: '$user'
-      },
-      {
-        $match: {
-          'user.is_deleted': { $ne: true },
-          'user.role': 'part_time'  // 只返回兼职用户
-        }
-      },
-      {
-        $project: {
-          user: {
-            _id: 1,
-            username: 1,
-            nickname: 1,
-            phone: 1,
-            wechat: 1,
-            wallet: 1,
-            integral_w: 1,
-            integral_z: 1,
-            mentor_id: 1,
-            hr_id: 1,
-            training_status: 1
-          },
-          totalAmount: 1,
-          transactionCount: 1,
-          transactionIds: 1,
-          types: 1,
-          earliestCreated: 1,
-          latestCreated: 1
-        }
-      },
-      {
-        $sort: { latestCreated: -1 }
-      }
-    ]);
-
-    console.log(`📊 找到 ${userSummaries.length} 个有待打款的兼职用户`);
-
-    res.json({
-      success: true,
-      transactions: userSummaries,
-      pagination: {
-        total: userSummaries.length
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ 获取兼职用户待打款列表失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取兼职用户待打款列表失败'
-    });
-  }
-});
-
-// 获取待打款列表（按用户汇总）
-router.get('/finance/pending', authenticateToken, requireRole(['boss', 'finance', 'manager']), async (req, res) => {
-  try {
-    console.log('🔍 开始查询待打款列表（按用户汇总）...');
-
-    // 获取所有status为'pending'的交易记录，按用户分组汇总
-    const userSummaries = await Transaction.aggregate([
-      {
-        $match: { status: 'pending' }
-      },
-      {
-        $group: {
-          _id: '$user_id',
-          totalAmount: { $sum: '$amount' },
-          transactionCount: { $sum: 1 },
-          transactionIds: { $push: '$_id' },
-          types: { $addToSet: '$type' },
-          earliestCreated: { $min: '$createdAt' },
-          latestCreated: { $max: '$createdAt' }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      {
-        $unwind: '$user'
-      },
-      {
-        $match: {
-          'user.is_deleted': { $ne: true }
-        }
-      },
-      {
-        $project: {
-          user: {
-            _id: 1,
-            username: 1,
-            nickname: 1,
-            phone: 1,
-            wechat: 1,
-            wallet: 1,
-            integral_w: 1,
-            integral_z: 1
-          },
-          totalAmount: 1,
-          transactionCount: 1,
-          transactionIds: 1,
-          types: 1,
-          earliestCreated: 1,
-          latestCreated: 1
-        }
-      },
-      {
-        $sort: { latestCreated: -1 }
-      }
-    ]);
-
-    console.log('📊 查询结果:');
-    console.log('   用户数:', userSummaries.length);
-
-    if (userSummaries.length > 0) {
-      console.log('📋 第一条记录详情:');
-      console.log('   用户:', userSummaries[0].user.username);
-      console.log('   总金额:', userSummaries[0].totalAmount);
-      console.log('   交易数量:', userSummaries[0].transactionCount);
-      console.log('   交易类型:', userSummaries[0].types);
-    } else {
-      console.log('⚠️ 没有找到任何待打款记录');
-    }
-
-    const response = {
-      success: true,
-      transactions: userSummaries,
-      pagination: {
-        page: 1,
-        limit: userSummaries.length,
-        total: userSummaries.length,
-        pages: 1
-      }
-    };
-
-    console.log('✅ 返回汇总响应数据');
-    res.json(response);
-
-  } catch (error) {
-    console.error('❌ 获取待打款列表失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取待打款列表失败'
-    });
-  }
-});
-
-// 确认打款（集成阿里支付自动转账）
-router.post('/finance/pay', authenticateToken, requireRole(['boss', 'finance']), async (req, res) => {
-  const mongoose = require('mongoose');
-  const alipayService = require('../services/alipayService');
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { transaction_ids } = req.body;
-
-    if (!transaction_ids || !Array.isArray(transaction_ids)) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: '请提供交易ID列表'
-      });
-    }
-
-    // 预先验证所有交易记录
-    const transactions = [];
-    const currentTimestamp = Date.now();
-
-    for (const transactionId of transaction_ids) {
-      const transaction = await Transaction.findById(transactionId).session(session);
-      if (!transaction) {
-        await session.abortTransaction();
-        return res.status(404).json({
-          success: false,
-          message: `交易记录 ${transactionId} 不存在`
-        });
-      }
-      if (transaction.status !== 'pending') {
-        await session.abortTransaction();
-        return res.status(400).json({
-          success: false,
-          message: `交易记录 ${transactionId} 状态不是待支付`
-        });
-      }
-
-      // 验证金额有效性
-      if (transaction.amount <= 0 || transaction.amount > 50000) { // 阿里支付单笔限额5万
-        await session.abortTransaction();
-        return res.status(400).json({
-          success: false,
-          message: `交易记录 ${transactionId} 金额无效（限额0-50000元）`
-        });
-      }
-
-      // 验证用户是否存在
-      const user = await User.findById(transaction.user_id).session(session);
-      if (!user) {
-        await session.abortTransaction();
-        return res.status(404).json({
-          success: false,
-          message: `用户 ${transaction.user_id} 不存在`
-        });
-      }
-
-      transactions.push({
-        transaction,
-        user,
-        previousWithdrawn: user.wallet?.total_withdrawn || 0
-      });
-    }
-
-    // 处理每笔交易的阿里支付转账
-    const successfulPayments = [];
-    const failedPayments = [];
-
-    for (const { transaction, user } of transactions) {
-      try {
-        console.log(`🔄 开始处理交易 ${transaction._id}: 用户 ${user.username}, 金额 ${transaction.amount}元`);
-
-        // 调用阿里支付转账
-        const transferResult = await alipayService.transferToAccount({
-          outBizNo: transaction._id.toString(),
-          payeeAccount: user.wallet.alipay_account,
-          payeeRealName: user.wallet.real_name,
-          amount: transaction.amount,
-          remark: `任务奖励 - ${transaction.type === 'task_reward' ? '任务奖励' : '邀请奖励'}`
-        });
-
-        if (transferResult.success) {
-          // 转账成功，更新交易记录
-          await Transaction.findByIdAndUpdate(
-            transaction._id,
-            {
-              status: 'completed',
-              payment_status: 'success',
-              paid_at: new Date(),
-              paid_by: req.user._id,
-              paid_by_name: req.user.username,
-              alipay_order_id: transferResult.orderId,
-              alipay_pay_date: transferResult.payDate,
-              updatedAt: new Date()
-            },
-            { session }
-          );
-
-          // 只有 point_exchange 类型才增加已提现金额
-          // task_reward 和 referral_bonus 是收入，不是提现
-          if (transaction.type === 'point_exchange') {
-            await User.findByIdAndUpdate(
-              user._id,
-              {
-                $inc: {
-                  'wallet.total_withdrawn': transaction.amount
-                }
-              },
-              { session }
-            );
-          }
-
-          successfulPayments.push({
-            transactionId: transaction._id,
-            userId: user._id,
-            username: user.username,
-            amount: transaction.amount,
-            alipayOrderId: transferResult.orderId
-          });
-
-          console.log(`✅ 交易 ${transaction._id} 转账成功: ${transferResult.orderId}`);
-
-        } else {
-          // 转账失败，记录错误信息
-          await Transaction.findByIdAndUpdate(
-            transaction._id,
-            {
-              payment_status: 'failed',
-              payment_error: transferResult.errorMessage || transferResult.subMessage,
-              payment_error_code: transferResult.errorCode || transferResult.subCode,
-              updatedAt: new Date()
-            },
-            { session }
-          );
-
-          failedPayments.push({
-            transactionId: transaction._id,
-            userId: user._id,
-            username: user.username,
-            amount: transaction.amount,
-            error: transferResult.errorMessage || transferResult.subMessage
-          });
-
-          console.error(`❌ 交易 ${transaction._id} 转账失败:`, transferResult);
-        }
-
-      } catch (error) {
-        console.error(`❌ 处理交易 ${transaction._id} 时发生异常:`, error);
-
-        // 记录异常错误
-        await Transaction.findByIdAndUpdate(
-          transaction._id,
-          {
-            payment_status: 'failed',
-            payment_error: error.message,
-            payment_error_code: 'EXCEPTION',
-            updatedAt: new Date()
-          },
-          { session }
-        );
-
-        failedPayments.push({
-          transactionId: transaction._id,
-          userId: user._id,
-          username: user.username,
-          amount: transaction.amount,
-          error: error.message
-        });
-      }
-    }
-
-    // 提交事务
-    await session.commitTransaction();
-
-    const totalProcessed = successfulPayments.length + failedPayments.length;
-    console.log(`✅ 财务打款处理完成: 成功 ${successfulPayments.length}, 失败 ${failedPayments.length}`);
-
-    res.json({
-      success: true,
-      message: `处理完成：成功 ${successfulPayments.length} 笔，失败 ${failedPayments.length} 笔`,
-      results: {
-        successful: successfulPayments,
-        failed: failedPayments,
-        totalProcessed
-      }
-    });
-
-  } catch (error) {
-    // 回滚事务
-    await session.abortTransaction();
-    console.error('❌ 打款处理失败，已回滚事务:', error);
-    res.status(500).json({
-      success: false,
-      message: '打款处理失败，已回滚所有操作'
-    });
-  } finally {
-    session.endSession();
-  }
-});
-
-// 导出Excel（简化版，返回JSON数据，前端处理下载）
-router.get('/finance/export-excel', authenticateToken, requireRole(['boss', 'finance', 'manager']), async (req, res) => {
-  try {
-    const transactions = await Transaction.find({ status: 'pending' })
-      .populate({
-        path: 'user_id',
-        select: 'username nickname phone wechat wallet integral_w integral_z'
-      })
-      .sort({ createdAt: -1 });
-
-    // 格式化数据为Excel格式
-    const excelData = transactions.map(t => ({
-      用户名: t.user_id?.username || '未设置',
-      昵称: t.user_id?.nickname || '未设置',
-      手机号: t.user_id?.phone || '未设置',
-      微信号: t.user_id?.integral_w || '未设置', // 积分号W = 微信号
-      支付宝号: t.user_id?.integral_z || '未设置', // 积分号Z = 支付宝号
-      支付宝账号: t.user_id?.wallet?.alipay_account || '未设置',
-      收款人: t.user_id?.wallet?.real_name || '未设置',
-      金额: t.amount,
-      类型: t.type === 'task_reward' ? '任务奖励' :
-           t.type === 'referral_bonus_1' ? '一级佣金' :
-           t.type === 'referral_bonus_2' ? '二级佣金' : t.type,
-      创建时间: t.createdAt.toLocaleString('zh-CN')
-    }));
-
-    res.json({
-      success: true,
-      data: excelData,
-      filename: `待打款列表_${new Date().toISOString().split('T')[0]}.xlsx`
-    });
-
-  } catch (error) {
-    console.error('导出Excel失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '导出Excel失败'
-    });
-  }
-});
-
-// 获取财务统计数据
-router.get('/finance/stats', authenticateToken, requireRole(['boss', 'finance', 'manager']), async (req, res) => {
-  try {
-    // 并行获取各项统计数据
-    const [
-      totalPaidTransactions,
-      pendingUsersCount,
-      totalUsers
-    ] = await Promise.all([
-      Transaction.find({ status: 'completed' }),
-      // 待打款用户数（按用户去重，排除已删除用户）
-      Transaction.aggregate([
-        { $match: { status: 'pending' } },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'user_id',
-            foreignField: '_id',
-            as: 'user'
-          }
-        },
-        { $unwind: '$user' },
-        { $match: { 'user.is_deleted': { $ne: true } } },
-        { $group: { _id: '$user_id' } }
-      ]).then(result => result.length),
-      User.countDocuments({ role: 'part_time', is_deleted: { $ne: true } })
-    ]);
-
-    // 计算总打款金额（排除积分兑换交易，避免浮点精度问题）
-    const totalPaid = Math.round(
-      totalPaidTransactions
-        .filter(t => t.type !== 'point_exchange')
-        .reduce((sum, t) => sum + t.amount, 0) * 100
-    ) / 100;
-
-    res.json({
-      success: true,
-      stats: {
-        totalPaid,
-        pendingPayments: pendingUsersCount, // 待打款用户数（排除已删除用户）
-        totalUsers
-      }
-    });
-
-  } catch (error) {
-    console.error('获取财务统计失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取财务统计失败'
-    });
-  }
-});
-
+const log = logger.module('Admin');
+
+// ============ 仪表盘相关路由已迁移 ============
+// 所有仪表盘相关路由已迁移到 routes/admin/dashboard.js
+// 路由包括：
+// - GET  /stats
+// - GET  /monitoring
+// - GET  /dashboard/hr
+// - GET  /dashboard/manager
+// - GET  /dashboard/mentor
+// ============ 财务管理路由已迁移 ============
+// 所有财务相关路由已迁移到 routes/admin/finance.js
+// 路由包括：
+// - GET  /finance/stats
+// - GET  /finance/withdrawal-records
+// - GET  /finance/part-time-pending
+// - GET  /finance/pending
+// - POST /finance/pay
+// - GET  /finance/export-excel
 // ============ 任务积分管理相关路由 ============
 
 // 获取任务积分配置列表
@@ -1067,7 +44,7 @@ router.get('/task-points', authenticateToken, requireRole(['boss', 'manager']), 
       configs
     });
   } catch (error) {
-    console.error('获取任务积分配置失败:', error);
+    log.error('获取任务积分配置失败:', error);
     res.status(500).json({
       success: false,
       message: '获取任务积分配置失败'
@@ -1078,12 +55,12 @@ router.get('/task-points', authenticateToken, requireRole(['boss', 'manager']), 
 // 更新任务积分配置
 router.put('/task-points/:id', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
   try {
-    console.log('📝 收到更新任务积分配置请求');
-    console.log('📝 请求体:', JSON.stringify(req.body, null, 2));
+    log.info('📝 收到更新任务积分配置请求');
+    log.info('📝 请求体:', JSON.stringify(req.body, null, 2));
 
     const { price, commission_1, commission_2, daily_reward_points, continuous_check_days } = req.body;
 
-    console.log('📝 解构后的参数:', {
+    log.info('📝 解构后的参数:', {
       id: req.params.id,
       price,
       commission_1,
@@ -1129,12 +106,12 @@ router.put('/task-points/:id', authenticateToken, requireRole(['boss', 'manager'
       updateData.continuous_check_days = continuous_check_days;
     }
 
-    console.log('📝 执行数据库更新，ID:', req.params.id);
-    console.log('📝 更新数据:', JSON.stringify(updateData, null, 2));
+    log.info('📝 执行数据库更新，ID:', req.params.id);
+    log.info('📝 更新数据:', JSON.stringify(updateData, null, 2));
 
     try {
       // 使用 findOneAndUpdate 确保更新并返回结果
-      console.log('📝 使用 findOneAndUpdate 更新配置');
+      log.info('📝 使用 findOneAndUpdate 更新配置');
 
       const updatedDoc = await TaskConfig.findOneAndUpdate(
         { _id: req.params.id },
@@ -1146,14 +123,14 @@ router.put('/task-points/:id', authenticateToken, requireRole(['boss', 'manager'
       );
 
       if (!updatedDoc) {
-        console.log('❌ 没有找到匹配的文档');
+        log.info('❌ 没有找到匹配的文档');
         return res.status(404).json({
           success: false,
           message: '任务配置不存在'
         });
       }
 
-      console.log('✅ 文档更新成功:', {
+      log.info('✅ 文档更新成功:', {
         id: updatedDoc._id,
         price: updatedDoc.price,
         commission_1: updatedDoc.commission_1,
@@ -1168,7 +145,7 @@ router.put('/task-points/:id', authenticateToken, requireRole(['boss', 'manager'
       });
 
     } catch (updateError) {
-      console.error('📝 数据库更新异常:', updateError);
+      log.error('📝 数据库更新异常:', updateError);
       return res.status(500).json({
         success: false,
         message: '数据库更新失败'
@@ -1176,7 +153,7 @@ router.put('/task-points/:id', authenticateToken, requireRole(['boss', 'manager'
     }
 
   } catch (error) {
-    console.error('更新任务积分配置失败:', error);
+    log.error('更新任务积分配置失败:', error);
     res.status(500).json({
       success: false,
       message: '更新任务积分配置失败'
@@ -1275,7 +252,7 @@ router.post('/withdraw/:userId', authenticateToken, requireRole(['boss', 'manage
     });
 
   } catch (error) {
-    console.error('执行提现失败:', error);
+    log.error('执行提现失败:', error);
     res.status(500).json({
       success: false,
       message: '执行提现失败'
@@ -1344,7 +321,7 @@ router.post('/reject-exchange/:userId', authenticateToken, requireRole(['boss', 
       }
     );
 
-    console.log(`🚫 [驳回兑换] 用户 ${user.username}，返还积分: ${totalRefundAmount}，原因: ${reason || '无'}`);
+    log.info(`🚫 [驳回兑换] 用户 ${user.username}，返还积分: ${totalRefundAmount}，原因: ${reason || '无'}`);
 
     res.json({
       success: true,
@@ -1359,7 +336,7 @@ router.post('/reject-exchange/:userId', authenticateToken, requireRole(['boss', 
     });
 
   } catch (error) {
-    console.error('驳回兑换失败:', error);
+    log.error('驳回兑换失败:', error);
     res.status(500).json({
       success: false,
       message: '驳回兑换失败'
@@ -1385,7 +362,7 @@ router.get('/cookie', authenticateToken, requireRole(['boss']), async (req, res)
       });
     }
 
-    console.log('🔍 从环境变量读取Cookie信息');
+    log.info('🔍 从环境变量读取Cookie信息');
 
     // 解析cookie中的时间戳，计算过期时间
     let expiryInfo = null;
@@ -1420,7 +397,7 @@ router.get('/cookie', authenticateToken, requireRole(['boss']), async (req, res)
     });
 
   } catch (error) {
-    console.error('获取Cookie信息失败:', error);
+    log.error('获取Cookie信息失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie信息失败'
@@ -1447,7 +424,7 @@ router.get('/cookie/status', authenticateToken, requireRole(['boss']), async (re
     });
 
   } catch (error) {
-    console.error('获取Cookie监控状态失败:', error);
+    log.error('获取Cookie监控状态失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie监控状态失败'
@@ -1489,7 +466,7 @@ router.put('/cookie', authenticateToken, requireRole(['boss']), async (req, res)
       });
     }
 
-    console.log('🔄 收到Cookie更新请求，长度:', cookie.length);
+    log.info('🔄 收到Cookie更新请求，长度:', cookie.length);
 
     // 返回更新说明（避免命令注入，改为手动更新方式）
     res.json({
@@ -1506,7 +483,7 @@ router.put('/cookie', authenticateToken, requireRole(['boss']), async (req, res)
     });
 
   } catch (error) {
-    console.error('更新Cookie失败:', error);
+    log.error('更新Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: '更新Cookie失败'
@@ -1567,7 +544,7 @@ router.get('/complaints', authenticateToken, requireRole(['boss', 'manager']), a
     });
 
   } catch (error) {
-    console.error('获取投诉列表失败:', error);
+    log.error('获取投诉列表失败:', error);
     res.status(500).json({
       success: false,
       message: '获取投诉列表失败'
@@ -1616,7 +593,7 @@ router.put('/complaints/:id', authenticateToken, requireRole(['boss', 'manager']
     });
 
   } catch (error) {
-    console.error('更新投诉失败:', error);
+    log.error('更新投诉失败:', error);
     res.status(500).json({
       success: false,
       message: '更新投诉失败'
@@ -1641,7 +618,7 @@ router.get('/cookie-pool-status', authenticateToken, requireRole(['boss', 'manag
       data: status
     });
   } catch (error) {
-    console.error('获取Cookie池状态失败:', error);
+    log.error('获取Cookie池状态失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie池状态失败'
@@ -1662,7 +639,7 @@ router.post('/cookie-pool-reload', authenticateToken, requireRole(['boss', 'mana
       data: status
     });
   } catch (error) {
-    console.error('重新加载Cookie池失败:', error);
+    log.error('重新加载Cookie池失败:', error);
     res.status(500).json({
       success: false,
       message: '重新加载Cookie池失败'
@@ -1698,7 +675,7 @@ router.post('/cookie-pool-update', authenticateToken, requireRole(['boss', 'mana
               .map(item => `${item.name}=${item.value}`)
               .join('; ');
 
-            console.log(`🔄 [Cookie池] 已将JSON格式转换为Cookie字符串，${cookieArray.length}个cookie`);
+            log.info(`🔄 [Cookie池] 已将JSON格式转换为Cookie字符串，${cookieArray.length}个cookie`);
 
             // 从数组中提取loadts
             const loadtsCookie = cookieArray.find(item => item.name === 'loadts');
@@ -1707,7 +684,7 @@ router.post('/cookie-pool-update', authenticateToken, requireRole(['boss', 'mana
             }
           }
         } catch (e) {
-          console.log('⚠️ [Cookie池] value不是有效JSON，作为Cookie字符串处理');
+          log.info('⚠️ [Cookie池] value不是有效JSON，作为Cookie字符串处理');
         }
       }
 
@@ -1768,7 +745,7 @@ module.exports = {
       data: simpleCookiePool.getStatus()
     });
   } catch (error) {
-    console.error('更新Cookie配置失败:', error);
+    log.error('更新Cookie配置失败:', error);
     res.status(500).json({
       success: false,
       message: '更新Cookie配置失败: ' + error.message
@@ -1787,7 +764,7 @@ router.get('/audit-pause-status', authenticateToken, requireRole(['boss', 'manag
       data: pauseStatus
     });
   } catch (error) {
-    console.error('获取审核暂停状态失败:', error);
+    log.error('获取审核暂停状态失败:', error);
     res.status(500).json({
       success: false,
       message: '获取审核暂停状态失败'
@@ -1817,7 +794,7 @@ router.post('/audit-resume', authenticateToken, requireRole(['boss', 'manager'])
       message: '审核已恢复'
     });
   } catch (error) {
-    console.error('恢复审核失败:', error);
+    log.error('恢复审核失败:', error);
     res.status(500).json({
       success: false,
       message: '恢复审核失败'
@@ -1845,7 +822,7 @@ router.post('/cookie-clear-invalid', authenticateToken, requireRole(['boss', 'ma
       data: simpleCookiePool.getStatus()
     });
   } catch (error) {
-    console.error('清除失效标记失败:', error);
+    log.error('清除失效标记失败:', error);
     res.status(500).json({
       success: false,
       message: '清除失效标记失败'
@@ -1885,7 +862,7 @@ router.get('/announcements', authenticateToken, requireRole(['boss', 'manager'])
       }
     });
   } catch (error) {
-    console.error('获取公告列表失败:', error);
+    log.error('获取公告列表失败:', error);
     res.status(500).json({
       success: false,
       message: '获取公告列表失败'
@@ -1912,7 +889,7 @@ router.get('/announcement/:id', authenticateToken, requireRole(['boss', 'manager
       data: announcement
     });
   } catch (error) {
-    console.error('获取公告详情失败:', error);
+    log.error('获取公告详情失败:', error);
     res.status(500).json({
       success: false,
       message: '获取公告详情失败'
@@ -1955,7 +932,7 @@ router.post('/announcement', authenticateToken, requireRole(['boss', 'manager'])
       data: announcement
     });
   } catch (error) {
-    console.error('创建公告失败:', error);
+    log.error('创建公告失败:', error);
     res.status(500).json({
       success: false,
       message: '创建公告失败: ' + error.message
@@ -1997,7 +974,7 @@ router.put('/announcement/:id', authenticateToken, requireRole(['boss', 'manager
       data: announcement
     });
   } catch (error) {
-    console.error('更新公告失败:', error);
+    log.error('更新公告失败:', error);
     res.status(500).json({
       success: false,
       message: '更新公告失败: ' + error.message
@@ -2024,7 +1001,7 @@ router.delete('/announcement/:id', authenticateToken, requireRole(['boss', 'mana
       message: '公告删除成功'
     });
   } catch (error) {
-    console.error('删除公告失败:', error);
+    log.error('删除公告失败:', error);
     res.status(500).json({
       success: false,
       message: '删除公告失败'
@@ -2054,7 +1031,7 @@ router.put('/announcement/:id/toggle', authenticateToken, requireRole(['boss', '
       data: announcement
     });
   } catch (error) {
-    console.error('切换公告状态失败:', error);
+    log.error('切换公告状态失败:', error);
     res.status(500).json({
       success: false,
       message: '切换公告状态失败'
@@ -2075,7 +1052,7 @@ router.get('/cookie-status', authenticateToken, requireRole(['boss', 'manager'])
       data: status
     });
   } catch (error) {
-    console.error('获取Cookie状态失败:', error);
+    log.error('获取Cookie状态失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie状态失败'
@@ -2095,7 +1072,7 @@ router.post('/cookie-check', authenticateToken, requireRole(['boss', 'manager'])
       data: result
     });
   } catch (error) {
-    console.error('手动检查Cookie失败:', error);
+    log.error('手动检查Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: '手动检查Cookie失败'
@@ -2116,7 +1093,7 @@ router.get('/cookies/stats', authenticateToken, requireRole(['boss', 'manager'])
       data: stats
     });
   } catch (error) {
-    console.error('获取Cookie池统计失败:', error);
+    log.error('获取Cookie池统计失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie池统计失败'
@@ -2144,7 +1121,7 @@ router.get('/cookies', authenticateToken, requireRole(['boss', 'manager']), asyn
       data: cookies
     });
   } catch (error) {
-    console.error('获取Cookie列表失败:', error);
+    log.error('获取Cookie列表失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie列表失败'
@@ -2170,7 +1147,7 @@ router.get('/cookies/:id', authenticateToken, requireRole(['boss', 'manager']), 
       data: cookie
     });
   } catch (error) {
-    console.error('获取Cookie详情失败:', error);
+    log.error('获取Cookie详情失败:', error);
     res.status(500).json({
       success: false,
       message: '获取Cookie详情失败'
@@ -2203,7 +1180,7 @@ router.post('/cookies', authenticateToken, requireRole(['boss', 'manager']), asy
       data: newCookie
     });
   } catch (error) {
-    console.error('添加Cookie失败:', error);
+    log.error('添加Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '添加Cookie失败'
@@ -2263,7 +1240,7 @@ router.put('/cookies/:id', authenticateToken, requireRole(['boss', 'manager']), 
       data: cookie
     });
   } catch (error) {
-    console.error('更新Cookie失败:', error);
+    log.error('更新Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: '更新Cookie失败'
@@ -2289,7 +1266,7 @@ router.delete('/cookies/:id', authenticateToken, requireRole(['boss', 'manager']
       message: 'Cookie删除成功'
     });
   } catch (error) {
-    console.error('删除Cookie失败:', error);
+    log.error('删除Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: '删除Cookie失败'
@@ -2309,7 +1286,7 @@ router.put('/cookies/:id/toggle', authenticateToken, requireRole(['boss', 'manag
       data: cookie
     });
   } catch (error) {
-    console.error('切换Cookie状态失败:', error);
+    log.error('切换Cookie状态失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '切换Cookie状态失败'
@@ -2329,7 +1306,7 @@ router.post('/cookies/:id/check', authenticateToken, requireRole(['boss', 'manag
       data: result
     });
   } catch (error) {
-    console.error('检查Cookie失败:', error);
+    log.error('检查Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '检查Cookie失败'
@@ -2349,7 +1326,7 @@ router.post('/cookies/check-all', authenticateToken, requireRole(['boss', 'manag
       data: result
     });
   } catch (error) {
-    console.error('批量检查Cookie失败:', error);
+    log.error('批量检查Cookie失败:', error);
     res.status(500).json({
       success: false,
       message: '批量检查Cookie失败'
@@ -2378,7 +1355,7 @@ router.post('/cookies/:id/mark-expired', authenticateToken, requireRole(['boss',
       message: 'Cookie已标记为失效'
     });
   } catch (error) {
-    console.error('标记Cookie失效失败:', error);
+    log.error('标记Cookie失效失败:', error);
     res.status(500).json({
       success: false,
       message: '标记Cookie失效失败'
@@ -2386,109 +1363,126 @@ router.post('/cookies/:id/mark-expired', authenticateToken, requireRole(['boss',
   }
 });
 
-// ==================== AI 提示词管理 API ====================
+// ==================== AI 提示词管理路由已迁移 ====================
+// 所有 AI 提示词相关路由已迁移到 routes/admin/ai-prompts.js
+// 路由包括：
+// - GET    /ai-prompts
+// - POST   /ai-prompts
+// - PUT    /ai-prompts/:name
+// - DELETE /ai-prompts/:name
+// - POST   /ai-prompts/:name/test
+// - POST   /ai-prompts/reload
 
-const AiPrompt = require('../models/AiPrompt');
+// ============ 评论线索管理路由已迁移 ====================
+// 所有评论线索相关路由已迁移到 routes/admin/comment-leads.js
+// 路由包括：
+// - GET  /comment-leads/stats
+// - GET  /comment-leads
+// - GET  /comment-blacklist
+// - POST /comment-blacklist
+// - DELETE /comment-blacklist/:keyword// ==================== 评论线索管理 API ====================
+
+// ==================== 关键词管理 API ====================
+
+const SearchKeyword = require('../models/SearchKeyword');
 
 /**
- * 获取所有 AI 提示词
- * GET /xiaohongshu/api/admin/ai-prompts
+ * 获取所有关键词
+ * GET /xiaohongshu/api/admin/keywords
  */
-router.get('/ai-prompts', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+router.get('/keywords', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
   try {
-    const prompts = await AiPrompt.find().sort({ type: 1, name: 1 });
+    const { category, status } = req.query;
+    const query = {};
+    if (category) query.category = category;
+    if (status) query.status = status;
+
+    const keywords = await SearchKeyword.find(query).sort({ category: 1, keyword: 1 });
     res.json({
       success: true,
-      data: prompts
+      data: keywords
     });
   } catch (error) {
-    console.error('获取 AI 提示词失败:', error);
+    log.error('获取关键词失败:', error);
     res.status(500).json({
       success: false,
-      message: '获取 AI 提示词失败'
+      message: '获取关键词失败'
     });
   }
 });
 
 /**
- * 创建 AI 提示词
- * POST /xiaohongshu/api/admin/ai-prompts
+ * 创建关键词
+ * POST /xiaohongshu/api/admin/keywords
  */
-router.post('/ai-prompts', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+router.post('/keywords', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
   try {
-    const data = req.body;
-    const prompt = new AiPrompt({
-      ...data,
-      updatedBy: req.user.username
-    });
-    await prompt.save();
+    const { keyword, category } = req.body;
+    const kw = new SearchKeyword({ keyword, category });
+    await kw.save();
     res.json({
       success: true,
-      data: prompt
+      data: kw
     });
   } catch (error) {
-    console.error('创建 AI 提示词失败:', error);
+    log.error('创建关键词失败:', error);
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: '提示词名称已存在'
+        message: '关键词已存在'
       });
     }
     res.status(500).json({
       success: false,
-      message: '创建 AI 提示词失败'
+      message: '创建关键词失败'
     });
   }
 });
 
 /**
- * 更新 AI 提示词
- * PUT /xiaohongshu/api/admin/ai-prompts/:name
+ * 更新关键词
+ * PUT /xiaohongshu/api/admin/keywords/:id
  */
-router.put('/ai-prompts/:name', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+router.put('/keywords/:id', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
   try {
-    const { name } = req.params;
-    const data = req.body;
-    const prompt = await AiPrompt.findOneAndUpdate(
-      { name },
-      {
-        ...data,
-        updatedBy: req.user.username,
-        updatedAt: new Date()
-      },
+    const { id } = req.params;
+    const { keyword, category, status } = req.body;
+    const kw = await SearchKeyword.findByIdAndUpdate(
+      id,
+      { keyword, category, status },
       { new: true }
     );
-    if (!prompt) {
+    if (!kw) {
       return res.status(404).json({
         success: false,
-        message: '提示词不存在'
+        message: '关键词不存在'
       });
     }
     res.json({
       success: true,
-      data: prompt
+      data: kw
     });
   } catch (error) {
-    console.error('更新 AI 提示词失败:', error);
+    log.error('更新关键词失败:', error);
     res.status(500).json({
       success: false,
-      message: '更新 AI 提示词失败'
+      message: '更新关键词失败'
     });
   }
 });
 
 /**
- * 删除 AI 提示词
- * DELETE /xiaohongshu/api/admin/ai-prompts/:name
+ * 删除关键词
+ * DELETE /xiaohongshu/api/admin/keywords/:id
  */
-router.delete('/ai-prompts/:name', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+router.delete('/keywords/:id', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
   try {
-    const { name } = req.params;
-    const result = await AiPrompt.deleteOne({ name });
+    const { id } = req.params;
+    const result = await SearchKeyword.deleteOne({ _id: id });
     if (result.deletedCount === 0) {
       return res.status(404).json({
         success: false,
-        message: '提示词不存在'
+        message: '关键词不存在'
       });
     }
     res.json({
@@ -2496,42 +1490,125 @@ router.delete('/ai-prompts/:name', authenticateToken, requireRole(['boss', 'mana
       message: '删除成功'
     });
   } catch (error) {
-    console.error('删除 AI 提示词失败:', error);
+    log.error('删除关键词失败:', error);
     res.status(500).json({
       success: false,
-      message: '删除 AI 提示词失败'
+      message: '删除关键词失败'
     });
   }
 });
 
 /**
- * 测试 AI 提示词
- * POST /xiaohongshu/api/admin/ai-prompts/:name/test
+ * 批量导入关键词
+ * POST /xiaohongshu/api/admin/keywords/batch-import
  */
-router.post('/ai-prompts/:name/test', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+router.post('/keywords/batch-import', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
   try {
-    const { name } = req.params;
-    const { testData } = req.body;
-    const prompt = await AiPrompt.findOne({ name });
-    if (!prompt) {
-      return res.status(404).json({
+    const { keywords } = req.body;
+    if (!Array.isArray(keywords)) {
+      return res.status(400).json({
         success: false,
-        message: '提示词不存在'
+        message: '关键词必须是数组'
       });
     }
-    // 调用 AI 服务进行测试
-    const aiService = require('../services/aiContentAnalysisService');
-    // 构建测试请求
-    const testResult = await aiService.testPrompt(prompt, testData);
+
+    let imported = 0;
+    let skipped = 0;
+    for (const kw of keywords) {
+      const keyword = typeof kw === 'string' ? kw : kw.keyword;
+      const category = typeof kw === 'object' ? kw.category : '';
+      try {
+        await SearchKeyword.create({ keyword, category });
+        imported++;
+      } catch (e) {
+        if (e.code === 11000) skipped++;
+        else throw e;
+      }
+    }
+
     res.json({
       success: true,
-      data: testResult
+      count: imported,
+      skipped
     });
   } catch (error) {
-    console.error('测试 AI 提示词失败:', error);
+    log.error('批量导入关键词失败:', error);
     res.status(500).json({
       success: false,
-      message: error.message || '测试 AI 提示词失败'
+      message: '批量导入关键词失败'
+    });
+  }
+});
+
+/**
+ * 获取所有分类及其关键词数量统计
+ * GET /xiaohongshu/api/admin/keyword-categories
+ */
+router.get('/keyword-categories', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const categories = await SearchKeyword.aggregate([
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+      { $project: { category: '$_id', count: 1, _id: 0 } },
+      { $sort: { count: -1 } }
+    ]);
+
+    res.json({
+      success: true,
+      data: categories
+    });
+  } catch (error) {
+    log.error('获取分类失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取分类失败'
+    });
+  }
+});
+
+/**
+ * 添加新分类（创建占位关键词确保分类出现在列表中）
+ * POST /xiaohongshu/api/admin/keyword-categories
+ */
+router.post('/keyword-categories', authenticateToken, requireRole(['boss', 'manager']), async (req, res) => {
+  try {
+    const { category } = req.body;
+    if (!category || !category.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: '分类名称不能为空'
+      });
+    }
+
+    const trimmedCategory = category.trim();
+
+    // 检查是否已存在该分类
+    const existing = await SearchKeyword.findOne({ category: trimmedCategory });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: '该分类已存在'
+      });
+    }
+
+    // 创建占位关键词（确保分类出现在列表中）
+    const placeholder = new SearchKeyword({
+      keyword: `[${trimmedCategory}] 分类`,
+      category: trimmedCategory,
+      status: 'active',
+      searchCount: 0
+    });
+    await placeholder.save();
+
+    res.json({
+      success: true,
+      data: { category: trimmedCategory, count: 1 },
+      message: '分类添加成功，请使用筛选器添加关键词'
+    });
+  } catch (error) {
+    log.error('添加分类失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || '添加分类失败'
     });
   }
 });

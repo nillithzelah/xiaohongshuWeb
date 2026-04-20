@@ -5,13 +5,16 @@ const Device = require('../models/Device');
 const User = require('../models/User');
 const { authenticateToken, requireRole, Role } = require('../middleware/auth');
 const { escapeRegExp } = require('../utils/security');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+const log = logger.module('Devices');
 
 // 设备AI预审核函数
 async function performDeviceAiReview(device) {
   try {
-    console.log(`🤖 [AI预审核] 开始审核设备: ${device.accountName}, ID: ${device._id}`);
-    console.log(`🤖 [AI预审核] 设备数据:`, {
+    log.info(`🤖 [AI预审核] 开始审核设备: ${device.accountName}, ID: ${device._id}`);
+    log.info(`🤖 [AI预审核] 设备数据:`, {
       accountName: device.accountName,
       accountId: device.accountId,
       accountUrl: device.accountUrl,
@@ -21,7 +24,7 @@ async function performDeviceAiReview(device) {
 
     // 基础检查：必须有审核图片
     if (!device.reviewImage) {
-      console.log(`❌ [AI预审核] 失败: 缺少审核图片`);
+      log.info(`❌ [AI预审核] 失败: 缺少审核图片`);
       return {
         passed: false,
         reason: '缺少审核图片'
@@ -30,7 +33,7 @@ async function performDeviceAiReview(device) {
 
     // 检查图片URL是否有效（简单的URL格式检查）
     if (!device.reviewImage.startsWith('http')) {
-      console.log(`❌ [AI预审核] 失败: 审核图片URL无效 - ${device.reviewImage}`);
+      log.info(`❌ [AI预审核] 失败: 审核图片URL无效 - ${device.reviewImage}`);
       return {
         passed: false,
         reason: '审核图片URL无效'
@@ -39,7 +42,7 @@ async function performDeviceAiReview(device) {
 
     // 检查账号名称格式（简单的格式检查）
     if (!device.accountName || device.accountName.length < 2) {
-      console.log(`❌ [AI预审核] 失败: 账号名称格式不正确 - ${device.accountName}`);
+      log.info(`❌ [AI预审核] 失败: 账号名称格式不正确 - ${device.accountName}`);
       return {
         passed: false,
         reason: '账号名称格式不正确'
@@ -48,14 +51,14 @@ async function performDeviceAiReview(device) {
 
     // 检查账号ID格式
     if (!device.accountId || !/^\d{8,12}$/.test(device.accountId)) {
-      console.log(`❌ [AI预审核] 失败: 账号ID格式不正确 - ${device.accountId}`);
+      log.info(`❌ [AI预审核] 失败: 账号ID格式不正确 - ${device.accountId}`);
       return {
         passed: false,
         reason: '账号ID格式不正确'
       };
     }
 
-    console.log(`✅ [AI预审核] 通过: 所有检查通过`);
+    log.info(`✅ [AI预审核] 通过: 所有检查通过`);
     // 所有检查通过
     return {
       passed: true,
@@ -63,8 +66,8 @@ async function performDeviceAiReview(device) {
     };
 
   } catch (error) {
-    console.error('❌ [AI预审核] 系统错误:', error);
-    console.error('❌ [AI预审核] 错误详情:', {
+    log.error('❌ [AI预审核] 系统错误:', error);
+    log.error('❌ [AI预审核] 错误详情:', {
       message: error.message,
       stack: error.stack,
       deviceId: device._id,
@@ -86,7 +89,7 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
     const { page = 1, limit = 10 } = req.query;
     const skip = (page - 1) * limit;
 
-    console.log('🔍 获取待审核设备列表:', { page, limit, user: req.user.username, role: req.user.role });
+    log.info('🔍 获取待审核设备列表:', { page, limit, user: req.user.username, role: req.user.role });
 
     // 构建查询条件
     let query = {
@@ -96,26 +99,26 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
     // 权限控制：part_time 用户只能看到自己创建的设备
     if (Role.isPartTime(req)) {
       query.createdBy = req.user._id;
-      console.log('👤 part_time 用户，仅显示自己创建的设备');
+      log.info('👤 part_time 用户，仅显示自己创建的设备');
     } else if (Role.isMentor(req)) {
       // 带教老师只能看到自己名下用户提交的设备
       const assignedUsers = await User.find({ mentor_id: req.user._id }).select('_id');
       const assignedUserIds = assignedUsers.map(u => u._id);
       query.createdBy = { $in: assignedUserIds };
-      console.log(`🎓 [带教老师权限] 当前带教老师: ${req.user.username}, 名下用户数: ${assignedUserIds.length}`);
+      log.info(`🎓 [带教老师权限] 当前带教老师: ${req.user.username}, 名下用户数: ${assignedUserIds.length}`);
 
       // 调试：检查这些用户的所有设备状态
       const allDevices = await Device.find({ createdBy: { $in: assignedUserIds } }).select('accountName reviewStatus');
-      console.log(`🎓 [调试] 这些用户创建的所有设备 (${allDevices.length}个):`);
+      log.info(`🎓 [调试] 这些用户创建的所有设备 (${allDevices.length}个):`);
       allDevices.forEach(d => {
-        console.log(`   - ${d.accountName}: ${d.reviewStatus}`);
+        log.info(`   - ${d.accountName}: ${d.reviewStatus}`);
       });
     } else if (!deviceRoles.includes(req.user.role)) {
       return res.status(403).json({ success: false, message: '权限不足' });
     }
 
-    console.log('🔍 查询条件:', query);
-    console.log('📊 分页参数:', { skip, limit: parseInt(limit) });
+    log.info('🔍 查询条件:', query);
+    log.info('📊 分页参数:', { skip, limit: parseInt(limit) });
 
     const devices = await Device.find(query)
     .populate({
@@ -132,11 +135,11 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
     .skip(skip)
     .limit(parseInt(limit));
 
-    console.log('📋 查询结果数量:', devices.length);
+    log.info('📋 查询结果数量:', devices.length);
 
     const total = await Device.countDocuments(query);
 
-    console.log(`📊 找到 ${devices.length} 个待审核设备，总共 ${total} 个`);
+    log.info(`📊 找到 ${devices.length} 个待审核设备，总共 ${total} 个`);
 
     res.json({
       success: true,
@@ -149,8 +152,8 @@ router.get('/pending-review', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ 获取待审核设备列表失败:', error);
-    console.error('❌ 错误详情:', {
+    log.error('❌ 获取待审核设备列表失败:', error);
+    log.error('❌ 错误详情:', {
       message: error.message,
       stack: error.stack,
       name: error.name
@@ -198,7 +201,7 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
       }).select('_id');
       const hrUserIds = hrUsers.map(user => user._id);
 
-      console.log(`🔍 [设备管理权限] HR ${req.user.username} 查询设备，找到 ${hrUserIds.length} 个兼职用户`);
+      log.info(`🔍 [设备管理权限] HR ${req.user.username} 查询设备，找到 ${hrUserIds.length} 个兼职用户`);
 
       // 使用 $or：分配给该HR相关用户的设备 OR 完全未分配的设备
       query.$or = [
@@ -220,7 +223,7 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
       }).select('_id');
       const mentorUserIds = mentorUsers.map(user => user._id);
 
-      console.log(`🔍 [设备管理权限] 带教老师 ${req.user.username} 查询设备，找到 ${mentorUserIds.length} 个兼职用户`);
+      log.info(`🔍 [设备管理权限] 带教老师 ${req.user.username} 查询设备，找到 ${mentorUserIds.length} 个兼职用户`);
 
       // 使用 $or：分配给该带教老师相关用户的设备 OR 完全未分配的设备
       query.$or = [
@@ -248,12 +251,24 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
-  
-    // 手动populate mentor信息
+
+    // 优化：批量查询 mentor 信息（避免 N+1 查询）
+    const mentorIds = new Set();
     for (const device of devices) {
       if (device.assignedUser && device.assignedUser.mentor_id) {
-        const mentor = await User.findById(device.assignedUser.mentor_id).select('username nickname');
-        device.assignedUser.mentor_id = mentor;
+        mentorIds.add(device.assignedUser.mentor_id);
+      }
+    }
+
+    // 一次性查询所有 mentor
+    const mentors = await User.find({ _id: { $in: Array.from(mentorIds) } })
+      .select('username nickname');
+    const mentorMap = new Map(mentors.map(m => [m._id.toString(), m]));
+
+    // 填充 mentor 信息
+    for (const device of devices) {
+      if (device.assignedUser?.mentor_id) {
+        device.assignedUser.mentor = mentorMap.get(device.assignedUser.mentor_id.toString()) || null;
       }
     }
 
@@ -270,7 +285,7 @@ router.get('/', authenticateToken, requireRole(deviceRoles), async (req, res) =>
       }
     });
   } catch (error) {
-    console.error('获取设备列表失败:', error);
+    log.error('获取设备列表失败:', error);
     res.status(500).json({ success: false, message: '获取设备列表失败' });
   }
 });
@@ -315,7 +330,7 @@ router.get('/modify-requests', authenticateToken, requireRole(['manager', 'boss'
     });
 
   } catch (error) {
-    console.error('❌ [修改申请] 获取列表失败:', error);
+    log.error('❌ [修改申请] 获取列表失败:', error);
     res.status(500).json({ success: false, message: '获取申请列表失败' });
   }
 });
@@ -371,7 +386,7 @@ router.post('/modify-requests/:id/review', authenticateToken, requireRole(['mana
       modifyRequest.note = note || '';
       await modifyRequest.save();
 
-      console.log('✅ [修改申请] 审核通过:', {
+      log.info('✅ [修改申请] 审核通过:', {
         requestId: modifyRequest._id,
         deviceId: device._id,
         modifyType: modifyRequest.modifyType,
@@ -393,7 +408,7 @@ router.post('/modify-requests/:id/review', authenticateToken, requireRole(['mana
       modifyRequest.note = note || '';
       await modifyRequest.save();
 
-      console.log('✅ [修改申请] 已拒绝:', {
+      log.info('✅ [修改申请] 已拒绝:', {
         requestId: modifyRequest._id,
         reason: rejectReason
       });
@@ -406,7 +421,7 @@ router.post('/modify-requests/:id/review', authenticateToken, requireRole(['mana
     }
 
   } catch (error) {
-    console.error('❌ [修改申请] 审核失败:', error);
+    log.error('❌ [修改申请] 审核失败:', error);
     res.status(500).json({ success: false, message: '审核申请失败' });
   }
 });
@@ -433,7 +448,7 @@ router.get('/my-modify-requests', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [修改申请] 获取我的申请失败:', error);
+    log.error('❌ [修改申请] 获取我的申请失败:', error);
     res.status(500).json({ success: false, message: '获取申请列表失败' });
   }
 });
@@ -460,7 +475,7 @@ router.get('/:id', authenticateToken, requireRole(deviceRoles), async (req, res)
 
     res.json({ success: true, data: device });
   } catch (error) {
-    console.error('获取设备详情失败:', error);
+    log.error('获取设备详情失败:', error);
     res.status(500).json({ success: false, message: '获取设备详情失败' });
   }
 });
@@ -511,7 +526,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
     // 【新增】创建设备后进行AI预审核
     try {
-      console.log('🤖 [创建设备] 开始设备AI预审核...', {
+      log.info('🤖 [创建设备] 开始设备AI预审核...', {
         deviceId: device._id,
         accountName: device.accountName,
         createdBy: device.createdBy
@@ -524,14 +539,14 @@ router.post('/', authenticateToken, async (req, res) => {
           reviewStatus: 'ai_approved'
         }, { new: true });
 
-        console.log('✅ [创建设备] 设备AI预审核通过，状态更新为ai_approved:', {
+        log.info('✅ [创建设备] 设备AI预审核通过，状态更新为ai_approved:', {
           deviceId: device._id,
           accountName: device.accountName,
           newStatus: updateResult?.reviewStatus
         });
       } else {
         // AI审核失败，保持pending状态等待人工审核
-        console.log('❌ [创建设备] 设备AI预审核失败:', {
+        log.info('❌ [创建设备] 设备AI预审核失败:', {
           deviceId: device._id,
           accountName: device.accountName,
           reason: aiReviewResult.reason,
@@ -539,7 +554,7 @@ router.post('/', authenticateToken, async (req, res) => {
         });
       }
     } catch (aiError) {
-      console.error('❌ [创建设备] 设备AI预审核系统错误:', {
+      log.error('❌ [创建设备] 设备AI预审核系统错误:', {
         deviceId: device._id,
         accountName: device.accountName,
         error: aiError.message,
@@ -566,7 +581,7 @@ router.post('/', authenticateToken, async (req, res) => {
       data: populatedDevice
     });
   } catch (error) {
-    console.error('创建设备失败:', error);
+    log.error('创建设备失败:', error);
     if (error.code === 11000) {
       res.status(400).json({ success: false, message: '设备账号名已存在' });
     } else {
@@ -580,7 +595,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { phone, accountId, accountName, accountUrl, assignedUser, status, influence, onlineDuration, points, remark, reviewImage } = req.body;
 
-    console.log('🔄 更新设备请求:', {
+    log.info('🔄 更新设备请求:', {
       id: req.params.id,
       body: req.body,
       user: req.user?.username,
@@ -629,7 +644,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       }
     }
 
-    console.log('📝 准备更新数据:', updateData);
+    log.info('📝 准备更新数据:', updateData);
 
     // 如果要修改账号名，检查是否与其他设备重复
     if (accountName && accountName !== device.accountName) {
@@ -647,7 +662,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       runValidators: true
     });
 
-    console.log('✅ 数据库更新结果:', result);
+    log.info('✅ 数据库更新结果:', result);
 
     // 重新查询以获取更新后的数据
     const updatedDevice = await Device.findById(req.params.id)
@@ -661,7 +676,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       })
       .populate('createdBy', 'username nickname');
 
-    console.log('📤 返回数据:', updatedDevice);
+    log.info('📤 返回数据:', updatedDevice);
 
     res.json({
       success: true,
@@ -669,8 +684,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
       data: updatedDevice
     });
   } catch (error) {
-    console.error('❌ 更新设备失败:', error);
-    console.error('❌ 错误详情:', {
+    log.error('❌ 更新设备失败:', error);
+    log.error('❌ 错误详情:', {
       message: error.message,
       stack: error.stack,
       name: error.name
@@ -712,7 +727,7 @@ router.put('/:id/toggle-lock', authenticateToken, requireRole(['manager', 'boss'
       data: { isLocked: device.isLocked }
     });
   } catch (error) {
-    console.error('锁定/解锁设备失败:', error);
+    log.error('锁定/解锁设备失败:', error);
     res.status(500).json({ success: false, message: '操作失败' });
   }
 });
@@ -756,7 +771,7 @@ router.put('/:id/add-points', authenticateToken, requireRole(['manager', 'boss']
       }
     });
   } catch (error) {
-    console.error('增加积分失败:', error);
+    log.error('增加积分失败:', error);
     res.status(500).json({ success: false, message: '增加积分失败' });
   }
 });
@@ -764,8 +779,8 @@ router.put('/:id/add-points', authenticateToken, requireRole(['manager', 'boss']
 // 获取用户列表（用于分配设备）
 router.get('/users/list', authenticateToken, requireRole(deviceRoles), async (req, res) => {
   try {
-    console.log('🔍 查询兼职用户列表...');
-    console.log('📋 当前用户信息:', req.user);
+    log.info('🔍 查询兼职用户列表...');
+    log.info('📋 当前用户信息:', req.user);
 
     const query = {
       role: 'part_time', // 只查询普通兼职用户，带教老师不分配设备
@@ -773,22 +788,22 @@ router.get('/users/list', authenticateToken, requireRole(deviceRoles), async (re
       isLocked: { $ne: true } // 排除已锁定的用户（锁定等同于伪删除）
     };
 
-    console.log('🔍 查询条件:', query);
+    log.info('🔍 查询条件:', query);
 
     const users = await User.find(query)
     .select('username nickname phone wechat role') // 添加role字段用于前端区分
     .sort({ createdAt: -1 });
 
-    console.log(`📊 查询结果: 找到 ${users.length} 个兼职用户`);
-    console.log('👥 用户详情:', users.map(u => ({ username: u.username, role: u.role, is_deleted: u.is_deleted })));
+    log.info(`📊 查询结果: 找到 ${users.length} 个兼职用户`);
+    log.info('👥 用户详情:', users.map(u => ({ username: u.username, role: u.role, is_deleted: u.is_deleted })));
 
     res.json({
       success: true,
       data: users
     });
   } catch (error) {
-    console.error('❌ 获取用户列表失败:', error);
-    console.error('❌ 错误详情:', {
+    log.error('❌ 获取用户列表失败:', error);
+    log.error('❌ 错误详情:', {
       message: error.message,
       stack: error.stack
     });
@@ -801,7 +816,7 @@ router.post('/verify', authenticateToken, async (req, res) => {
   try {
     const { accountUrl, accountId, nickname } = req.body;
 
-    console.log(`🤖 [验证] 跳过验证，默认通过: 预期ID"${accountId}"，预期昵称"${nickname}"`);
+    log.info(`🤖 [验证] 跳过验证，默认通过: 预期ID"${accountId}"，预期昵称"${nickname}"`);
 
     // 直接返回验证通过
     res.json({
@@ -817,7 +832,7 @@ router.post('/verify', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ 审核系统内部错误:', error);
+    log.error('❌ 审核系统内部错误:', error);
     res.status(500).json({ success: false, message: '服务器内部错误' });
   }
 });
@@ -826,7 +841,7 @@ router.post('/verify', authenticateToken, async (req, res) => {
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const deviceId = req.params.id;
-    console.log('🗑️ 删除设备请求:', { deviceId, user: req.user.username, role: req.user.role });
+    log.info('🗑️ 删除设备请求:', { deviceId, user: req.user.username, role: req.user.role });
 
     // 查找设备
     const device = await Device.findById(deviceId);
@@ -845,14 +860,14 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     // 删除设备
     await Device.findByIdAndDelete(deviceId);
 
-    console.log('✅ 设备删除成功:', deviceId);
+    log.info('✅ 设备删除成功:', deviceId);
     res.json({
       success: true,
       message: '设备删除成功'
     });
 
   } catch (error) {
-    console.error('❌ 删除设备失败:', error);
+    log.error('❌ 删除设备失败:', error);
     res.status(500).json({ success: false, message: '删除设备失败' });
   }
 });
@@ -863,7 +878,7 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
     const { action, reason } = req.body;
     const deviceId = req.params.id;
 
-    console.log('🔄 [人工审核] 开始审核设备请求:', {
+    log.info('🔄 [人工审核] 开始审核设备请求:', {
       deviceId,
       action,
       reason: reason || '未提供',
@@ -874,23 +889,23 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
 
     // 参数验证
     if (!['approve', 'reject'].includes(action)) {
-      console.log('❌ [人工审核] 参数验证失败: 无效的审核操作 -', action);
+      log.info('❌ [人工审核] 参数验证失败: 无效的审核操作 -', action);
       return res.status(400).json({ success: false, message: '无效的审核操作' });
     }
 
     if (action === 'reject' && (!reason || reason.trim() === '')) {
-      console.log('❌ [人工审核] 参数验证失败: 拒绝操作必须提供原因');
+      log.info('❌ [人工审核] 参数验证失败: 拒绝操作必须提供原因');
       return res.status(400).json({ success: false, message: '拒绝审核必须提供原因' });
     }
 
     // 查找设备
     const device = await Device.findById(deviceId);
     if (!device) {
-      console.log('❌ [人工审核] 设备不存在:', deviceId);
+      log.info('❌ [人工审核] 设备不存在:', deviceId);
       return res.status(404).json({ success: false, message: '设备不存在' });
     }
 
-    console.log('📋 [人工审核] 设备当前状态:', {
+    log.info('📋 [人工审核] 设备当前状态:', {
       id: device._id,
       accountName: device.accountName,
       reviewStatus: device.reviewStatus,
@@ -901,7 +916,7 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
 
     // 状态验证
     if (!['pending', 'ai_approved'].includes(device.reviewStatus)) {
-      console.log('❌ [人工审核] 设备状态不允许审核:', device.reviewStatus);
+      log.info('❌ [人工审核] 设备状态不允许审核:', device.reviewStatus);
       return res.status(400).json({
         success: false,
         message: `设备当前状态为 ${device.reviewStatus}，不允许人工审核`
@@ -917,16 +932,16 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
     if (action === 'approve') {
       updateData.reviewStatus = 'approved';
       updateData.status = 'online'; // 审核通过后自动设为在线状态
-      console.log('✅ [人工审核] 审核通过，设置状态为approved和online');
+      log.info('✅ [人工审核] 审核通过，设置状态为approved和online');
     } else {
       updateData.reviewStatus = 'rejected';
       updateData.reviewReason = reason.trim();
       updateData.assignedUser = null; // 审核拒绝时解除设备与用户的分配关系
       updateData.status = 'offline'; // 重置设备状态
-      console.log('❌ [人工审核] 审核拒绝，原因:', updateData.reviewReason, '，解除用户分配');
+      log.info('❌ [人工审核] 审核拒绝，原因:', updateData.reviewReason, '，解除用户分配');
     }
 
-    console.log('🔄 [人工审核] 准备更新数据库:', updateData);
+    log.info('🔄 [人工审核] 准备更新数据库:', updateData);
 
     // 执行数据库更新
     const updatedDevice = await Device.findByIdAndUpdate(deviceId, updateData, {
@@ -935,11 +950,11 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
     });
 
     if (!updatedDevice) {
-      console.log('❌ [人工审核] 数据库更新失败: 未找到更新的设备');
+      log.info('❌ [人工审核] 数据库更新失败: 未找到更新的设备');
       return res.status(500).json({ success: false, message: '数据库更新失败' });
     }
 
-    console.log('✅ [人工审核] 设备审核完成:', {
+    log.info('✅ [人工审核] 设备审核完成:', {
       id: updatedDevice._id,
       reviewStatus: updatedDevice.reviewStatus,
       status: updatedDevice.status,
@@ -970,8 +985,8 @@ router.put('/:id/review', authenticateToken, requireRole(['manager', 'boss', 'hr
     });
 
   } catch (error) {
-    console.error('❌ [人工审核] 审核设备失败:', error);
-    console.error('❌ [人工审核] 错误详情:', {
+    log.error('❌ [人工审核] 审核设备失败:', error);
+    log.error('❌ [人工审核] 错误详情:', {
       message: error.message,
       stack: error.stack,
       name: error.name,
@@ -993,7 +1008,7 @@ router.post('/:id/modify-request', authenticateToken, async (req, res) => {
   try {
     const { accountName, accountUrl, reason } = req.body;
 
-    console.log('📝 [修改申请] 收到申请:', {
+    log.info('📝 [修改申请] 收到申请:', {
       deviceId: req.params.id,
       userId: req.user._id,
       accountName,
@@ -1072,7 +1087,7 @@ router.post('/:id/modify-request', authenticateToken, async (req, res) => {
     // 批量创建申请
     const createdRequests = await DeviceModifyRequest.insertMany(modifyRequests);
 
-    console.log('✅ [修改申请] 创建成功:', {
+    log.info('✅ [修改申请] 创建成功:', {
       requestId: createdRequests.map(r => r._id),
       deviceId: device._id
     });
@@ -1087,7 +1102,7 @@ router.post('/:id/modify-request', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [修改申请] 创建失败:', error);
+    log.error('❌ [修改申请] 创建失败:', error);
     res.status(500).json({ success: false, message: '提交申请失败' });
   }
 });

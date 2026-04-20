@@ -162,7 +162,13 @@ function asyncHandler(fn) {
  * 放在所有路由之后使用
  */
 function errorHandler(err, req, res, next) {
-  console.error('错误处理中间件捕获:', err);
+  console.error('❌ [全局错误处理] 捕获错误:', {
+    name: err.name,
+    message: err.message,
+    code: err.code,
+    path: req.path,
+    method: req.method
+  });
 
   // 如果已经发送了响应
   if (res.headersSent) {
@@ -173,28 +179,85 @@ function errorHandler(err, req, res, next) {
   let status = 500;
   let message = '服务器内部错误';
 
+  // === Mongoose 验证错误 ===
   if (err.name === 'ValidationError') {
     status = 400;
     message = '数据验证失败';
-  } else if (err.name === 'CastError') {
+    // 提取具体的验证错误信息
+    if (err.errors) {
+      const details = Object.values(err.errors).map(e => e.message);
+      return res.status(status).json({
+        success: false,
+        message,
+        details
+      });
+    }
+  }
+  // === Mongoose 类型转换错误 ===
+  else if (err.name === 'CastError') {
     status = 400;
     message = '无效的数据格式';
-  } else if (err.code === 11000) {
+  }
+  // === MongoDB 唯一键冲突 ===
+  else if (err.code === 11000) {
     status = 409;
     message = '数据已存在';
-  } else if (err.status) {
+  }
+  // === JWT 认证错误 ===
+  else if (err.name === 'JsonWebTokenError') {
+    status = 401;
+    message = '无效的访问令牌';
+  }
+  else if (err.name === 'TokenExpiredError') {
+    status = 401;
+    message = '访问令牌已过期';
+  }
+  // === Axios/API 调用错误 ===
+  else if (err.code === 'ECONNREFUSED') {
+    status = 503;
+    message = '外部服务不可用';
+  }
+  else if (err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+    status = 504;
+    message = '请求超时';
+  }
+  else if (err.code === 'ECONNRESET') {
+    status = 503;
+    message = '连接被重置';
+  }
+  // === HTTP 错误响应 ===
+  else if (err.response) {
+    status = err.response.status || 502;
+    message = `外部服务错误: ${status}`;
+  }
+  // === 自定义错误（带 status 属性） ===
+  else if (err.status) {
     status = err.status;
     message = err.message;
   }
+  // === CORS 错误 ===
+  else if (err.message && err.message.includes('CORS')) {
+    status = 403;
+    message = '跨域请求被拒绝';
+  }
 
-  res.status(status).json({
+  // 构建响应
+  const errorResponse = {
     success: false,
-    message,
-    ...(process.env.NODE_ENV === 'development' && {
-      stack: err.stack,
-      details: err.details
-    })
-  });
+    message
+  };
+
+  // 开发环境添加调试信息
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.stack = err.stack;
+    errorResponse.details = {
+      name: err.name,
+      code: err.code,
+      ...(err.details || {})
+    };
+  }
+
+  res.status(status).json(errorResponse);
 }
 
 module.exports = {

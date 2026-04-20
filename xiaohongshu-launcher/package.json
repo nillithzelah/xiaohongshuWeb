@@ -1,0 +1,73 @@
+{
+  "name": "xiaohongshu-launcher",
+  "version": "1.1.0",
+  "description": "小红书采集客户端整合器",
+  "main": "dist-electron/main/index.js",
+  "author": "wubug",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "copy-deps": "node -e \"const fs=require('fs');const path=require('path');const outDir='dist-electron/main';if(fs.existsSync(outDir)){['client-manager.js','updater.js','client-downloader.js'].forEach(f=>{const src=path.join('src/main',f);const dest=path.join(outDir,f);if(fs.existsSync(src)){fs.copyFileSync(src,dest);console.log('Copied:',f)}})}\"",
+    "build": "vite build && npm run copy-deps && electron-builder --win --x64",
+    "build:portable": "vite build && npm run copy-deps && electron-builder --win --x64 --publish never"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "electron-log": "^5.1.0",
+    "electron-updater": "^6.3.0",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "electron": "^32.3.3",
+    "electron-builder": "^25.0.0",
+    "vite": "^5.4.0",
+    "vite-plugin-electron": "^0.29.0"
+  },
+  "build": {
+    "appId": "com.wubug.xiaohongshu-launcher",
+    "productName": "小红书采集客户端",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ffmpeg.exe",
+        "to": "ffmpeg.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": "x64"
+        },
+        {
+          "target": "portable",
+          "arch": "x64"
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "sign": null
+    },
+    "portable": {
+      "artifactName": "${productName}-portable-${version}-${arch}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://www.wubug.cc/downloads/xiaohongshu-launcher"
+    }
+  }
+}

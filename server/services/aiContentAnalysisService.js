@@ -3,6 +3,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const NodeCache = require('node-cache');
 const AiPrompt = require('../models/AiPrompt');
+const { withRetry, RetryPresets } = require('../utils/apiRetry');
 
 class AiContentAnalysisService {
   constructor() {
@@ -66,7 +67,8 @@ class AiContentAnalysisService {
       checkInterval: 60 * 60 * 1000,  // 每小时检查一次
       autoSwitch: process.env.AI_AUTO_SWITCH === 'true',  // 是否自动切换
       lastCheckTime: null,
-      currentProvider: process.env.AI_PROVIDER || 'deepseek'
+      currentProvider: process.env.AI_PROVIDER || 'deepseek',
+      monitorTimer: null  // 定时器引用（用于停止监控）
     };
   }
 
@@ -97,15 +99,31 @@ class AiContentAnalysisService {
    * 启动余额监控定时任务
    */
   startBalanceMonitoring() {
+    // 如果已经启动，先停止旧的
+    if (this.balanceConfig.monitorTimer) {
+      this.stopBalanceMonitoring();
+    }
+
     // 立即检查一次
     this.checkBalanceAndSwitch();
 
-    // 定时检查
-    setInterval(async () => {
+    // 定时检查并保存定时器引用
+    this.balanceConfig.monitorTimer = setInterval(async () => {
       await this.checkBalanceAndSwitch();
     }, this.balanceConfig.checkInterval);
 
     console.log(`💰 [余额监控] 已启动，检查间隔: ${this.balanceConfig.checkInterval / 60000} 小时，切换阈值: ¥${this.balanceConfig.lowBalanceThreshold}`);
+  }
+
+  /**
+   * 停止余额监控定时任务（用于服务关闭）
+   */
+  stopBalanceMonitoring() {
+    if (this.balanceConfig.monitorTimer) {
+      clearInterval(this.balanceConfig.monitorTimer);
+      this.balanceConfig.monitorTimer = null;
+      console.log('⏹️  [余额监控] 监控定时器已停止');
+    }
   }
 
   /**
@@ -156,12 +174,19 @@ class AiContentAnalysisService {
    */
   async getDeepSeekBalance() {
     try {
-      const response = await axios.get(`${this.apiConfig.deepseek.baseUrl}/user/balance`, {
-        headers: {
-          'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
+      // 🔧 使用重试机制包装余额查询
+      const response = await withRetry(async () => {
+        return await axios.get(`${this.apiConfig.deepseek.baseUrl}/user/balance`, {
+          headers: {
+            'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        });
+      }, {
+        maxRetries: 2,
+        delay: 1000,
+        backoffMultiplier: 2
       });
 
       if (response.data && response.data.balance_infos && response.data.balance_infos.length > 0) {
@@ -388,20 +413,28 @@ class AiContentAnalysisService {
       });
       const apiConfig = dbPrompt.apiConfig || {};
 
-      const response = await axios.post(`${this.apiConfig.deepseek.baseUrl}/chat/completions`, {
-        model: apiConfig.model || this.apiConfig.deepseek.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: apiConfig.temperature ?? 0.3,
-        max_tokens: apiConfig.maxTokens || 2000
+      // 🔧 使用重试机制包装 API 调用
+      const response = await withRetry(async () => {
+        return await axios.post(`${this.apiConfig.deepseek.baseUrl}/chat/completions`, {
+          model: apiConfig.model || this.apiConfig.deepseek.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: apiConfig.temperature ?? 0.3,
+          max_tokens: apiConfig.maxTokens || 2000
+        }, {
+          headers: {
+            'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000  // 60秒超时（DeepSeek API有时响应较慢）
+        });
       }, {
-        headers: {
-          'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 60000  // 60秒超时（DeepSeek API有时响应较慢）
+        ...RetryPresets.deepseek,
+        onRetry: (attempt, error) => {
+          console.warn(`⚠️ [DeepSeek重试] 第 ${attempt} 次重试，错误: ${error.message}`);
+        }
       });
 
       const responseTime = Date.now() - startTime;
@@ -449,20 +482,30 @@ class AiContentAnalysisService {
       });
       const apiConfig = dbPrompt.apiConfig || {};
 
-      const response = await axios.post(`${this.apiConfig.zai.baseUrl}/chat/completions`, {
-        model: apiConfig.model || this.apiConfig.zai.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: apiConfig.temperature ?? 0.3,
-        max_tokens: apiConfig.maxTokens || 2000
+      // 🔧 使用重试机制包装 API 调用
+      const response = await withRetry(async () => {
+        return await axios.post(`${this.apiConfig.zai.baseUrl}/chat/completions`, {
+          model: apiConfig.model || this.apiConfig.zai.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: apiConfig.temperature ?? 0.3,
+          max_tokens: apiConfig.maxTokens || 2000
+        }, {
+          headers: {
+            'Authorization': `Bearer ${this.apiConfig.zai.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        });
       }, {
-        headers: {
-          'Authorization': `Bearer ${this.apiConfig.zai.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
+        maxRetries: 3,
+        delay: 1500,
+        backoffMultiplier: 2,
+        onRetry: (attempt, error) => {
+          console.warn(`⚠️ [Z.AI重试] 第 ${attempt} 次重试，错误: ${error.message}`);
+        }
       });
 
       const responseTime = Date.now() - startTime;
@@ -676,20 +719,28 @@ class AiContentAnalysisService {
       });
       const apiConfig = dbPrompt.apiConfig || {};
 
-      const response = await axios.post(`${this.apiConfig.deepseek.baseUrl}/chat/completions`, {
-        model: apiConfig.model || this.apiConfig.deepseek.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: apiConfig.temperature ?? 0.2,
-        max_tokens: apiConfig.maxTokens || 1000
+      // 🔧 使用重试机制包装 API 调用
+      const response = await withRetry(async () => {
+        return await axios.post(`${this.apiConfig.deepseek.baseUrl}/chat/completions`, {
+          model: apiConfig.model || this.apiConfig.deepseek.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: apiConfig.temperature ?? 0.2,
+          max_tokens: apiConfig.maxTokens || 1000
+        }, {
+          headers: {
+            'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        });
       }, {
-        headers: {
-          'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
+        ...RetryPresets.deepseek,
+        onRetry: (attempt, error) => {
+          console.warn(`⚠️ [DeepSeek评论重试] 第 ${attempt} 次重试，错误: ${error.message}`);
+        }
       });
 
       const responseTime = Date.now() - startTime;
@@ -793,25 +844,32 @@ class AiContentAnalysisService {
     };
 
     try {
-      const response = await axios.post(
-        `${this.apiConfig.deepseek.baseUrl}/chat/completions`,
-        {
-          model: config.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: config.temperature,
-          max_tokens: config.maxTokens
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`
+      // 🔧 使用重试机制包装测试请求
+      const response = await withRetry(async () => {
+        return await axios.post(
+          `${this.apiConfig.deepseek.baseUrl}/chat/completions`,
+          {
+            model: config.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: config.temperature,
+            max_tokens: config.maxTokens
           },
-          timeout: 30000
-        }
-      );
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.apiConfig.deepseek.apiKey}`
+            },
+            timeout: 30000
+          }
+        );
+      }, {
+        maxRetries: 2,
+        delay: 1500,
+        backoffMultiplier: 2
+      });
 
       const content = response.data.choices?.[0]?.message?.content || '';
 
@@ -848,25 +906,33 @@ class AiContentAnalysisService {
     const apiKey = process.env.DEEPSEEK_API_KEY;
 
     try {
-      const response = await axios.post(
-        `${apiBaseUrl}/chat/completions`,
-        {
-          model: config.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: config.temperature,
-          max_tokens: config.maxTokens
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
+      // 🔧 使用重试机制包装测试请求
+      const { withRetry } = require('../utils/apiRetry');
+      const response = await withRetry(async () => {
+        return await axios.post(
+          `${apiBaseUrl}/chat/completions`,
+          {
+            model: config.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: config.temperature,
+            max_tokens: config.maxTokens
           },
-          timeout: 30000
-        }
-      );
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`
+            },
+            timeout: 30000
+          }
+        );
+      }, {
+        maxRetries: 2,
+        delay: 1500,
+        backoffMultiplier: 2
+      });
 
       const content = response.data.choices?.[0]?.message?.content || '';
 

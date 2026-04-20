@@ -1,0 +1,644 @@
+openapi: 3.0.3
+info:
+  title: 小红书审核系统 API
+  description: |
+    ## 概述
+
+    本API供外部合作方使用，主要用于小红书笔记的发现和短链接补充功能。
+
+    ## 基础信息
+
+    - **基础URL**: `http://www.wubug.cc/xiaohongshu/api` 或 `https://www.wubug.cc/xiaohongshu/api`
+    - **数据格式**: JSON
+    - **字符编码**: UTF-8
+
+    ## 认证说明
+
+    大部分接口无需认证即可访问。如需认证，请在请求头中添加：
+    ```
+    Authorization: Bearer YOUR_TOKEN
+    ```
+
+    ## 多客户端访问
+
+    为了防止多个客户端获取到相同数据，API实现了锁定机制：
+
+    1. 调用 `/fetch-one-without-short-url` 时，建议传递 `x-client-id` 请求头
+    2. 获取到的笔记会被自动锁定，锁定时间30分钟
+    3. 完成短链接更新后，锁定会自动释放
+
+  version: 1.0.0
+  contact:
+    name: 技术支持
+    email: support@wubug.cc
+  license:
+    name: MIT
+
+servers:
+  - url: http://www.wubug.cc/xiaohongshu/api
+    description: HTTP服务器（推荐用于测试）
+  - url: https://www.wubug.cc/xiaohongshu/api
+    description: HTTPS服务器（生产环境）
+
+tags:
+  - name: discovery
+    description: 笔记发现相关接口
+  - name: short-link
+    description: 短链接管理相关接口
+
+paths:
+  /client/discovery/keywords:
+    get:
+      tags:
+        - discovery
+      summary: 获取搜索关键词列表
+      description: |
+        获取所有活跃的搜索关键词，无需认证。
+
+        该接口用于获取系统当前配置的搜索关键词，可用于了解系统的搜索范围。
+      operationId: getKeywords
+      security: []
+      parameters:
+        - name: x-client-type
+          in: header
+          description: 客户端类型标识
+          required: false
+          schema:
+            type: string
+            example: discovery
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      keywords:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            keyword:
+                              type: string
+                              example: 减肥被骗
+                              description: 搜索关键词
+                            category:
+                              type: string
+                              example: 减肥诈骗
+                              description: 关键词分类
+                      count:
+                        type: integer
+                        example: 280
+                        description: 关键词总数
+
+  /short-link-pool/add:
+    post:
+      tags:
+        - short-link
+      summary: 上传短链接
+      description: |
+        添加小红书短链接到审核池，系统会自动审核该短链接对应的笔记。
+
+        **注意**：短链接必须包含 `xhslink.com` 域名。
+      operationId: addShortLink
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - shortUrl
+              properties:
+                shortUrl:
+                  type: string
+                  format: uri
+                  example: https://xhslink.com/abc123
+                  description: 短链接（必须包含 xhslink.com）
+                source:
+                  type: string
+                  example: wechat_bot
+                  default: external
+                  description: 来源标识
+                remark:
+                  type: string
+                  example: 用户提交
+                  description: 备注信息
+      responses:
+        '200':
+          description: 添加成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShortLinkResponse'
+        '409':
+          description: 短链接已存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /short-link-pool/latest:
+    get:
+      tags:
+        - short-link
+      summary: 获取最新短链接记录
+      description: |
+        获取最新的5条短链接记录，用于查看提交的短链接处理状态。
+
+        **无需认证**，可直接访问。
+      operationId: getLatestShortLinks
+      security: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+                        example: 5
+                        description: 返回的记录数量
+                      records:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ShortLinkRecord'
+              examples:
+                normal:
+                  summary: 正常响应
+                  value:
+                    success: true
+                    data:
+                      count: 5
+                      records:
+                        - id: "6970edc22500682ba33ee098"
+                          shortUrl: "http://xhslink.com/o/5vKEKwLKG0o"
+                          status: "rejected"
+                          source: "wechat_bot"
+                          remark: "用户提交"
+                          createdAt: "2026-01-21T15:16:18.241Z"
+                        - id: "6970edbb2500682ba33ee086"
+                          shortUrl: "http://xhslink.com/o/86oPKsMTqpG"
+                          status: "approved"
+                          source: "external"
+                          remark: ""
+                          createdAt: "2026-01-21T15:10:00.000Z"
+                          auditResult:
+                            title: "祛斑被骗经历"
+                            author: "小红书用户"
+                            is_genuine_victim_post: true
+
+  /client/discovery/fetch-one-without-short-url:
+    get:
+      tags:
+        - discovery
+      summary: 获取一条无短链接笔记
+      description: |
+        获取一条没有短链接的笔记，用于补充短链接。
+
+        **多客户端安全**：
+        - 使用原子锁定机制，防止多个客户端获取到相同数据
+        - 建议传递 `x-client-id` 请求头来标识客户端
+        - 锁定时间30分钟，超时自动释放
+
+        **工作流程**：
+        1. 调用此接口获取一条笔记
+        2. 根据返回的长链接找到对应的短链接
+        3. 调用批量更新接口回传短链接
+      operationId: fetchNoteWithoutShortUrl
+      security: []
+      parameters:
+        - name: x-client-id
+          in: header
+          description: 客户端唯一标识（建议传递，用于锁定机制）
+          required: false
+          schema:
+            type: string
+            example: client_001
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  remaining:
+                    type: integer
+                    example: 577
+                    description: 剩余待处理的笔记数量（不包括当前这条）
+                  data:
+                    oneOf:
+                      - $ref: '#/components/schemas/NoteInfo'
+                      - type: null
+                    nullable: true
+                    description: 笔记信息，当没有待处理笔记时为 null
+                  message:
+                    type: string
+                    example: 没有待处理的笔记
+                    description: 提示信息（仅在没有数据时返回）
+
+  /client/discovery/note/{noteId}:
+    get:
+      tags:
+        - discovery
+      summary: 查询笔记短链接状态
+      description: |
+        查询指定笔记的短链接更新状态，用于确认更新是否成功。
+
+        **使用场景**：调用批量更新接口后，使用此接口验证某条笔记的短链接是否更新成功。
+      operationId: getNoteStatus
+      security: []
+      parameters:
+        - name: noteId
+          in: path
+          description: 笔记ID（24位字符）
+          required: true
+          schema:
+            type: string
+            minLength: 24
+            maxLength: 24
+            example: "696612040000000022032786"
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/NoteStatus'
+              examples:
+                withShortUrl:
+                  summary: 已更新短链接
+                  value:
+                    success: true
+                    data:
+                      noteId: "69674aab0000000022021068"
+                      noteUrl: "https://www.xiaohongshu.com/explore/69674aab0000000022021068?xsec_token=xxx"
+                      shortUrl: "http://xhslink.com/test-update-1769160141"
+                      title: "祛斑被骗经历"
+                      author: "小红书用户"
+                      hasShortUrl: true
+                      shortUrlConvertedAt: "2026-01-23T09:22:24.973Z"
+                      createdAt: "2026-01-23T09:20:00.000Z"
+                withoutShortUrl:
+                  summary: 未更新短链接
+                  value:
+                    success: true
+                    data:
+                      noteId: "696612040000000022032786"
+                      noteUrl: "https://www.xiaohongshu.com/explore/696612040000000022032786?xsec_token=xxx"
+                      shortUrl: null
+                      title: "祛斑被骗，亲身经历"
+                      author: "木木不是沐沐"
+                      hasShortUrl: false
+                      shortUrlConvertedAt: null
+                      createdAt: "2026-01-23T09:15:00.000Z"
+        '404':
+          description: 笔记不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: 笔记不存在
+
+  /client/discovery/batch-update-short-urls:
+    post:
+      tags:
+        - discovery
+      summary: 批量更新短链接
+      description: |
+        批量更新笔记的短链接。外部合作方获取笔记后，找到对应的短链接，通过此接口回传。
+
+        **说明**：
+        - 单次最多更新100条记录
+        - 更新成功后自动释放笔记锁定
+        - 返回每条记录的处理结果
+      operationId: batchUpdateShortUrls
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - updates
+              properties:
+                updates:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required:
+                      - noteId
+                      - shortUrl
+                    properties:
+                      noteId:
+                        type: string
+                        example: "696612040000000022032786"
+                        description: 笔记ID（24位字符）
+                        minLength: 24
+                        maxLength: 24
+                      shortUrl:
+                        type: string
+                        format: uri
+                        example: http://xhslink.com/Al86aESFGd9
+                        description: 短链接（必须包含 xhslink.com）
+            examples:
+              normal:
+                summary: 正常请求
+                value:
+                  updates:
+                    - noteId: "696612040000000022032786"
+                      shortUrl: "http://xhslink.com/Al86aESFGd9"
+                    - noteId: "696f1c3fcdb7e67569fed6a2"
+                      shortUrl: "http://xhslink.com/3QKQCFzddFI"
+      responses:
+        '200':
+          description: 处理完成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                        example: 2
+                        description: 总更新数量
+                      successCount:
+                        type: integer
+                        example: 1
+                        description: 成功数量
+                      failedCount:
+                        type: integer
+                        example: 1
+                        description: 失败数量
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UpdateResult'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    NoteInfo:
+      type: object
+      description: 笔记信息
+      required:
+        - noteId
+        - noteUrl
+        - title
+        - author
+      properties:
+        noteId:
+          type: string
+          example: "696612040000000022032786"
+          description: 笔记ID（24位字符）
+        noteUrl:
+          type: string
+          format: uri
+          example: "https://www.xiaohongshu.com/explore/696612040000000022032786?xsec_token=xxx"
+          description: 笔记完整长链接
+        title:
+          type: string
+          example: "祛斑被骗，亲身经历"
+          description: 笔记标题
+        author:
+          type: string
+          example: "木木不是沐沐"
+          description: 作者昵称
+
+    ShortLinkResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "短链接添加成功"
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "67890abcdef12345"
+              description: 短链接记录ID
+            shortUrl:
+              type: string
+              example: "https://xhslink.com/abc123"
+            status:
+              type: string
+              enum: [pending, locked, approved, rejected]
+              example: "pending"
+              description: 短链接状态
+
+    ShortLinkRecord:
+      type: object
+      description: 短链接记录
+      properties:
+        id:
+          type: string
+          example: "6970edc22500682ba33ee098"
+          description: 记录ID
+        shortUrl:
+          type: string
+          format: uri
+          example: "http://xhslink.com/o/5vKEKwLKG0o"
+          description: 短链接
+        status:
+          type: string
+          enum: [pending, processing, approved, rejected, failed]
+          example: "approved"
+          description: 状态
+        source:
+          type: string
+          example: "wechat_bot"
+          description: 来源标识
+        remark:
+          type: string
+          example: "用户提交"
+          description: 备注信息
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-01-21T15:16:18.241Z"
+          description: 创建时间
+        auditResult:
+          type: object
+          description: 审核结果（仅审核完成时有）
+          properties:
+            title:
+              type: string
+              example: "祛斑被骗经历"
+              description: 笔记标题
+            author:
+              type: string
+              example: "小红书用户"
+              description: 作者昵称
+            is_genuine_victim_post:
+              type: boolean
+              example: true
+              description: 是否为真实受害者帖子
+
+    NoteStatus:
+      type: object
+      description: 笔记状态信息
+      properties:
+        noteId:
+          type: string
+          example: "69674aab0000000022021068"
+          description: 笔记ID（24位字符）
+        noteUrl:
+          type: string
+          format: uri
+          example: "https://www.xiaohongshu.com/explore/69674aab0000000022021068?xsec_token=xxx"
+          description: 笔记完整长链接
+        shortUrl:
+          type: string
+          format: uri
+          example: "http://xhslink.com/test-update-1769160141"
+          nullable: true
+          description: 短链接（未更新时为 null）
+        title:
+          type: string
+          example: "祛斑被骗经历"
+          description: 笔记标题
+        author:
+          type: string
+          example: "小红书用户"
+          description: 作者昵称
+        hasShortUrl:
+          type: boolean
+          example: true
+          description: 是否已更新短链接
+        shortUrlConvertedAt:
+          type: string
+          format: date-time
+          example: "2026-01-23T09:22:24.973Z"
+          nullable: true
+          description: 短链接更新时间
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-01-23T09:20:00.000Z"
+          description: 笔记创建时间
+
+    UpdateResult:
+      type: object
+      description: 单条记录更新结果
+      properties:
+        noteId:
+          type: string
+          example: "696612040000000022032786"
+        shortUrl:
+          type: string
+          example: "http://xhslink.com/Al86aESFGd9"
+        success:
+          type: boolean
+          example: true
+        title:
+          type: string
+          example: "祛斑被骗，亲身经历"
+          description: 笔记标题（仅成功时返回）
+        error:
+          type: string
+          example: "笔记不存在"
+          description: 错误信息（仅失败时返回）
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "短链接格式错误，必须包含 xhslink.com"
+
+  examples:
+    KeywordList:
+      value:
+        success: true
+        data:
+          keywords:
+            - keyword: "减肥被骗"
+              category: "减肥诈骗"
+            - keyword: "减肥被骗钱怎么追回"
+              category: "减肥诈骗"
+            - keyword: "护肤被骗"
+              category: "护肤诈骗"
+            - keyword: "祛斑被骗"
+              category: "祛斑诈骗"
+          count: 182
+
+    NoteWithoutShortUrl:
+      value:
+        success: true
+        remaining: 577
+        data:
+          noteId: "696612040000000022032786"
+          noteUrl: "https://www.xiaohongshu.com/explore/696612040000000022032786?xsec_token=xxx"
+          title: "祛斑被骗，亲身经历"
+          author: "木木不是沐沐"
+
+    BatchUpdateSuccess:
+      value:
+        success: true
+        data:
+          total: 2
+          successCount: 2
+          failedCount: 0
+          results:
+            - noteId: "696612040000000022032786"
+              shortUrl: "http://xhslink.com/Al86aESFGd9"
+              success: true
+              title: "祛斑被骗，亲身经历"
+            - noteId: "696f1c3fcdb7e67569fed6a2"
+              shortUrl: "http://xhslink.com/3QKQCFzddFI"
+              success: true
+              title: "另一篇笔记"

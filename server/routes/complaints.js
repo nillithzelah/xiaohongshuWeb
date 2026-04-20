@@ -2,7 +2,10 @@ const express = require('express');
 const Complaint = require('../models/Complaint');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { escapeRegExp } = require('../utils/security');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+const log = logger.module('Complaints');
 
 // 提交投诉（用户）
 router.post('/', authenticateToken, async (req, res) => {
@@ -36,7 +39,7 @@ router.post('/', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('提交投诉错误:', error);
+    log.error('提交投诉错误:', error);
     res.status(500).json({ success: false, message: '提交投诉失败' });
   }
 });
@@ -80,7 +83,7 @@ router.get('/', authenticateToken, requireRole(['boss', 'manager']), async (req,
     });
 
   } catch (error) {
-    console.error('获取投诉列表错误:', error);
+    log.error('获取投诉列表错误:', error);
     res.status(500).json({ success: false, message: '获取投诉列表失败' });
   }
 });
@@ -124,7 +127,7 @@ router.put('/:id', authenticateToken, requireRole(['boss', 'manager']), async (r
     });
 
   } catch (error) {
-    console.error('更新投诉错误:', error);
+    log.error('更新投诉错误:', error);
     res.status(500).json({ success: false, message: '更新投诉失败' });
   }
 });
@@ -146,7 +149,7 @@ router.get('/:id', authenticateToken, requireRole(['boss', 'manager']), async (r
     });
 
   } catch (error) {
-    console.error('获取投诉详情错误:', error);
+    log.error('获取投诉详情错误:', error);
     res.status(500).json({ success: false, message: '获取投诉详情失败' });
   }
 });

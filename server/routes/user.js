@@ -2,7 +2,10 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const multer = require('multer');
 const OSS = require('ali-oss');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+const log = logger.module('User');
 
 // 配置头像上传中间件
 const avatarUpload = multer({
@@ -69,7 +72,7 @@ router.get('/me', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取用户信息错误:', error);
+    log.error('获取用户信息错误:', error);
     res.status(500).json({ success: false, message: '获取用户信息失败' });
   }
 });
@@ -158,7 +161,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('更新用户信息错误:', error);
+    log.error('更新用户信息错误:', error);
     res.status(500).json({ success: false, message: '更新用户信息失败' });
   }
 });
@@ -208,7 +211,7 @@ router.post('/bind-invitation', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('绑定邀请码错误:', error);
+    log.error('绑定邀请码错误:', error);
     res.status(500).json({ success: false, message: '绑定邀请码失败' });
   }
 });
@@ -231,7 +234,7 @@ router.get('/invitation-code', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('获取邀请码错误:', error);
+    log.error('获取邀请码错误:', error);
     res.status(500).json({ success: false, message: '获取邀请码失败' });
   }
 });
@@ -269,32 +272,42 @@ router.get('/referral-tree', authenticateToken, async (req, res) => {
       };
     }));
 
-    // 获取下级的下级用户
-    const grandchildren = [];
-    for (const child of children) {
-      const childDescendants = await User.find({
-        parent_id: child._id,
-        is_deleted: { $ne: true }
-      }).select('username nickname createdAt');
-      grandchildren.push(...childDescendants);
+    // 获取下级的下级用户（优化：批量查询避免 N+1）
+    const childIds = children.map(c => c._id);
+    const grandchildren = await User.find({
+      parent_id: { $in: childIds },
+      is_deleted: { $ne: true }
+    }).select('username nickname createdAt');
+
+    // 批量查询所有二级佣金交易（优化：一次性查询）
+    const allLevel2Transactions = await Transaction.find({
+      user_id: req.user._id,
+      type: 'referral_bonus_2',
+      status: 'completed'
+    });
+
+    // 创建用户名到佣金的映射
+    const commissionMap = new Map();
+    for (const tx of allLevel2Transactions) {
+      // 从描述中提取用户名（假设格式为 "二级推荐奖励: {username}"）
+      const match = tx.description.match(/二级推荐奖励[:：]\s*(\S+)/);
+      if (match) {
+        const username = match[1];
+        const currentAmount = commissionMap.get(username) || 0;
+        commissionMap.set(username, currentAmount + tx.amount);
+      }
     }
 
-    // 计算每个下级的下级为您贡献的佣金（从二级佣金交易中计算）
-    const grandchildrenWithCommission = await Promise.all(grandchildren.map(async (gc) => {
-      const commissionTransactions = await Transaction.find({
-        user_id: req.user._id,
-        type: 'referral_bonus_2',
-        description: { $regex: gc.username, $options: 'i' },
-        status: 'completed'
-      });
-      const totalCommission = commissionTransactions.reduce((sum, t) => sum + t.amount, 0);
+    // 计算每个下级的下级为您贡献的佣金
+    const grandchildrenWithCommission = grandchildren.map((gc) => {
+      const totalCommission = commissionMap.get(gc.username) || 0;
       return {
         username: gc.username,
         nickname: gc.nickname,
         joinedAt: gc.createdAt,
         contributedCommission: Math.round(totalCommission * 100) / 100  // 该下级为您贡献的佣金
       };
-    }));
+    });
 
     res.json({
       success: true,
@@ -309,7 +322,7 @@ router.get('/referral-tree', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('获取上下级关系树错误:', error);
+    log.error('获取上下级关系树错误:', error);
     res.status(500).json({ success: false, message: '获取上下级关系树失败' });
   }
 });
@@ -348,7 +361,7 @@ router.get('/distribution-points', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('获取分销积分错误:', error);
+    log.error('获取分销积分错误:', error);
     res.status(500).json({ success: false, message: '获取分销积分失败' });
   }
 });
@@ -405,7 +418,7 @@ router.get('/referral-stats', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('获取推荐统计错误:', error);
+    log.error('获取推荐统计错误:', error);
     res.status(500).json({ success: false, message: '获取推荐统计失败' });
   }
 });
@@ -457,7 +470,7 @@ router.post('/upload-avatar', authenticateToken, avatarUpload.single('avatar'), 
     // 检查OSS配置
     const hasKeys = process.env.OSS_ACCESS_KEY_ID && process.env.OSS_ACCESS_KEY_SECRET;
     if (!hasKeys) {
-      console.log('❌ [Error] 未检测到 OSS Key，无法上传');
+      log.info('❌ [Error] 未检测到 OSS Key，无法上传');
       return res.status(500).json({
         success: false,
         message: 'OSS配置缺失，无法上传头像'
@@ -491,7 +504,7 @@ router.post('/upload-avatar', authenticateToken, avatarUpload.single('avatar'), 
     });
 
   } catch (error) {
-    console.error('头像上传失败:', error);
+    log.error('头像上传失败:', error);
     res.status(500).json({ success: false, message: '头像上传失败' });
   }
 });
@@ -541,7 +554,7 @@ router.put('/change-password', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('修改密码错误:', error);
+    log.error('修改密码错误:', error);
     res.status(500).json({ success: false, message: '修改密码失败' });
   }
 });

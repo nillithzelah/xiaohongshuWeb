@@ -66,6 +66,8 @@ class CommentVerificationService {
 
     this.activeTasks++;
     let browser;
+    let page;
+
     try {
       console.log('🔍 开始验证评论存在性:', {
         url: noteUrl,
@@ -75,7 +77,7 @@ class CommentVerificationService {
       });
 
       browser = await puppeteer.launch(this.launchOptions);
-      const page = await browser.newPage();
+      page = await browser.newPage();
 
       // 🔥 关键步骤：注入Cookie（如果提供）
       if (cookieString) {
@@ -108,8 +110,6 @@ class CommentVerificationService {
       console.log('🔍 正在查找评论...');
       const commentResult = await this.findCommentInPage(page, commentContent, commentAuthor);
 
-      await browser.close();
-
       const result = {
         exists: commentResult.found,
         confidence: commentResult.confidence,
@@ -128,7 +128,6 @@ class CommentVerificationService {
 
     } catch (error) {
       console.error('❌ 评论验证失败:', error);
-      if (browser) await browser.close();
 
       return {
         exists: false,
@@ -137,6 +136,23 @@ class CommentVerificationService {
         error: error.message
       };
     } finally {
+      // 确保浏览器和页面资源被释放
+      try {
+        if (page && !page.isClosed()) {
+          await page.close();
+        }
+      } catch (e) {
+        console.warn('⚠️ 关闭page失败:', e.message);
+      }
+
+      try {
+        if (browser) {
+          await browser.close();
+        }
+      } catch (e) {
+        console.warn('⚠️ 关闭browser失败:', e.message);
+      }
+
       this.activeTasks--;
     }
   }

@@ -17,6 +17,9 @@ class CookieMonitorService {
     this.cookieAge = null; // Cookie使用时间
     this.cookieCreateTime = null; // Cookie创建时间（从loadts解析）
 
+    // 定时器引用（用于停止监控）
+    this.monitorTimer = null;
+
     // 统计数据
     this.checkHistory = []; // 检查历史记录
     this.successRate = 0; // 评论验证成功率
@@ -82,13 +85,29 @@ class CookieMonitorService {
    * 开始监控
    */
   startMonitoring() {
+    // 如果已经启动，先停止旧的
+    if (this.monitorTimer) {
+      this.stopMonitoring();
+    }
+
     // 立即执行一次检查
     this.checkCookieValidity();
 
-    // 定时检查
-    setInterval(() => {
+    // 定时检查并保存定时器引用
+    this.monitorTimer = setInterval(() => {
       this.checkCookieValidity();
     }, this.checkInterval);
+  }
+
+  /**
+   * 停止监控（用于服务关闭）
+   */
+  stopMonitoring() {
+    if (this.monitorTimer) {
+      clearInterval(this.monitorTimer);
+      this.monitorTimer = null;
+      console.log('⏹️  [Cookie监控] 监控定时器已停止');
+    }
   }
 
   /**
@@ -166,15 +185,31 @@ class CookieMonitorService {
    */
   async checkWithHttp() {
     try {
-      const response = await axios.get(this.testUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
-          'Cookie': this.cookie
-        },
-        timeout: 10000,
-        maxRedirects: 5
+      const { withRetry } = require('../utils/apiRetry');
+
+      // 🔧 使用重试机制包装Cookie检查
+      const response = await withRetry(async () => {
+        return await axios.get(this.testUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+            'Cookie': this.cookie
+          },
+          timeout: 10000,
+          maxRedirects: 5
+        });
+      }, {
+        maxRetries: 2,
+        delay: 1000,
+        backoffMultiplier: 1.5,
+        shouldRetry: (error) => {
+          // 401/403不重试（Cookie确实无效），其他错误重试
+          if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+            return false;
+          }
+          return true;
+        }
       });
 
       // 检查HTTP状态码

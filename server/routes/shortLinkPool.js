@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const ShortLinkPool = require('../models/ShortLinkPool');
 const DiscoveredNote = require('../models/DiscoveredNote');
+const logger = require('../utils/logger');
+
+const log = logger.module('ShortLink');
 
 // 锁定时间（毫秒）
 const LOCK_TIMEOUT = 10 * 60 * 1000; // 10分钟
@@ -52,7 +55,7 @@ router.post('/add', async (req, res) => {
       status: 'pending'
     });
 
-    console.log(`✅ [短链接池] 添加成功: ${shortUrl.substring(0, 60)}... (来源: ${source})`);
+    log.info(`✅ [短链接池] 添加成功: ${shortUrl.substring(0, 60)}... (来源: ${source})`);
 
     res.json({
       success: true,
@@ -65,7 +68,7 @@ router.post('/add', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 添加失败:', error);
+    log.error('❌ [短链接池] 添加失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '添加失败'
@@ -87,7 +90,7 @@ router.get('/latest', async (req, res) => {
       .select('shortUrl status source remark createdAt auditResult')
       .lean();
 
-    console.log(`📋 [短链接池] 获取最新记录: ${records.length} 条`);
+    log.info(`📋 [短链接池] 获取最新记录: ${records.length} 条`);
 
     res.json({
       success: true,
@@ -113,7 +116,7 @@ router.get('/latest', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 获取最新记录失败:', error);
+    log.error('❌ [短链接池] 获取最新记录失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '获取失败'
@@ -171,7 +174,7 @@ router.post('/batch-add', async (req, res) => {
       }
     }
 
-    console.log(`✅ [短链接池] 批量添加: 成功 ${results.success.length}, 重复 ${results.duplicate.length}, 失败 ${results.error.length}`);
+    log.info(`✅ [短链接池] 批量添加: 成功 ${results.success.length}, 重复 ${results.duplicate.length}, 失败 ${results.error.length}`);
 
     res.json({
       success: true,
@@ -180,7 +183,7 @@ router.post('/batch-add', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 批量添加失败:', error);
+    log.error('❌ [短链接池] 批量添加失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '批量添加失败'
@@ -246,7 +249,7 @@ router.get('/pending', async (req, res) => {
     const lockedRecords = updateResults.filter(r => r !== null && r.status === 'processing');
 
     if (lockedRecords.length > 0) {
-      console.log(`📥 [短链接池] 分配 ${lockedRecords.length} 个待处理任务给客户端 ${clientId || 'unknown'}`);
+      log.info(`📥 [短链接池] 分配 ${lockedRecords.length} 个待处理任务给客户端 ${clientId || 'unknown'}`);
     }
 
     res.json({
@@ -264,7 +267,7 @@ router.get('/pending', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 获取待处理任务失败:', error);
+    log.error('❌ [短链接池] 获取待处理任务失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '获取失败'
@@ -337,7 +340,7 @@ router.post('/:id/approve', async (req, res) => {
     shortLinkRecord.processingLock = undefined;
     await shortLinkRecord.save();
 
-    console.log(`✅ [短链接池] 审核通过: ${shortLinkRecord.shortUrl.substring(0, 60)}... → DiscoveredNote: ${discoveredNote._id}`);
+    log.info(`✅ [短链接池] 审核通过: ${shortLinkRecord.shortUrl.substring(0, 60)}... → DiscoveredNote: ${discoveredNote._id}`);
 
     res.json({
       success: true,
@@ -349,7 +352,7 @@ router.post('/:id/approve', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 审核通过处理失败:', error);
+    log.error('❌ [短链接池] 审核通过处理失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '处理失败'
@@ -382,7 +385,7 @@ router.post('/:id/reject', async (req, res) => {
     record.processingLock = undefined;
     await record.save();
 
-    console.log(`❌ [短链接池] 审核拒绝: ${record.shortUrl.substring(0, 60)}... (原因: ${reason || '未提供'})`);
+    log.info(`❌ [短链接池] 审核拒绝: ${record.shortUrl.substring(0, 60)}... (原因: ${reason || '未提供'})`);
 
     res.json({
       success: true,
@@ -390,7 +393,7 @@ router.post('/:id/reject', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 审核拒绝处理失败:', error);
+    log.error('❌ [短链接池] 审核拒绝处理失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '处理失败'
@@ -430,7 +433,7 @@ router.post('/:id/release', async (req, res) => {
       record.processingLock = undefined;
       await record.save();
 
-      console.log(`⚠️ [短链接池] 标记为失败: ${record.shortUrl.substring(0, 60)}... (重试${record.retryCount}次)`);
+      log.info(`⚠️ [短链接池] 标记为失败: ${record.shortUrl.substring(0, 60)}... (重试${record.retryCount}次)`);
 
       return res.json({
         success: true,
@@ -445,7 +448,7 @@ router.post('/:id/release', async (req, res) => {
     record.processingLock = undefined;
     await record.save();
 
-    console.log(`🔄 [短链接池] 释放锁: ${record.shortUrl.substring(0, 60)}... (重试: ${record.retryCount})`);
+    log.info(`🔄 [短链接池] 释放锁: ${record.shortUrl.substring(0, 60)}... (重试: ${record.retryCount})`);
 
     res.json({
       success: true,
@@ -454,7 +457,7 @@ router.post('/:id/release', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 释放锁失败:', error);
+    log.error('❌ [短链接池] 释放锁失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '释放失败'
@@ -490,7 +493,7 @@ router.get('/stats', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 获取统计失败:', error);
+    log.error('❌ [短链接池] 获取统计失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '获取统计失败'
@@ -530,7 +533,7 @@ router.get('/list', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 获取列表失败:', error);
+    log.error('❌ [短链接池] 获取列表失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '获取列表失败'
@@ -556,7 +559,7 @@ router.delete('/:id', async (req, res) => {
 
     await ShortLinkPool.deleteOne({ _id: id });
 
-    console.log(`🗑️ [短链接池] 删除记录: ${record.shortUrl.substring(0, 60)}...`);
+    log.info(`🗑️ [短链接池] 删除记录: ${record.shortUrl.substring(0, 60)}...`);
 
     res.json({
       success: true,
@@ -564,7 +567,7 @@ router.delete('/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 删除失败:', error);
+    log.error('❌ [短链接池] 删除失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '删除失败'
@@ -602,7 +605,7 @@ router.post('/:id/retry', async (req, res) => {
     record.processingLock = undefined;
     await record.save();
 
-    console.log(`🔄 [短链接池] 重新加入处理队列: ${record.shortUrl.substring(0, 60)}...`);
+    log.info(`🔄 [短链接池] 重新加入处理队列: ${record.shortUrl.substring(0, 60)}...`);
 
     res.json({
       success: true,
@@ -610,7 +613,7 @@ router.post('/:id/retry', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ [短链接池] 重试失败:', error);
+    log.error('❌ [短链接池] 重试失败:', error);
     res.status(500).json({
       success: false,
       message: error.message || '重试失败'

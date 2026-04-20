@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>小红书审核系统 API 文档</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="小红书审核系统外部API接口文档">
+  <meta name="keywords" content="API, 文档, 小红书, 接口">
+  <link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700|Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; padding: 0; font-family: 'Noto Sans SC', Roboto, sans-serif; }
+
+    /* 自定义Redoc主题 */
+    redoc {
+      --redoc-primary-color: #ff2442;           /* 小红书红 */
+      --redoc-primary-color-dark: #e0203a;
+      --redoc-secondary-color: #ff6b81;
+      --redoc-bg-color: #ffffff;
+      --redoc-sidebar-bg-color: #242526;
+      --redoc-sidebar-text-color: #ffffff;
+      --redoc-sidebar-active-bg-color: #ff2442;
+      --redoc-hover-bg-color: #f8f9fa;
+      --redoc-border-color: #e8e8e8;
+      --redoc-code-bg-color: #f6f8fa;
+      --redoc-text-color: #333333;
+      --redoc-heading-color: #1a1a1a;
+      --redoc-link-color: #ff2442;
+      --redoc-link-hover-color: #e0203a;
+      --redoc-code-color: #e83e8c;
+      --redoc-tag-color: #ff2442;
+      --redoc-get-color: #28a745;
+      --redoc-post-color: #ff2442;
+      --redoc-put-color: #ffc107;
+      --redoc-delete-color: #dc3545;
+      --redoc-header-height: 60px;
+      --redoc-sidebar-width: 280px;
+    }
+  </style>
+</head>
+<body>
+  <redoc
+    spec-url="/api-docs/openapi.yaml"
+    expand-responses="200,201"
+    hide-hostname="false"
+    allowed-unsafe="true"
+    native-scrollbars="true"
+    show-extensions="true"
+  ></redoc>
+  <script src="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js"></script>
+</body>
+</html>

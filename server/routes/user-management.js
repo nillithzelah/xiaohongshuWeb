@@ -1,7 +1,11 @@
 const express = require('express');
 const User = require('../models/User');
 const { authenticateToken, Role, canManageUser } = require('../middleware/auth');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+// 创建模块日志器
+const log = logger.module('UserMgmt');
 
 // 获取用户资料
 router.get('/profile', authenticateToken, async (req, res) => {
@@ -40,7 +44,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取用户资料错误:', error);
+    log.error('获取用户资料错误:', error);
     res.status(500).json({ success: false, message: '获取用户资料失败' });
   }
 });
@@ -100,7 +104,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('更新用户资料错误:', error);
+    log.error('更新用户资料错误:', error);
     res.status(500).json({ success: false, message: '更新用户资料失败' });
   }
 });
@@ -136,9 +140,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: '积分号Z长度不能超过100个字符' });
     }
 
-    console.log('🔍 [DEBUG] 更新用户请求体:', req.body);
-    console.log('🔍 [DEBUG] alipay_qr_code:', alipay_qr_code);
-
     // 查找要更新的用户
     const targetUser = await User.findById(id);
     if (!targetUser) {
@@ -147,20 +148,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // 权限检查
     let allowedFields = [];
-
-    // 调试日志：打印权限检查信息
-    console.log('🔍 [权限检查] 当前用户:', {
-      id: req.user.id,
-      _id: req.user._id?.toString(),
-      role: req.user.role,
-      username: req.user.username
-    });
-    console.log('🔍 [权限检查] 目标用户:', {
-      id: id,
-      hr_id: targetUser.hr_id?.toString(),
-      mentor_id: targetUser.mentor_id?.toString(),
-      role: targetUser.role
-    });
 
     if (Role.isAdmin(req)) {
       // 老板和主管可以修改所有字段
@@ -189,15 +176,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
       if (req.body[field] !== undefined) {
         // 特殊处理：alipay_qr_code 需要映射到 wallet.alipay_qr_code
         if (field === 'alipay_qr_code') {
-          console.log('🔍 [DEBUG] 处理 alipay_qr_code 字段');
-          console.log('🔍 [DEBUG] targetUser.wallet 存在:', !!targetUser.wallet);
-          console.log('🔍 [DEBUG] req.body.alipay_qr_code 值:', req.body[field]);
-          console.log('🔍 [DEBUG] req.body.alipay_qr_code 类型:', typeof req.body[field]);
-          console.log('🔍 [DEBUG] req.body.alipay_qr_code 长度:', req.body[field]?.length);
-          
           // 确保 wallet 对象存在
           if (!targetUser.wallet) {
-            console.log('🔍 [DEBUG] wallet 不存在，创建新对象');
             updateData.wallet = {
               alipay_account: null,
               real_name: null,
@@ -205,17 +185,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
               total_withdrawn: 0
             };
           } else {
-            console.log('🔍 [DEBUG] wallet 已存在，使用嵌套更新');
             updateData['wallet.alipay_qr_code'] = req.body[field];
           }
-          console.log('🔍 [DEBUG] updateData.wallet:', updateData.wallet);
         } else {
           updateData[field] = req.body[field];
         }
       }
     });
-    
-    console.log('🔍 [DEBUG] 更新数据:', updateData);
 
     // 特殊处理培训状态：老板、主管、HR（对其名下用户）和带教老师（对其名下用户）可以编辑兼职用户的培训状态
     if (req.body.training_status !== undefined && targetUser.role === 'part_time') {
@@ -279,25 +255,22 @@ router.put('/:id', authenticateToken, async (req, res) => {
           status: 'manager_approved'
         });
 
-        console.warn(`⚠️ [parent_id变更] 操作人: ${req.user.username}, 目标用户: ${targetUser.username}`);
-        console.warn(`⚠️ [parent_id变更] 原parent_id: ${oldParentId || '无'}, 新parent_id: ${newParentId || '清除'}, 已完成任务: ${completedTasksCount}条`);
+        log.warn(`⚠️ [parent_id变更] 操作人: ${req.user.username}, 目标用户: ${targetUser.username}`);
+        log.warn(`⚠️ [parent_id变更] 原parent_id: ${oldParentId || '无'}, 新parent_id: ${newParentId || '清除'}, 已完成任务: ${completedTasksCount}条`);
 
         // 如果用户有已完成的任务，返回警告但仍允许管理员修改
         if (completedTasksCount > 0) {
-          console.warn(`🚨 [parent_id变更] 用户 ${targetUser.username} 已有 ${completedTasksCount} 条完成任务，修改上级可能影响佣金结算！`);
+          log.warn(`🚨 [parent_id变更] 用户 ${targetUser.username} 已有 ${completedTasksCount} 条完成任务，修改上级可能影响佣金结算！`);
         }
       }
     }
 
     // 执行更新
-    console.log('🔍 [DEBUG] 准备执行更新，updateData:', JSON.stringify(updateData));
     const updatedUser = await User.findByIdAndUpdate(
       id,
       updateData,
       { new: true }
     ).select('-password');
-    console.log('🔍 [DEBUG] 更新后 updatedUser.wallet:', JSON.stringify(updatedUser.wallet));
-    console.log('🔍 [DEBUG] 更新后 updatedUser.wallet?.alipay_qr_code:', updatedUser.wallet?.alipay_qr_code);
 
     res.json({
       success: true,
@@ -320,10 +293,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
         alipay_qr_code: updatedUser.wallet?.alipay_qr_code
       }
     });
-    
-    console.log('🔍 [DEBUG] 返回数据 alipay_qr_code:', updatedUser.wallet?.alipay_qr_code);
   } catch (error) {
-    console.error('更新用户错误:', error);
+    log.error('更新用户错误:', error);
     res.status(500).json({ success: false, message: '更新用户失败' });
   }
 });
@@ -466,7 +437,7 @@ router.get('/', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取用户列表错误:', error);
+    log.error('获取用户列表错误:', error);
     res.status(500).json({ success: false, message: '获取用户列表失败' });
   }
 });
@@ -497,7 +468,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       { assignedUser: id },
       { $set: { assignedUser: null } }
     );
-    console.log(`🔓 已释放用户 ${id} 的 ${deviceUpdateResult.modifiedCount} 个关联设备`);
+    log.info(`🔓 已释放用户 ${id} 的 ${deviceUpdateResult.modifiedCount} 个关联设备`);
 
     // 4. 软删除：标记为已删除
     await User.findByIdAndUpdate(id, {
@@ -505,14 +476,14 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       deleted_at: new Date(),
       deleted_by: req.user._id  // 记录操作人
     });
-    console.log(`🗑️ 已软删除用户 ${id}`);
+    log.info(`🗑️ 已软删除用户 ${id}`);
 
     res.json({
       success: true,
       message: '用户已成功删除'
     });
   } catch (error) {
-    console.error('删除用户错误:', error);
+    log.error('删除用户错误:', error);
     res.status(500).json({ success: false, message: '删除用户失败' });
   }
 });
@@ -577,7 +548,7 @@ router.put('/:id/training-status', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('更新培训状态错误:', error);
+    log.error('更新培训状态错误:', error);
     res.status(500).json({ success: false, message: '更新培训状态失败' });
   }
 });
@@ -668,7 +639,7 @@ router.post('/:id/exchange-points', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('积分兑换失败:', error);
+    log.error('积分兑换失败:', error);
     res.status(500).json({ success: false, message: '积分兑换失败' });
   }
 });
@@ -703,7 +674,7 @@ router.put('/:id/change-password', authenticateToken, async (req, res) => {
     await targetUser.save();
 
     // 记录操作日志
-    console.log(`🔐 [密码修改] 管理员 ${req.user.username} 修改了用户 ${targetUser.username} 的密码`);
+    log.info(`🔐 [密码修改] 管理员 ${req.user.username} 修改了用户 ${targetUser.username} 的密码`);
 
     res.json({
       success: true,
@@ -711,7 +682,7 @@ router.put('/:id/change-password', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('管理员修改密码错误:', error);
+    log.error('管理员修改密码错误:', error);
     res.status(500).json({ success: false, message: '修改密码失败' });
   }
 });
@@ -744,12 +715,12 @@ router.put('/:id/lock', authenticateToken, async (req, res) => {
       targetUser.lockedAt = new Date();
       targetUser.lockedBy = req.user._id;
       targetUser.lockedReason = lockedReason || null;
-      console.log(`🔒 [用户锁定] HR ${req.user.username} 锁定了用户 ${targetUser.username}，原因: ${lockedReason || '无'}`);
+      log.info(`🔒 [用户锁定] HR ${req.user.username} 锁定了用户 ${targetUser.username}，原因: ${lockedReason || '无'}`);
     } else {
       targetUser.lockedAt = null;
       targetUser.lockedBy = null;
       targetUser.lockedReason = null;
-      console.log(`🔓 [用户解锁] HR ${req.user.username} 解锁了用户 ${targetUser.username}`);
+      log.info(`🔓 [用户解锁] HR ${req.user.username} 解锁了用户 ${targetUser.username}`);
     }
 
     await targetUser.save();
@@ -764,7 +735,7 @@ router.put('/:id/lock', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('锁定/解锁用户错误:', error);
+    log.error('锁定/解锁用户错误:', error);
     res.status(500).json({ success: false, message: '操作失败' });
   }
 });

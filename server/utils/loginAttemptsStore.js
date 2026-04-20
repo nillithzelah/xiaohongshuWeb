@@ -177,18 +177,41 @@ function getRemainingAttempts(username) {
   return Math.max(0, MAX_LOGIN_ATTEMPTS - record.count);
 }
 
+// 清理定时器引用（用于服务关闭时清理）
+let cleanupTimer = null;
+
 // 启动时清理过期记录
 cleanupExpiredRecords(loadRecords());
 
-// 定期清理过期记录（每小时）
-setInterval(() => {
-  cleanupExpiredRecords(loadRecords());
-}, 60 * 60 * 1000);
+// 启动定期清理定时器（每小时）
+function startCleanup() {
+  if (cleanupTimer) return; // 已启动则跳过
+
+  cleanupTimer = setInterval(() => {
+    cleanupExpiredRecords(loadRecords());
+  }, 60 * 60 * 1000);
+
+  console.log('✅ [登录失败记录] 清理定时器已启动');
+}
+
+// 停止清理定时器（用于服务关闭）
+function stopCleanup() {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+    console.log('⏹️  [登录失败记录] 清理定时器已停止');
+  }
+}
+
+// 自动启动清理定时器
+startCleanup();
 
 module.exports = {
   checkLoginLockout,
   recordLoginFailure,
   clearLoginAttempts,
   getRemainingAttempts,
-  MAX_LOGIN_ATTEMPTS
+  MAX_LOGIN_ATTEMPTS,
+  startCleanup,
+  stopCleanup
 };

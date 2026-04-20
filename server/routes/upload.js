@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const OSS = require('ali-oss');
+const logger = require('../utils/logger');
+
+const log = logger.module('Upload');
 
 // 配置内存存储 (不要存本地磁盘，直接存内存)
 const upload = multer({
@@ -61,7 +64,7 @@ router.post('/image', upload.single('file'), async (req, res) => {
 
     // 2. 如果没 Key，返回错误提示
     if (!hasKeys) {
-      console.log('❌ [Error] 未检测到 OSS Key，无法上传');
+      log.info('❌ [Error] 未检测到 OSS Key，无法上传');
       return res.status(500).json({
         success: false,
         message: 'OSS配置缺失，无法上传图片'
@@ -93,7 +96,7 @@ router.post('/image', upload.single('file'), async (req, res) => {
     });
 
   } catch (error) {
-    console.error('上传接口报错:', error);
+    log.error('上传接口报错:', error);
     res.status(500).json({ success: false, message: '上传服务暂时不可用' });
   }
 });
@@ -147,7 +150,7 @@ router.post('/images', upload.array('files', 9), async (req, res) => {
     // 检查OSS配置
     const hasKeys = process.env.OSS_ACCESS_KEY_ID && process.env.OSS_ACCESS_KEY_SECRET;
     if (!hasKeys) {
-      console.log('❌ [Error] 未检测到 OSS Key，无法上传');
+      log.info('❌ [Error] 未检测到 OSS Key，无法上传');
       return res.status(500).json({
         success: false,
         message: 'OSS配置缺失，无法上传图片'
@@ -181,7 +184,7 @@ router.post('/images', upload.array('files', 9), async (req, res) => {
             originalIndex: i + index
           };
         } catch (error) {
-          console.error(`上传第${i + index + 1}张图片失败:`, error);
+          log.error(`上传第${i + index + 1}张图片失败:`, error);
           errors.push({
             index: i + index,
             filename: file.originalname,
@@ -226,7 +229,7 @@ router.post('/images', upload.array('files', 9), async (req, res) => {
     res.json(response);
 
   } catch (error) {
-    console.error('批量上传失败:', error);
+    log.error('批量上传失败:', error);
     res.status(500).json({ success: false, message: '上传失败' });
   }
 });

@@ -1,7 +1,10 @@
 const express = require('express');
 const User = require('../models/User');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+const log = logger.module('Manager');
 
 // 获取待分配线索列表
 router.get('/leads', authenticateToken, requireRole(['manager', 'boss']), async (req, res) => {
@@ -54,7 +57,7 @@ router.get('/leads', authenticateToken, requireRole(['manager', 'boss']), async 
     });
 
   } catch (error) {
-    console.error('获取待分配线索错误:', error);
+    log.error('获取待分配线索错误:', error);
     res.status(500).json({
       success: false,
       message: '获取待分配线索失败'
@@ -226,7 +229,7 @@ router.put('/assign-mentor/:leadId', authenticateToken, requireRole(['manager', 
     });
 
   } catch (error) {
-    console.error('分配线索错误:', error);
+    log.error('分配线索错误:', error);
     res.status(500).json({
       success: false,
       message: '分配线索失败'
@@ -255,7 +258,7 @@ router.get('/mentor-list', authenticateToken, requireRole(['manager', 'boss']), 
     });
 
   } catch (error) {
-    console.error('获取客服列表错误:', error);
+    log.error('获取客服列表错误:', error);
     res.status(500).json({
       success: false,
       message: '获取客服列表失败'
@@ -289,7 +292,7 @@ router.get('/stats', authenticateToken, requireRole(['manager', 'boss']), async 
     });
 
   } catch (error) {
-    console.error('获取主管统计错误:', error);
+    log.error('获取主管统计错误:', error);
     res.status(500).json({
       success: false,
       message: '获取统计数据失败'
@@ -335,7 +338,7 @@ router.get('/hr-team', authenticateToken, requireRole(['manager', 'boss']), asyn
       }
     });
   } catch (error) {
-    console.error('获取HR团队管理列表错误:', error);
+    log.error('获取HR团队管理列表错误:', error);
     res.status(500).json({
       success: false,
       message: '获取HR团队管理列表失败'

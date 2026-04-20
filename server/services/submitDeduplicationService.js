@@ -15,22 +15,47 @@ const CLEANUP_INTERVAL = 60000; // 1分钟
 // 请求指纹的有效期（毫秒）
 const FINGERPRINT_TTL = 5000; // 5秒
 
-// 定期清理过期缓存
-setInterval(() => {
-  const now = Date.now();
-  let cleanedCount = 0;
-  
-  for (const [fingerprint, data] of submitCache.entries()) {
-    if (now - data.timestamp > FINGERPRINT_TTL) {
-      submitCache.delete(fingerprint);
-      cleanedCount++;
+// 清理定时器引用
+let cleanupTimer = null;
+
+/**
+ * 启动清理定时器
+ */
+function startCleanup() {
+  if (cleanupTimer) return; // 已启动则跳过
+
+  cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [fingerprint, data] of submitCache.entries()) {
+      if (now - data.timestamp > FINGERPRINT_TTL) {
+        submitCache.delete(fingerprint);
+        cleanedCount++;
+      }
     }
+
+    if (cleanedCount > 0) {
+      console.log(`🧹 [防重复提交] 清理了 ${cleanedCount} 条过期记录`);
+    }
+  }, CLEANUP_INTERVAL);
+
+  console.log('✅ [防重复提交] 清理定时器已启动');
+}
+
+/**
+ * 停止清理定时器（用于服务关闭）
+ */
+function stopCleanup() {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+    console.log('⏹️  [防重复提交] 清理定时器已停止');
   }
-  
-  if (cleanedCount > 0) {
-    console.log(`🧹 [防重复提交] 清理了 ${cleanedCount} 条过期记录`);
-  }
-}, CLEANUP_INTERVAL);
+}
+
+// 自动启动清理定时器
+startCleanup();
 
 /**
  * 生成请求指纹
@@ -147,5 +172,7 @@ module.exports = {
   generateFingerprint,
   checkDuplicate,
   clearUserRecords,
-  getCacheStats
+  getCacheStats,
+  startCleanup,
+  stopCleanup
 };

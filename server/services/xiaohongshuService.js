@@ -4,6 +4,7 @@ const cheerio = require('cheerio');
 const CommentVerificationService = require('./CommentVerificationService');
 const rateLimiter = require('./RateLimiter');
 const { KEYWORD_CONFIGS } = require('../config/keywords');
+const { withRetry, RetryPresets } = require('../utils/apiRetry');
 // 注意：不能在顶部导入asyncAiReviewService，否则会形成循环依赖
 // 在需要时使用延迟导入
 
@@ -391,11 +392,14 @@ class XiaohongshuService {
         }
       }
 
-      const response = await axios.get(url, {
-        headers: requestHeaders,
-        timeout: 10000,
-        maxRedirects: 5
-      });
+      // 🔧 使用重试机制包装小红书请求
+      const response = await withRetry(async () => {
+        return await axios.get(url, {
+          headers: requestHeaders,
+          timeout: 10000,
+          maxRedirects: 5
+        });
+      }, RetryPresets.xiaohongshu);
 
       // 检查响应状态
       if (response.status !== 200) {
@@ -469,11 +473,21 @@ class XiaohongshuService {
     }
 
     while (redirectCount < maxRedirects) {
-      const response = await axios.get(currentUrl, {
-        headers: requestHeaders,
-        maxRedirects: 0, // 手动处理重定向
-        validateStatus: (status) => status >= 200 && status < 400,
-        timeout: 10000
+      // 🔧 使用重试机制包装重定向请求
+      const response = await withRetry(async () => {
+        return await axios.get(currentUrl, {
+          headers: requestHeaders,
+          maxRedirects: 0, // 手动处理重定向
+          validateStatus: (status) => status >= 200 && status < 400,
+          timeout: 10000
+        });
+      }, {
+        maxRetries: 2,
+        delay: 1000,
+        backoffMultiplier: 1.5,
+        onRetry: (attempt, error) => {
+          console.warn(`⚠️ [重定向重试] 步骤 ${redirectCount + 1} 第 ${attempt} 次重试: ${error.message}`);
+        }
       });
 
       // 检查是否重定向
@@ -834,11 +848,14 @@ class XiaohongshuService {
         requestHeaders.Cookie = cookie;
       }
 
-      const response = await axios.get(noteUrl, {
-        headers: requestHeaders,
-        timeout: 10000,
-        maxRedirects: 5
-      });
+      // 🔧 使用重试机制包装小红书请求
+      const response = await withRetry(async () => {
+        return await axios.get(noteUrl, {
+          headers: requestHeaders,
+          timeout: 10000,
+          maxRedirects: 5
+        });
+      }, RetryPresets.xiaohongshu);
 
       // HTTP状态非200，笔记可能不存在
       if (response.status !== 200) {

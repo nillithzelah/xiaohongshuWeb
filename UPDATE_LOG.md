@@ -1,5 +1,584 @@
 # UPDATE_LOG
 
+## 2026-03-05 Admin 路由模块化拆分 - 继续清理重复路由
+
+### 概述
+
+继续清理 `admin.js` 中与 `dashboard.js` 重复的路由。
+
+### 修改内容
+
+从 `server/routes/admin.js` 删除了以下已迁移到 `admin/dashboard.js` 的重复路由：
+- `GET /stats` - 仪表盘统计数据
+- `GET /monitoring` - 系统监控数据
+- `GET /dashboard/hr` - HR 专用仪表盘
+- `GET /dashboard/manager` - 主管专用仪表盘
+- `GET /dashboard/mentor` - 带教老师专用仪表盘
+
+### 文件变更
+
+| 文件 | 操作 |
+|------|------|
+| `server/routes/admin.js` | 删除约 350 行重复路由代码 |
+
+### 验证结果
+
+- ✅ 语法检查通过
+- ✅ PM2 服务重启成功（状态：online）
+- ✅ MongoDB 连接正常
+
+### 当前模块结构
+
+```
+admin/index.js 路由加载顺序：
+1. dashboard.js - 仪表板统计 (/stats, /monitoring, /dashboard/*)
+2. finance.js - 财务管理 (/finance/*)
+3. ai-prompts.js - AI 提示词管理 (/ai-prompts/*)
+4. admin.js - 其他路由（公告、Cookie、评论线索、关键词等）
+```
+
+---
+
+## 2026-03-05 Admin 路由模块化拆分 - 继续优化
+
+完成了 admin.js 中与 dashboard.js 重复的路由清理工作:
+从 `server/routes/admin.js` 中删除了以下已迁移到 `admin/dashboard.js` 的路由
+- GET /stats - 仪表板统计
+- GET /monitoring - 系统监控
+- GET /dashboard/hr - HR 仪表板
+- GET /dashboard/manager - 主管仪表板
+- GET /dashboard/mentor - 带教老师仪表板
+
+### 代码优化效果
+
+- admin.js 减少约 350 行代码（删除了重复的仪表板路由）
+- 路由结构更清晰，模块职责更明确
+
+### 騡块文件结构
+
+```
+admin/
+├── index.js        # 路由入口（加载所有子模块）
+├── dashboard.js     # 仪表板统计
+├── finance.js      # 财务管理
+├── ai-prompts.js    # AI 提示词管理
+├── comment-leads.js # 评论线索管理（待创建）
+└── admin.js          # 兜底处理剩余路由
+```
+
+
+
+### 概述
+
+完成了 admin.js 路由的模块化拆分，删除了已迁移到子模块的重复路由定义。
+
+### 修改内容
+
+#### 1. 删除 Finance 重复路由（admin.js）
+从 `server/routes/admin.js` 删除了以下已迁移到 `admin/finance.js` 的路由：
+- `GET /finance/stats` - 财务统计
+- `GET /finance/withdrawal-records` - 提现记录
+- `GET /finance/part-time-pending` - 兼职用户待打款
+- `GET /finance/pending` - 待打款列表
+- `POST /finance/pay` - 确认打款
+- `GET /finance/export-excel` - 导出Excel
+
+#### 2. 删除 AI-Prompts 重复路由（admin.js）
+从 `server/routes/admin.js` 删除了以下已迁移到 `admin/ai-prompts.js` 的路由：
+- `GET /ai-prompts` - 获取所有提示词
+- `POST /ai-prompts` - 创建提示词
+- `PUT /ai-prompts/:name` - 更新提示词
+- `DELETE /ai-prompts/:name` - 删除提示词
+- `POST /ai-prompts/:name/test` - 测试提示词
+
+### 文件变更
+
+| 文件 | 操作 |
+|------|------|
+| `server/routes/admin.js` | 删除重复路由，添加迁移注释 |
+| `server/routes/admin/index.js` | 已部署到服务器 |
+| `server/routes/admin/finance.js` | 已部署到服务器 |
+| `server/routes/admin/ai-prompts.js` | 已部署到服务器 |
+
+### 路由加载顺序
+
+```
+admin/index.js 加载顺序：
+1. dashboard.js - 仪表板统计
+2. finance.js - 财务管理（优先匹配）
+3. ai-prompts.js - AI 提示词管理（优先匹配）
+4. admin.js - 兜底处理剩余路由
+```
+
+### 验证结果
+
+- ✅ 所有文件语法检查通过
+- ✅ PM2 服务重启成功（状态：online）
+- ✅ 前端 API 调用无需修改（路径完全一致）
+
+---
+
+## 2026-03-04 代码优化与安全加固（Phase 1-2）
+
+### 概述
+
+根据代码审查计划，完成了 Phase 1（安全加固）和 Phase 2（性能优化）的核心工作。
+
+### Phase 1: 安全加固
+
+#### 1. XSS 防护中间件
+**新建文件**：`server/middleware/sanitize.js`
+
+- 全局输入清理，防止 XSS 攻击和 NoSQL 注入
+- HTML 实体转义（`&`, `<`, `>`, `"`, `'` 等）
+- 递归清理嵌套对象
+- 跳过 `$` 开头的键（防止 NoSQL 注入）
+- 支持严格模式（检测可疑模式并拒绝请求）
+
+**使用方式**：
+```javascript
+const { sanitizeMiddleware } = require('./middleware/sanitize');
+app.use(sanitizeMiddleware); // 在路由前挂载
+```
+
+#### 2. 输入验证中间件
+**新建文件**：`server/middleware/validate.js`
+
+- 无外部依赖的轻量级验证中间件
+- 常用验证规则：ObjectId、必填、分页、字符串长度、枚举、数字范围、日期、手机号、邮箱
+- 支持规则组合和自定义验证
+
+**使用示例**：
+```javascript
+const { rules, combine, common } = require('./middleware/validate');
+
+// 分页验证
+router.get('/list', rules.pagination(), controller.list);
+
+// 组合验证
+router.post('/update', combine(
+  rules.required(['username']),
+  rules.stringLength('nickname', { min: 2, max: 20 })
+), controller.update);
+```
+
+#### 3. 全局错误处理
+- 确认 `server.js` 中的全局错误处理器已正确配置
+- XSS 防护中间件已在 `server.js` 中挂载
+
+### Phase 2: 性能优化
+
+#### 1. 查询缓存工具
+**新建文件**：`server/utils/cache.js`
+
+- 权限缓存（5分钟 TTL）
+- 静态数据缓存（10分钟 TTL）
+- API 响应缓存（30秒 TTL）
+- AI 审核结果缓存（1小时 TTL）
+- 支持缓存统计、前缀清除、自动回源
+
+#### 2. 查询优化工具
+**新建文件**：`server/utils/queryOptimizer.js`
+
+- `optimizeQuery()` - 自动添加 lean() 和 select
+- `paginatedQuery()` - 分页查询包装器（并行查询+计数）
+- `batchQuery()` - 批量查询优化（避免 N+1）
+- `paginatedAggregate()` - 聚合分页查询
+- 常用 populate 配置预设
+
+#### 3. 数据库查询优化
+**修改文件**：`server/routes/reviews.js`, `server/routes/admin.js`
+
+- 添加 `.lean()` 优化（返回纯 JS 对象，减少内存占用）
+- 高频查询优化：
+  - `/my-reviews` - 用户审核记录查询
+  - 待审核列表查询
+  - 财务导出查询
+
+### admin.js 路由模块化拆分
+
+#### 已完成模块
+
+| 模块 | 文件 | 路由前缀 | 功能 |
+|------|------|----------|------|
+| 仪表板 | `admin/dashboard.js` | `/dashboard` | 统计数据（已存在） |
+| 财务管理 | `admin/finance.js` | `/finance` | 财务统计、提现记录、打款处理 |
+| AI 提示词 | `admin/ai-prompts.js` | `/ai-prompts` | 提示词 CRUD、测试、重载 |
+
+#### 入口文件
+**更新文件**：`server/routes/admin/index.js`
+
+- 整合所有子模块路由
+- 保持向后兼容性（原 admin.js 中的路由继续生效）
+- 提供迁移指南
+
+#### 路由加载修复
+**修改文件**：`server/server.js`
+
+```javascript
+// 修改前（加载 admin.js 文件）
+apiRouter.use('/admin', require('./routes/admin'));
+
+// 修改后（加载 admin/index.js 目录）
+apiRouter.use('/admin', require('./routes/admin/'));
+```
+
+### 文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `server/middleware/sanitize.js` | 新建 | XSS 防护中间件 |
+| `server/middleware/validate.js` | 新建 | 输入验证中间件 |
+| `server/utils/cache.js` | 新建 | 查询缓存工具 |
+| `server/utils/queryOptimizer.js` | 新建 | 查询优化工具 |
+| `server/routes/admin/finance.js` | 新建 | 财务管理模块 |
+| `server/routes/admin/ai-prompts.js` | 新建 | AI 提示词模块 |
+| `server/routes/admin/index.js` | 更新 | 模块入口整合 |
+| `server/routes/reviews.js` | 优化 | 添加 lean() 优化 |
+| `server/routes/admin.js` | 优化 | 添加 lean() 优化 |
+| `server/server.js` | 修改 | 挂载 XSS 防护 + 启用模块化 |
+
+### 验证结果
+- ✅ 所有新建文件语法检查通过
+- ✅ 所有修改文件语法检查通过
+- ✅ XSS 防护中间件已集成
+- ✅ 路由模块化已生效（通过 require('./routes/admin/') 加载）
+
+### 待完成工作（Phase 3）
+
+- [ ] 应用 asyncHandler 到所有路由（261 个 try-catch 块）
+- [ ] 继续拆分 admin.js 剩余模块：
+  - announcements.js（公告管理）
+  - cookie.js（Cookie 管理）
+  - keywords.js（关键词管理）
+  - comment-leads.js（评论线索管理）
+  - complaints.js（投诉管理）
+- [ ] 添加单元测试
+
+---
+
+## 2026-03-04 采集队列"可加入队列"统计 Bug 修复
+
+**问题**：采集队列管理页面的"可加入队列"卡片数据不准确
+
+**根本原因**：
+- `client-discovery.js:612-621` 中 `stats.ready` 的计算逻辑存在 Bug
+- JavaScript 对象中使用了两个 `$or` 键，后者覆盖了前者
+- 导致 `canHarvestConditions`（采集间隔条件）完全失效
+- `stats.ready` 实际只统计了"未锁定的笔记"，而非"满足采集间隔条件的笔记"
+
+**修复前**：
+```javascript
+return await DiscoveredNote.countDocuments({
+  noteStatus: 'active',
+  $or: canHarvestConditions,  // 第一个 $or
+  $or: [...]                  // 第二个 $or 覆盖了第一个！
+});
+```
+
+**修复后**：
+```javascript
+return await DiscoveredNote.countDocuments({
+  noteStatus: 'active',
+  $and: [
+    { $or: canHarvestConditions },  // 满足采集间隔
+    { $or: [...] }                  // 且未被锁定
+  ]
+});
+```
+
+**修改文件**：
+- `server/routes/client-discovery.js` - 第 601-625 行
+
+---
+
+## 2026-03-03 client.js 路由模块化拆分
+
+**目标**：将 `client.js` (~4200行) 拆分成多个职责清晰的模块，提升代码可维护性
+
+**拆分结果**：
+
+| 文件 | 行数 | 功能 |
+|------|------|------|
+| client-common.js | 881 | 通用功能（心跳、验证、日志、系统配置、AI分析等） |
+| client-tasks.js | 1070 | 任务管理（提交、查询、批量操作等） |
+| client-discovery.js | 784 | 笔记发现（搜索、上报、采集队列等） |
+| client-harvest.js | 715 | 采集功能（评论采集、黑名单管理等） |
+| client-link-convert.js | 201 | 短链接转换 |
+| client-devices.js | 132 | 设备管理（设备列表、审核状态等） |
+| client.js | 31 | 注释说明（已废弃） |
+
+**修改文件**：
+- `server/routes/client.js` - 简化为注释说明文件
+- `server/routes/client-common.js` - 添加系统配置 API (`/system/config`)
+- `server/routes/client-tasks.js` - 修复 CommentLimit 导入路径
+- `server/utils/logger.js` - 同步到服务器
+
+**路由注册** (server.js)：
+```javascript
+apiRouter.use('/client', require('./routes/client-tasks'));
+apiRouter.use('/client', require('./routes/client-devices'));
+apiRouter.use('/client', require('./routes/client-discovery'));
+apiRouter.use('/client', require('./routes/client-harvest'));
+apiRouter.use('/client', require('./routes/client-link-convert'));
+apiRouter.use('/client', require('./routes/client-common'));
+```
+
+**修复问题**：
+- CommentLimit 导入路径从 `../services/CommentLimit` 改为 `../models/CommentLimit`
+
+---
+
+## 2026-03-03 错误处理优化
+
+**优化目标**：提升系统稳定性和数据一致性，解决积分发放可能出现的数据不一致问题
+
+**Phase 1: 积分发放逻辑重构（高优先级）**
+
+修改 `server/routes/reviews.js`，倒置操作顺序确保数据一致性：
+
+| 修改位置 | 原问题 | 修复方案 |
+|---------|--------|----------|
+| 238-265 行 | 任务积分发放：先增加积分，后创建记录 | 先创建 pending 记录 → 发放积分 → 更新为 completed → 失败时回滚 |
+| 286-300 行 | 一级佣金发放：同上 | 同上 |
+| 316-330 行 | 二级佣金发放：同上 | 同上 |
+
+**数据一致性保障流程**：
+```
+步骤1: 创建 Transaction 记录 (status: pending)
+   ↓
+步骤2: 增加/减少用户积分 ($inc)
+   ↓
+步骤3: 更新 Transaction (status: completed)
+   ↓
+失败: 标记 Transaction (status: failed) + 回滚积分
+```
+
+**Phase 2: API 重试机制（中优先级）**
+
+新建 `server/utils/apiRetry.js`，提供带指数退避的重试工具：
+
+```javascript
+const { withRetry, RetryPresets } = require('../utils/apiRetry');
+
+// 使用预设配置
+await withRetry(async () => {
+  return await axios.get('https://api.example.com');
+}, RetryPresets.deepseek);
+
+// 自定义配置
+await withRetry(async () => {
+  return await someAsyncOperation();
+}, {
+  maxRetries: 5,
+  delay: 1000,
+  onRetry: (attempt, error) => console.log(`重试 ${attempt}`)
+});
+```
+
+**修改文件**：
+- `server/services/aiContentAnalysisService.js`
+  - `callDeepSeek()` - DeepSeek API 调用使用重试
+  - `callZai()` - Z.AI API 调用使用重试
+  - `callDeepSeekForComment()` - 评论分析 API 使用重试
+
+**Phase 3: 统一错误处理（低优先级）**
+
+增强 `server/utils/response.js` 的全局错误处理器：
+
+| 新增错误类型处理 | HTTP 状态码 |
+|-----------------|------------|
+| `JsonWebTokenError` | 401 |
+| `TokenExpiredError` | 401 |
+| `ECONNREFUSED` | 503 |
+| `ETIMEDOUT` | 504 |
+| `ECONNRESET` | 503 |
+| CORS 错误 | 403 |
+
+**新建文件**：
+- `server/utils/apiRetry.js` - API 重试工具
+- `server/middleware/asyncHandler.js` - 异步路由错误包装器（高级功能）
+
+**修改文件**：
+- `server/routes/reviews.js` - 积分发放逻辑重构
+- `server/services/aiContentAnalysisService.js` - 集成 API 重试
+- `server/utils/response.js` - 增强错误处理
+
+**代码质量**：
+- 所有修改通过 `node -c` 语法检查
+- 添加详细日志记录便于排查问题
+- 保持向后兼容，不影响现有功能
+
+---
+
+## 2026-02-28 客户端路由模块化拆分
+
+**优化目标**：将 4212 行的 `client.js` 拆分为 6 个功能模块，提升代码可维护性
+
+**拆分结果**：
+
+| 新文件 | 行数 | 功能描述 | 路由数量 |
+|--------|------|----------|----------|
+| `client-tasks.js` | ~1068 | 任务提交、上传、查询 | 11 |
+| `client-devices.js` | ~131 | 设备管理 | 2 |
+| `client-discovery.js` | ~670 | 笔记发现、采集队列 | 7 |
+| `client-harvest.js` | ~570 | 评论采集、黑名单 | 10 |
+| `client-link-convert.js` | ~190 | 短链接转换 | 3 |
+| `client-common.js` | ~570 | 公告、心跳、AI分析 | 11 |
+
+**修改文件**：
+
+| 文件 | 操作 |
+|------|------|
+| `server/routes/client-tasks.js` | 新建 |
+| `server/routes/client-devices.js` | 新建 |
+| `server/routes/client-discovery.js` | 新建 |
+| `server/routes/client-harvest.js` | 新建 |
+| `server/routes/client-link-convert.js` | 新建 |
+| `server/routes/client-common.js` | 新建 |
+| `server/server.js` | 更新路由挂载 |
+
+**路由结构**：
+```
+/xiaohongshu/api/client/
+├── /auditor-status          # 在线审核员数
+├── /task-configs            # 任务配置
+├── /upload                  # 图片上传
+├── /task/submit             # 任务提交
+├── /tasks/batch-submit      # 批量提交
+├── /device/my-list          # 用户设备列表
+├── /discovery/*             # 笔记发现相关
+├── /harvest/*               # 评论采集相关
+├── /comments/*              # 评论线索相关
+├── /link-convert/*          # 短链接转换
+└── /announcements           # 系统公告
+```
+
+**代码质量**：
+- 所有新文件通过 `node -c` 语法检查
+- 保持原有业务逻辑不变
+- 添加 JSDoc 注释说明各模块功能
+
+---
+
+## 2026-02-26 24小时自动化代码检查服务
+
+**新增功能**：AutoCheckService - 自动化系统监控服务
+
+**功能列表**：
+
+| 检查类别 | 检查项 | 频率 | 说明 |
+|----------|--------|------|------|
+| 服务健康 | 数据库连接 | 5分钟 | 检查MongoDB连接状态 |
+| | API响应时间 | 5分钟 | 检测API响应是否超时(>2s警告) |
+| | PM2进程状态 | 5分钟 | 检查进程是否在线、重启次数 |
+| 业务监控 | 采集队列积压 | 15分钟 | 积压>100条警告 |
+| | 审核队列积压 | 15分钟 | pending+ai_pending统计 |
+| | 客户端离线数 | 15分钟 | 离线>5个警告 |
+| 代码质量 | 依赖安全检查 | 1小时 | npm audit检查漏洞 |
+| 系统资源 | 磁盘使用率 | 6小时 | >80%警告 |
+| | 内存使用率 | 6小时 | >90%警告 |
+
+**修改文件**：
+
+| 文件 | 操作 |
+|------|------|
+| `server/services/autoCheckService.js` | 新建 |
+| `server/server.js` | 添加启动调用 |
+
+**告警机制**：
+- 控制台日志输出（带emoji级别标识）
+- 可选钉钉机器人通知（配置 `DINGTALK_WEBHOOK`）
+
+**日志示例**：
+```
+🚀 [AutoCheck] 执行启动检查...
+✅ [AutoCheck] 服务健康检查完成 (349ms)
+✅ [AutoCheck] 业务队列检查完成 (14ms)
+```
+
+---
+
+## 2026-02-26 采集客户端分发条件统一
+
+**问题**：
+- 采集客户端 API `/harvest/pending` 与管理页面 `/discovery/harvest-queue` 逻辑不一致
+- 页面显示待采集 1778 条，客户端只能获取 225 条
+- 差异：客户端多加了 `needsCommentHarvest: true` 条件，且使用 `lastCommentTime` 动态计算优先级
+
+**Phase 1 修复**：`/harvest/pending` API
+
+| 改动点 | 修改前 | 修改后 |
+|--------|--------|--------|
+| 查询条件 | `needsCommentHarvest: true` | 删除，使用 `harvestPriority` |
+| 优先级计算 | 动态计算（基于 `lastCommentTime`） | 使用 `harvestPriority` 字段 |
+| 采集间隔 | 硬编码 | 从 `SystemConfig` 读取 |
+| 时间条件 | `createdAt >= 10天前` | 删除，与页面一致 |
+
+**Phase 2 修复**：`/harvest/complete` API
+
+**发现**：客户端已计算并发送 `harvestPriority`，但后端没有接收和更新！
+
+| 组件 | 状态 |
+|------|------|
+| 客户端计算优先级 | ✅ 已实现 |
+| 客户端发送 `harvestPriority` | ✅ 已发送 |
+| 后端接收参数 | ❌ 缺失 → ✅ 已修复 |
+| 后端更新字段 | ❌ 缺失 → ✅ 已修复 |
+
+**修改文件**：`server/routes/client.js:2988-3020`
+
+**验证结果**：
+- Phase 1：客户端可获取从 225 → 1953 条 ✅
+- Phase 2：采集完成后 `harvestPriority` 会正确更新 ✅
+
+---
+
+## 2026-02-26 关键词分类管理功能优化
+
+**问题**：
+- 前端调用不存在的 `/admin/keyword-categories` API 返回 404
+- 添加的分类刷新页面后丢失（仅在内存中）
+- 无法获取分类统计
+
+**修复内容**：
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/admin.js:2773-2832` | 新增分类 API |
+| `admin/src/pages/SearchKeywords.js:87-99` | 改为调用后端 API 获取分类 |
+| `admin/src/pages/SearchKeywords.js:238-258` | 改为调用后端 API 添加分类 |
+
+**新增 API**：
+
+1. **GET `/xiaohongshu/api/admin/keyword-categories`**
+   - 获取所有分类及其关键词数量统计
+   - 使用 MongoDB aggregate 分组统计
+
+2. **POST `/xiaohongshu/api/admin/keyword-categories`**
+   - 添加新分类
+   - 创建占位关键词确保分类出现在列表中
+   - 检查分类是否已存在
+
+**前端改动**：
+- `initCategories()` 改为调用 `fetchCategories()` 从后端获取分类
+- `handleAddCategory()` 改为调用后端 API 添加分类
+
+**验证**：
+```bash
+# API 路由已生效（返回认证错误而非 404）
+curl https://www.wubug.cc/xiaohongshu/api/admin/keyword-categories
+# 返回: {"success":false,"message":"无效的访问令牌"} ✅
+
+# 服务状态
+pm2 list → xiaohongshu-api online ✅
+
+# 前端部署
+main.97a8a4c0.js 已部署到服务器 ✅
+```
+
+---
+
 ## 2026-02-25 笔记发现管理卡片数据修复
 
 **问题**：笔记发现管理卡片显示数据不正确
@@ -10080,3 +10659,70 @@ try {
 1. `extractNoteContent` 添加标签提取（标题、正文、标签）
 2. 移除内容长度 < 50 的跳过限制
 3. 检测 "Too many requests" 频率限制错误，直接判定为已删除
+
+---
+
+## 2026-03-03 自动打包脚本同步 version.json 到 downloads 目录
+
+**问题**：
+- `xiaohongshu-audit-clients.zip` 更新后，`version.json` 没有同步更新
+- Launcher 通过比较版本号判断是否需要更新
+- 监控目录内的 `version.json` (v1.4.0) 与 downloads 目录的 `version.json` (v1.0.4) 不一致
+
+**解决方案**：
+
+修改服务器自动打包脚本 `/usr/local/bin/auto-pack-clients.sh`：
+
+1. 添加 `VERSION_FILE_DOWNLOADS` 变量指向 downloads 目录
+2. 打包完成后同时生成两个 version.json：
+   - 监控目录内（用于 zip 包内）
+   - downloads 目录（用于 Launcher 版本检查）
+
+**下载目录 version.json 格式**：
+```json
+{
+  "version": "1.4.0",
+  "updated": "2026-03-03",
+  "filename": "xiaohongshu-audit-clients.zip"
+}
+```
+
+**修改位置**：
+- 服务器：`/usr/local/bin/auto-pack-clients.sh`
+- 重启服务：`systemctl restart auto-pack-clients`
+
+**验证**：
+```bash
+curl -s https://www.wubug.cc/downloads/xiaohongshu-audit-clients/version.json
+```
+
+**效果**：以后每次 zip 更新，version.json 会自动同步到 downloads 目录，Launcher 能正确检测新版本
+
+## 2026-03-03 项目优化（Phase 1 完成）
+
+**优化目标**：提升系统性能、代码质量和可维护性
+
+### 完成项：
+
+1. **N+1 查询优化**
+   - `server/routes/devices.js`: 批量查询 mentor 信息
+   - `server/routes/client-common.js`: 批量查询 ImageReview
+   - `server/routes/client.js`: 批量查询 ImageReview
+   - `server/routes/user.js`: 优化递归查询和佣金计算
+
+2. **新建文件**
+   - `server/utils/constants.js`: 全局常量定义（时间、审核、角色、状态等）
+   - `server/utils/secureLogger.js`: 安全日志工具（Cookie、Token 脱敏）
+   - `server/scripts/create-indexes.js`: 数据库索引创建脚本
+   - `admin/src/utils/apiService.js`: 前端 API 封装
+   - `admin/src/config/constants.js`: 前端配置常量
+
+### 待部署：
+
+1. 同步后端文件到服务器
+2. 运行索引创建脚本
+3. 重启 PM2 服务
+4. 前端构建并部署
+
+---
+

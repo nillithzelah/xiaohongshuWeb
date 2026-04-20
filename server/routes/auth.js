@@ -3,9 +3,11 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const rateLimit = require('express-rate-limit');
+const logger = require('../utils/logger');
 const router = express.Router();
 
-console.log('🔧 auth路由已加载');
+const log = logger.module('Auth');
+log.info('路由已加载');
 
 // 登录速率限制 - 防止暴力破解
 const loginLimiter = rateLimit({
@@ -38,7 +40,7 @@ const {
 
 // 测试路由
 router.get('/test-auth', (req, res) => {
-  console.log('🎯 auth测试路由被调用');
+  log.info('🎯 auth测试路由被调用');
   res.json({ success: true, message: 'auth路由工作正常' });
 });
 
@@ -78,7 +80,7 @@ router.post('/refresh-token', async (req, res) => {
       token: newToken
     });
   } catch (error) {
-    console.error('❌ Token刷新错误:', error);
+    log.error('❌ Token刷新错误:', error);
     res.status(401).json({ success: false, message: '刷新失败' });
   }
 });
@@ -93,7 +95,7 @@ router.post('/decrypt-phone', async (req, res) => {
   try {
     const { code, encryptedData, iv } = req.body;
 
-    console.log('📱 解密手机号请求');
+    log.info('📱 解密手机号请求');
 
     if (!code || !encryptedData || !iv) {
       return res.status(400).json({ success: false, message: '缺少必要参数' });
@@ -148,7 +150,7 @@ router.post('/decrypt-phone', async (req, res) => {
     const phoneData = JSON.parse(decrypted);
     const phoneNumber = phoneData.phoneNumber;
 
-    console.log('✅ 解密手机号成功:', phoneNumber);
+    log.info('✅ 解密手机号成功:', phoneNumber);
 
     res.json({
       success: true,
@@ -156,7 +158,7 @@ router.post('/decrypt-phone', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('解密手机号错误:', error);
+    log.error('解密手机号错误:', error);
     res.status(500).json({ success: false, message: '解密手机号失败' });
   }
 });
@@ -166,7 +168,7 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
   try {
     const { code, encryptedData, iv, phoneNumber: requestPhoneNumber } = req.body;
 
-    console.log('📡 微信登录请求参数:', {
+    log.info('📡 微信登录请求参数:', {
       hasCode: !!code,
       hasEncryptedData: !!encryptedData,
       hasIv: !!iv,
@@ -190,10 +192,10 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
         // 开发环境：优先使用直接传递的手机号参数
         if (req.body.phoneNumber) {
           phoneNumber = req.body.phoneNumber;
-          console.log('📱 使用请求参数手机号:', phoneNumber);
+          log.info('📱 使用请求参数手机号:', phoneNumber);
         } else {
           // 生产环境：需要先通过code获取session_key，然后解密
-          console.log('📱 开始解密手机号数据...');
+          log.info('📱 开始解密手机号数据...');
 
           // 1. 通过code获取session_key（这里需要调用微信API）
           // 注意：小程序端已经通过wx.login获取了code，这里需要服务端调用微信API
@@ -202,8 +204,8 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           const appSecret = process.env.WX_APP_SECRET || process.env.WECHAT_APP_SECRET || 'your_app_secret';
           const wechatApiUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${appId}&secret=${appSecret}&js_code=${code}&grant_type=authorization_code`;
 
-          console.log('📱 调用微信API获取session_key...');
-          console.log('📱 环境变量状态:', {
+          log.info('📱 调用微信API获取session_key...');
+          log.info('📱 环境变量状态:', {
             WX_APP_ID: process.env.WX_APP_ID ? '已配置' : '未配置',
             WECHAT_APP_ID: process.env.WECHAT_APP_ID ? '已配置' : '未配置',
             WX_APP_SECRET: process.env.WX_APP_SECRET ? '已配置' : '未配置',
@@ -214,14 +216,14 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
             actual_appSecret_length: appSecret ? appSecret.length : 0
           });
 
-          console.log('📱 微信API完整URL:', wechatApiUrl);
+          log.info('📱 微信API完整URL:', wechatApiUrl);
 
           const wechatData = await new Promise((resolve, reject) => {
             const request = https.get(wechatApiUrl, (res) => {
               let data = '';
               res.on('data', (chunk) => data += chunk);
               res.on('end', () => {
-                console.log('📱 微信API原始响应:', data);
+                log.info('📱 微信API原始响应:', data);
                 try {
                   resolve(JSON.parse(data));
                 } catch (e) {
@@ -242,7 +244,7 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           }
 
           const sessionKey = wechatData.session_key;
-          console.log('📱 获取到session_key: [REDACTED]'); // 【安全修复】脱敏敏感信息
+          log.info('📱 获取到session_key: [REDACTED]'); // 【安全修复】脱敏敏感信息
 
           // 验证session_key格式
           if (!sessionKey || typeof sessionKey !== 'string') {
@@ -276,22 +278,22 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           }
 
           // 2. 使用session_key解密手机号数据
-          console.log('🔐 开始AES解密过程...');
-          console.log('🔐 session_key长度:', sessionKey.length, '字符');
-          console.log('🔐 iv (base64):', iv.substring(0, 10) + '...');
-          console.log('🔐 encryptedData长度:', encryptedData.length);
+          log.info('🔐 开始AES解密过程...');
+          log.info('🔐 session_key长度:', sessionKey.length, '字符');
+          log.info('🔐 iv (base64):', iv.substring(0, 10) + '...');
+          log.info('🔐 encryptedData长度:', encryptedData.length);
 
           const crypto = require('crypto');
           const decipher = crypto.createDecipheriv('aes-128-cbc', sessionKeyBuffer, ivBuffer);
           decipher.setAutoPadding(true);
 
-          console.log('🔐 创建decipher对象成功');
+          log.info('🔐 创建decipher对象成功');
 
           // 记录解密步骤
           let encryptedBuffer;
           try {
             encryptedBuffer = Buffer.from(encryptedData, 'base64');
-            console.log('🔐 encryptedData base64解码成功，长度:', encryptedBuffer.length);
+            log.info('🔐 encryptedData base64解码成功，长度:', encryptedBuffer.length);
           } catch (bufferError) {
             throw new Error(`encryptedData base64解码失败: ${bufferError.message}`);
           }
@@ -299,7 +301,7 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           let decrypted;
           try {
             decrypted = decipher.update(encryptedBuffer);
-            console.log('🔐 decipher.update成功，中间结果长度:', decrypted.length);
+            log.info('🔐 decipher.update成功，中间结果长度:', decrypted.length);
           } catch (updateError) {
             throw new Error(`decipher.update失败: ${updateError.message}`);
           }
@@ -307,19 +309,19 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           let finalPart;
           try {
             finalPart = decipher.final();
-            console.log('🔐 decipher.final成功，最终部分长度:', finalPart.length);
+            log.info('🔐 decipher.final成功，最终部分长度:', finalPart.length);
           } catch (finalError) {
             throw new Error(`decipher.final失败: ${finalError.message}`);
           }
 
           decrypted = Buffer.concat([decrypted, finalPart]);
-          console.log('🔐 完整解密结果长度:', decrypted.length);
+          log.info('🔐 完整解密结果长度:', decrypted.length);
 
           let decryptedString;
           try {
             decryptedString = decrypted.toString('utf8');
-            console.log('🔐 UTF8解码成功，字符串长度:', decryptedString.length);
-            console.log('🔐 解密字符串预览:', decryptedString.substring(0, 100) + (decryptedString.length > 100 ? '...' : ''));
+            log.info('🔐 UTF8解码成功，字符串长度:', decryptedString.length);
+            log.info('🔐 解密字符串预览:', decryptedString.substring(0, 100) + (decryptedString.length > 100 ? '...' : ''));
           } catch (stringError) {
             throw new Error(`UTF8解码失败: ${stringError.message}`);
           }
@@ -327,9 +329,9 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           let phoneData;
           try {
             phoneData = JSON.parse(decryptedString);
-            console.log('🔐 JSON解析成功:', JSON.stringify(phoneData, null, 2));
+            log.info('🔐 JSON解析成功:', JSON.stringify(phoneData, null, 2));
           } catch (jsonError) {
-            console.error('🔐 JSON解析失败，原始字符串:', decryptedString);
+            log.error('🔐 JSON解析失败，原始字符串:', decryptedString);
             throw new Error(`JSON解析失败: ${jsonError.message}`);
           }
 
@@ -338,11 +340,11 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
           }
 
           phoneNumber = phoneData.phoneNumber;
-          console.log('📱 成功解密手机号:', phoneNumber);
+          log.info('📱 成功解密手机号:', phoneNumber);
         }
       } catch (decryptError) {
-        console.error('📱 手机号解密失败:', decryptError.message);
-        console.error('📱 解密错误详情:', decryptError);
+        log.error('📱 手机号解密失败:', decryptError.message);
+        log.error('📱 解密错误详情:', decryptError);
 
         // 【修复】手机号解密失败时，返回错误而不是继续登录
         // 这样前端可以区分"解密失败"和"用户确实没有手机号"
@@ -358,7 +360,7 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
 
     // 【修复】必须要有手机号才能登录，防止解密失败导致的循环
     if (!phoneNumber) {
-      console.warn('❌ 手机号解密失败或未获取，拒绝登录');
+      log.warn('❌ 手机号解密失败或未获取，拒绝登录');
       return res.status(400).json({
         success: false,
         message: '无法获取手机号，请重新授权',
@@ -379,13 +381,13 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
         if (user.openid !== openid) {
           user.openid = openid;
           await user.save();
-          console.log('🔗 手机号绑定成功:', user.username, phoneNumber);
+          log.info('🔗 手机号绑定成功:', user.username, phoneNumber);
         } else {
-          console.log('📱 手机号用户已存在:', user.username, phoneNumber);
+          log.info('📱 手机号用户已存在:', user.username, phoneNumber);
         }
       } else {
         // 手机号不存在，拒绝登录
-        console.log('❌ 手机号未注册，拒绝登录:', phoneNumber);
+        log.info('❌ 手机号未注册，拒绝登录:', phoneNumber);
         return res.status(403).json({
           success: false,
           message: '该手机号尚未注册，请先通过账号密码注册或联系管理员'
@@ -410,14 +412,14 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('微信登录错误:', error);
+    log.error('微信登录错误:', error);
     res.status(500).json({ success: false, message: '登录失败' });
   }
 });
 
 // 管理员登录
 // router.post('/login', (req, res) => {
-//   console.log('🎯 收到登录请求:', req.body);
+//   log.info('🎯 收到登录请求:', req.body);
 //   try {
 //     const { username, password } = req.body;
 
@@ -431,8 +433,8 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
 //       'manager': { id: '507f1f77bcf86cd799439016', username: 'manager', role: 'manager' }
 //     };
 
-//     console.log('🔍 尝试登录用户:', username);
-//     console.log('📋 可用用户:', Object.keys(mockUsers));
+//     log.info('🔍 尝试登录用户:', username);
+//     log.info('📋 可用用户:', Object.keys(mockUsers));
 
 //     const user = mockUsers[username];
 //     if (!user) {
@@ -452,14 +454,14 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
 //     });
 
 //   } catch (error) {
-//     console.error('登录错误:', error);
+//     log.error('登录错误:', error);
 //     res.status(500).json({ success: false, message: '登录失败' });
 //   }
 // });
 
 // 临时简单登录路由 - 已禁用，避免与正式登录路由冲突
 // router.post('/login', (req, res) => {
-//   console.log('🎯 收到登录请求:', req.body);
+//   log.info('🎯 收到登录请求:', req.body);
 //   res.json({
 //     success: true,
 //     token: 'test_token',
@@ -474,22 +476,22 @@ router.post('/wechat-login', loginLimiter, async (req, res) => {
 // 管理员登录路由 (带登录次数限制)
 router.post('/admin-login', async (req, res) => {
   try {
-    console.log('🎯 收到管理员登录请求:', req.body);
+    log.info('🎯 收到管理员登录请求:', req.body);
     const { username, password } = req.body;
 
     if (!username || !password) {
-      console.log('❌ 参数不完整');
+      log.info('❌ 参数不完整');
       return res.status(400).json({ success: false, message: '用户名和密码不能为空' });
     }
 
     // 清理用户名（去掉前后空格）
     const cleanUsername = username.trim();
-    console.log('🧹 清理后的用户名:', cleanUsername);
+    log.info('🧹 清理后的用户名:', cleanUsername);
 
     // ==================== 检查登录锁定状态 ====================
     const lockoutCheck = checkLoginLockout(cleanUsername);
     if (lockoutCheck.locked) {
-      console.log(`🔒 账户 ${cleanUsername} 已锁定，剩余时间: ${lockoutCheck.remainingMinutes}分钟`);
+      log.info(`🔒 账户 ${cleanUsername} 已锁定，剩余时间: ${lockoutCheck.remainingMinutes}分钟`);
       return res.status(429).json({
         success: false,
         message: lockoutCheck.message,
@@ -499,20 +501,20 @@ router.post('/admin-login', async (req, res) => {
     }
 
     // 从数据库查找用户
-    console.log('🔍 开始数据库查询...');
+    log.info('🔍 开始数据库查询...');
     const user = await User.findOne({
       username: cleanUsername,
       is_deleted: { $ne: true }
     });
-    console.log('📋 查询结果:', user ? { username: user.username, role: user.role, hasPassword: !!user.password } : '用户不存在');
+    log.info('📋 查询结果:', user ? { username: user.username, role: user.role, hasPassword: !!user.password } : '用户不存在');
 
     // 【安全修复】用户不存在时也记录失败，防止用户名枚举攻击
     // 注意：错误消息与密码错误时保持一致
     if (!user) {
-      console.log('❌ 登录失败: 用户名或密码错误');
+      log.info('❌ 登录失败: 用户名或密码错误');
       // 记录登录失败（即使是不存在的用户，也要记录以防止枚举）
       const failureResult = recordLoginFailure(cleanUsername);
-      console.log(`📝 登录失败记录: 剩余尝试次数 ${failureResult.remainingAttempts}`);
+      log.info(`📝 登录失败记录: 剩余尝试次数 ${failureResult.remainingAttempts}`);
       return res.status(401).json({
         success: false,
         message: failureResult.message,
@@ -522,23 +524,23 @@ router.post('/admin-login', async (req, res) => {
 
     // 检查用户角色是否为管理员角色
     const adminRoles = ['mentor', 'boss', 'finance', 'manager', 'hr', 'promoter'];
-    console.log('🔍 检查角色:', user.role, '是否在', adminRoles);
+    log.info('🔍 检查角色:', user.role, '是否在', adminRoles);
     if (!adminRoles.includes(user.role)) {
-      console.log('❌ 角色权限不足');
+      log.info('❌ 角色权限不足');
       return res.status(403).json({ success: false, message: '无管理员权限' });
     }
 
     // 验证密码
-    console.log('🔐 开始密码验证...');
+    log.info('🔐 开始密码验证...');
     let isPasswordValid = false;
     if (user.password) {
       // 如果用户有密码，验证密码
-      console.log('🔐 用户有密码，开始bcrypt验证');
+      log.info('🔐 用户有密码，开始bcrypt验证');
       isPasswordValid = await user.comparePassword(password);
-      console.log(`🔐 bcrypt验证结果: ${isPasswordValid}`);
+      log.info(`🔐 bcrypt验证结果: ${isPasswordValid}`);
     } else {
       // 【安全修复】移除空密码登录逻辑，未设置密码的账户禁止登录
-      console.log('❌ 用户未设置密码，拒绝登录');
+      log.info('❌ 用户未设置密码，拒绝登录');
       return res.status(403).json({
         success: false,
         message: '账户未设置密码，请联系管理员重置密码'
@@ -546,10 +548,10 @@ router.post('/admin-login', async (req, res) => {
     }
 
     if (!isPasswordValid) {
-      console.log('❌ 密码验证失败');
+      log.info('❌ 密码验证失败');
       // 记录登录失败
       const failureResult = recordLoginFailure(cleanUsername);
-      console.log(`📝 登录失败记录: 剩余尝试次数 ${failureResult.remainingAttempts}, 是否锁定: ${failureResult.shouldLock}`);
+      log.info(`📝 登录失败记录: 剩余尝试次数 ${failureResult.remainingAttempts}, 是否锁定: ${failureResult.shouldLock}`);
 
       return res.status(401).json({
         success: false,
@@ -562,12 +564,12 @@ router.post('/admin-login', async (req, res) => {
 
     // ==================== 登录成功，清除失败记录 ====================
     clearLoginAttempts(cleanUsername);
-    console.log(`✅ 登录成功，已清除 ${cleanUsername} 的失败记录`);
+    log.info(`✅ 登录成功，已清除 ${cleanUsername} 的失败记录`);
 
     // 生成token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
 
-    console.log('📤 发送登录成功响应');
+    log.info('📤 发送登录成功响应');
     res.json({
       success: true,
       token,
@@ -583,18 +585,18 @@ router.post('/admin-login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ 管理员登录错误:', error);
-    console.error('❌ 错误堆栈:', error.stack);
+    log.error('❌ 管理员登录错误:', error);
+    log.error('❌ 错误堆栈:', error.stack);
     res.status(500).json({ success: false, message: '登录失败，请稍后重试' });
   }
 });
 
 // 注册（仅管理员使用）
 router.post('/register', authenticateToken, async (req, res) => {
-  console.log('🎯 注册接口被调用 - 开始执行');
+  log.info('🎯 注册接口被调用 - 开始执行');
   try {
     const { username, password, role, nickname, phone, wechat, notes } = req.body;
-    console.log('📝 收到注册请求:', { username, role, currentUser: req.user.username, currentUserRole: req.user.role });
+    log.info('📝 收到注册请求:', { username, role, currentUser: req.user.username, currentUserRole: req.user.role });
 
     // 实施严格的RBAC权限控制
     const requestingUserRole = req.user.role;
@@ -612,13 +614,13 @@ router.post('/register', authenticateToken, async (req, res) => {
 
     // 检查当前用户是否有权限创建用户
     if (!allowedRoles[requestingUserRole] || allowedRoles[requestingUserRole].length === 0) {
-      console.log('❌ 权限不足:', requestingUserRole, '无权创建用户');
+      log.info('❌ 权限不足:', requestingUserRole, '无权创建用户');
       return res.status(403).json({ success: false, message: '没有注册权限' });
     }
 
     // 检查要创建的角色是否在允许列表中
     if (!allowedRoles[requestingUserRole].includes(role)) {
-      console.log('❌ 权限不足:', requestingUserRole, '不能创建', role, '角色');
+      log.info('❌ 权限不足:', requestingUserRole, '不能创建', role, '角色');
       return res.status(403).json({ success: false, message: `无权创建 ${role} 角色用户` });
     }
 
@@ -675,7 +677,7 @@ router.post('/register', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('注册错误:', error);
+    log.error('注册错误:', error);
     // 返回详细错误信息用于调试
     const errorMessage = error.message || '注册失败';
     if (error.code === 11000) {
@@ -690,7 +692,7 @@ router.post('/register', authenticateToken, async (req, res) => {
 // 生成指定用户的测试token（仅管理员可用）
 router.post('/generate-user-token', authenticateToken, async (req, res) => {
   try {
-    console.log('🎯 生成用户token请求:', req.body);
+    log.info('🎯 生成用户token请求:', req.body);
     const { userId } = req.body;
 
     if (!userId) {
@@ -700,7 +702,7 @@ router.post('/generate-user-token', authenticateToken, async (req, res) => {
     // 权限检查：只允许管理员使用
     const adminRoles = ['boss', 'manager'];
     if (!adminRoles.includes(req.user.role)) {
-      console.log('❌ 权限不足:', req.user.role, '尝试生成用户token');
+      log.info('❌ 权限不足:', req.user.role, '尝试生成用户token');
       return res.status(403).json({ success: false, message: '只有管理员可以生成用户token' });
     }
 
@@ -713,7 +715,7 @@ router.post('/generate-user-token', authenticateToken, async (req, res) => {
     // 生成用户token
     const token = generateUserToken(targetUser._id, targetUser.username);
 
-    console.log('✅ 成功生成用户token:', targetUser.username);
+    log.info('✅ 成功生成用户token:', targetUser.username);
 
     res.json({
       success: true,
@@ -727,7 +729,7 @@ router.post('/generate-user-token', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('生成用户token错误:', error);
+    log.error('生成用户token错误:', error);
     res.status(500).json({ success: false, message: '生成token失败' });
   }
 });
@@ -744,7 +746,7 @@ router.post('/phone-login', phoneLoginLimiter, async (req, res) => {
     // 去除首尾空格
     const cleanPhone = phoneNumber.trim();
 
-    console.log('📱 手机号登录请求:', cleanPhone);
+    log.info('📱 手机号登录请求:', cleanPhone);
 
     // 优先查找已有的兼职用户（通过手机号匹配）
     let user = await User.findOne({
@@ -755,10 +757,10 @@ router.post('/phone-login', phoneLoginLimiter, async (req, res) => {
 
     if (user) {
       // 找到匹配的兼职用户，直接使用
-      console.log('🔗 匹配到已有兼职用户:', user.username, phoneNumber);
+      log.info('🔗 匹配到已有兼职用户:', user.username, phoneNumber);
     } else {
       // 没有找到匹配的兼职用户，拒绝自动创建（修复：防止用户名重复问题）
-      console.log('❌ 手机号未注册，拒绝登录:', phoneNumber);
+      log.info('❌ 手机号未注册，拒绝登录:', phoneNumber);
       return res.status(404).json({
         success: false,
         message: '该手机号未注册，请联系管理员获取注册链接',
@@ -783,7 +785,7 @@ router.post('/phone-login', phoneLoginLimiter, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('手机号登录错误:', error);
+    log.error('手机号登录错误:', error);
     res.status(500).json({ success: false, message: '登录失败' });
   }
 });
@@ -797,7 +799,7 @@ router.post('/user-register', async (req, res) => {
     const cleanPhone = phoneNumber ? phoneNumber.trim() : '';
     const cleanUsername = username ? username.trim() : '';
 
-    console.log('📝 用户注册请求:', { phoneNumber: cleanPhone, username: cleanUsername, nickname });
+    log.info('📝 用户注册请求:', { phoneNumber: cleanPhone, username: cleanUsername, nickname });
 
     // 参数验证
     if (!cleanPhone || !cleanUsername || !password) {
@@ -837,7 +839,7 @@ router.post('/user-register', async (req, res) => {
       }
 
       // 手机号存在，更新用户信息（无论是否已有账号）
-      console.log('📱 手机号已存在，更新账号信息:', existingPhoneUser.username || '未设置');
+      log.info('📱 手机号已存在，更新账号信息:', existingPhoneUser.username || '未设置');
 
       // 判断是否已有完整账号信息
       const hasAccount = existingPhoneUser.username && existingPhoneUser.password;
@@ -853,7 +855,7 @@ router.post('/user-register', async (req, res) => {
 
       if (hasAccount) {
         // 已有账号：更新兼职用户管理里的用户
-        console.log('👤 已有账号，更新用户信息');
+        log.info('👤 已有账号，更新用户信息');
 
         existingPhoneUser.username = cleanUsername;  // 更新用户名
         existingPhoneUser.password = password;  // 更新密码
@@ -869,13 +871,13 @@ router.post('/user-register', async (req, res) => {
           });
           if (parentUser) {
             existingPhoneUser.parent_id = parentUser._id;
-            console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
+            log.info('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
           }
         }
 
       } else {
         // 无账号：分配带教老师里的线索用户，设置完整账号
-        console.log('📋 线索用户，设置账号信息并保留系统设置');
+        log.info('📋 线索用户，设置账号信息并保留系统设置');
 
         // 更新用户信息，保留HR设置的系统信息（微信、小红书、mentor_id等）
         existingPhoneUser.username = cleanUsername;
@@ -899,19 +901,19 @@ router.post('/user-register', async (req, res) => {
           });
           if (parentUser) {
             existingPhoneUser.parent_id = parentUser._id;
-            console.log('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
+            log.info('👨‍👩‍👧‍👦 通过邀请码设置上级用户:', parentUser.username);
           }
         }
 
-        console.log('🔄 线索用户账号设置完成，保留系统配置');
+        log.info('🔄 线索用户账号设置完成，保留系统配置');
       }
 
       await existingPhoneUser.save();
       user = existingPhoneUser;
-      console.log('👤 更新用户成功:', cleanUsername, cleanPhone);
+      log.info('👤 更新用户成功:', cleanUsername, cleanPhone);
     } else {
       // 手机号不存在，拒绝创建，提示联系HR
-      console.log('❌ 手机号未在系统中存在，拒绝注册:', cleanPhone);
+      log.info('❌ 手机号未在系统中存在，拒绝注册:', cleanPhone);
       return res.status(404).json({
         success: false,
         message: '该手机号尚未在系统中注册，请联系HR创建用户后再进行注册'
@@ -937,7 +939,7 @@ router.post('/user-register', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('用户注册错误:', error);
+    log.error('用户注册错误:', error);
     res.status(500).json({ success: false, message: '注册失败，请稍后重试' });
   }
 });
@@ -973,7 +975,7 @@ router.get('/check-phone', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('检查手机号错误:', error);
+    log.error('检查手机号错误:', error);
     res.status(500).json({ success: false, message: '检查失败，请稍后重试' });
   }
 });
@@ -986,7 +988,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     // 去除首尾空格
     const cleanPhone = phoneNumber ? phoneNumber.trim() : '';
 
-    console.log('🔐 账号密码登录请求:', cleanPhone);
+    log.info('🔐 账号密码登录请求:', cleanPhone);
 
     // 参数验证
     if (!cleanPhone || !password) {
@@ -1009,7 +1011,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ success: false, message: '手机号或密码错误' });
     }
 
-    console.log('✅ 密码验证通过:', user.username);
+    log.info('✅ 密码验证通过:', user.username);
 
     // 生成token
     const token = generateToken(user._id);
@@ -1029,7 +1031,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('账号密码登录错误:', error);
+    log.error('账号密码登录错误:', error);
     res.status(500).json({ success: false, message: '登录失败，请稍后重试' });
   }
 });
@@ -1040,7 +1042,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
     // 登出逻辑可以在这里添加一些清理工作
     // 比如记录登出日志、清理临时数据等
 
-    console.log(`用户 ${req.user.username} 登出`);
+    log.info(`用户 ${req.user.username} 登出`);
 
     res.json({
       success: true,
@@ -1048,7 +1050,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('登出错误:', error);
+    log.error('登出错误:', error);
     res.status(500).json({ success: false, message: '登出失败' });
   }
 });
@@ -1058,7 +1060,7 @@ router.post('/reactivate-cookie', authenticateToken, requireRole(['boss', 'manag
   try {
     const asyncAiReviewService = require('../services/asyncAiReviewService');
 
-    console.log(`用户 ${req.user.username} (${req.user.role}) 请求重新激活Cookie`);
+    log.info(`用户 ${req.user.username} (${req.user.role}) 请求重新激活Cookie`);
 
     // 重新激活Cookie
     asyncAiReviewService.reactivateCookie();
@@ -1073,7 +1075,7 @@ router.post('/reactivate-cookie', authenticateToken, requireRole(['boss', 'manag
     });
 
   } catch (error) {
-    console.error('重新激活Cookie错误:', error);
+    log.error('重新激活Cookie错误:', error);
     res.status(500).json({ success: false, message: '重新激活Cookie失败' });
   }
 });
@@ -1091,7 +1093,7 @@ router.get('/cookie-status', authenticateToken, requireRole(['boss', 'manager'])
     });
 
   } catch (error) {
-    console.error('获取Cookie状态错误:', error);
+    log.error('获取Cookie状态错误:', error);
     res.status(500).json({ success: false, message: '获取Cookie状态失败' });
   }
 });

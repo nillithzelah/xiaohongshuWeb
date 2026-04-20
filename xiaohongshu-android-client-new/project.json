@@ -1,0 +1,26 @@
+{
+  "name": "红薯糖水",
+  "version": "1.0.0",
+  "main": "main.js",
+  "description": "小红书采集助手 - 自动采集笔记短链接",
+  "author": "AutoX",
+  "icon": "icon.png",
+  "launchConfig": {
+    "displaySplash": false,
+    "hideLogs": false,
+    "splashTextColor": "#FFFFFF",
+    "splashText": "红薯糖水"
+  },
+  "permissions": [
+    "accessibility_service",
+    "system_alert_window",
+    "write_settings",
+    "read_phone_state"
+  ],
+  "features": [
+    "悬浮按钮",
+    "消息面板",
+    "自动采集",
+    "长链接转短链接"
+  ]
+}

@@ -2,7 +2,10 @@ const express = require('express');
 const MenuDefinition = require('../models/MenuDefinition');
 const RolePermission = require('../models/RolePermission');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+const log = logger.module('Permissions');
 
 // ==================== 获取当前用户权限配置 ====================
 
@@ -32,7 +35,7 @@ router.get('/mine', authenticateToken, async (req, res) => {
       flatMenus: rolePermission.allowedMenus || [] // 用于权限判断
     });
   } catch (error) {
-    console.error('获取用户权限失败:', error);
+    log.error('获取用户权限失败:', error);
     res.status(500).json({ success: false, message: '获取权限失败' });
   }
 });
@@ -53,7 +56,7 @@ router.get('/menu-tree', authenticateToken, requireRole(['boss', 'manager']), as
       menus: menuTree
     });
   } catch (error) {
-    console.error('获取菜单树失败:', error);
+    log.error('获取菜单树失败:', error);
     res.status(500).json({ success: false, message: '获取菜单树失败' });
   }
 });
@@ -78,7 +81,7 @@ router.get('/role/:role', authenticateToken, requireRole(['boss', 'manager']), a
       allowedMenus: rolePermission.allowedMenus || []
     });
   } catch (error) {
-    console.error('获取角色权限失败:', error);
+    log.error('获取角色权限失败:', error);
     res.status(500).json({ success: false, message: '获取角色权限失败' });
   }
 });
@@ -120,7 +123,7 @@ router.put('/role/:role', authenticateToken, requireRole(['boss']), async (req, 
       data: rolePermission
     });
   } catch (error) {
-    console.error('更新角色权限失败:', error);
+    log.error('更新角色权限失败:', error);
     res.status(500).json({ success: false, message: '更新权限失败' });
   }
 });
@@ -142,7 +145,7 @@ router.get('/overview', authenticateToken, requireRole(['boss', 'manager']), asy
       roles: rolePermissions
     });
   } catch (error) {
-    console.error('获取权限概览失败:', error);
+    log.error('获取权限概览失败:', error);
     res.status(500).json({ success: false, message: '获取权限概览失败' });
   }
 });
@@ -167,7 +170,7 @@ router.post('/menu', authenticateToken, requireRole(['boss']), async (req, res) 
     if (error.code === 11000) {
       return res.status(400).json({ success: false, message: '菜单key已存在' });
     }
-    console.error('创建菜单失败:', error);
+    log.error('创建菜单失败:', error);
     res.status(500).json({ success: false, message: '创建菜单失败' });
   }
 });
@@ -195,7 +198,7 @@ router.put('/menu/:key', authenticateToken, requireRole(['boss']), async (req, r
       data: menu
     });
   } catch (error) {
-    console.error('更新菜单失败:', error);
+    log.error('更新菜单失败:', error);
     res.status(500).json({ success: false, message: '更新菜单失败' });
   }
 });
@@ -223,7 +226,7 @@ router.delete('/menu/:key', authenticateToken, requireRole(['boss']), async (req
       data: menu
     });
   } catch (error) {
-    console.error('删除菜单失败:', error);
+    log.error('删除菜单失败:', error);
     res.status(500).json({ success: false, message: '删除菜单失败' });
   }
 });

@@ -2,7 +2,10 @@ const express = require('express');
 const User = require('../models/User');
 const Device = require('../models/Device');
 const { authenticateToken, requireRole, Role } = require('../middleware/auth');
+const logger = require('../utils/logger');
 const router = express.Router();
+
+const log = logger.module('HR');
 
 // 创建线索（HR创建潜在客户）
 router.post('/create-lead', authenticateToken, requireRole(['hr', 'boss']), async (req, res) => {
@@ -142,7 +145,7 @@ router.post('/create-lead', authenticateToken, requireRole(['hr', 'boss']), asyn
     });
 
   } catch (error) {
-    console.error('创建线索错误:', error);
+    log.error('创建线索错误:', error);
     res.status(500).json({
       success: false,
       message: '创建线索失败'
@@ -206,7 +209,7 @@ router.get('/my-leads', authenticateToken, requireRole(['hr', 'boss', 'manager']
     });
 
   } catch (error) {
-    console.error('获取线索列表错误:', error);
+    log.error('获取线索列表错误:', error);
     res.status(500).json({
       success: false,
       message: '获取线索列表失败'
@@ -258,7 +261,7 @@ router.delete('/delete-lead/:id', authenticateToken, requireRole(['hr', 'boss', 
     });
 
   } catch (error) {
-    console.error('删除线索错误:', error);
+    log.error('删除线索错误:', error);
     res.status(500).json({
       success: false,
       message: '删除线索失败'

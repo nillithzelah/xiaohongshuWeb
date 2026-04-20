@@ -1,0 +1,34 @@
+{
+  "server": {
+    "baseUrl": "https://www.wubug.cc",
+    "apiPath": "/xiaohongshu/api/client"
+  },
+  "client": {
+    "clientId": "openclaw-harvest-1",
+    "clientType": "harvest"
+  },
+  "harvest": {
+    "batchSize": 5,
+    "noteInterval": 5000,
+    "timeRangeHours": {
+      "10": 1,
+      "5": 1,
+      "2": 6,
+      "1": 24
+    },
+    "priorityLabels": {
+      "10": "🔴 最高",
+      "5": "🟠 中等",
+      "2": "🟡 较低",
+      "1": "🟢 最低"
+    }
+  },
+  "filter": {
+    "leadKeywords": ["被骗", "追回", "退费", "维权", "报警", "损失", "坑", "套路"],
+    "blacklistReasons": ["引流", "同行", "帮助者", "广告", "spam"]
+  },
+  "browser": {
+    "profile": "openclaw",
+    "keepOpen": true
+  }
+}

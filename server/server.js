@@ -99,6 +99,11 @@ const loginLimiter = rateLimit({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// XSS 防护中间件 - 全局输入清理
+const { sanitizeMiddleware } = require('./middleware/sanitize');
+app.use(sanitizeMiddleware);
+console.log('✅ XSS 防护中间件已挂载');
+
 // Multer错误处理中间件
 app.use((error, req, res, next) => {
   if (error.code === 'LIMIT_FILE_SIZE') {
@@ -179,8 +184,23 @@ function registerRoutes() {
   apiRouter.use('/user', require('./routes/user'));
   apiRouter.use('/reviews', require('./routes/reviews'));
   console.log('✅ /xiaohongshu/api/reviews 路由已注册');
-  apiRouter.use('/admin', require('./routes/admin'));
-  apiRouter.use('/client', require('./routes/client'));
+  apiRouter.use('/admin', require('./routes/admin/'));
+  console.log('✅ /xiaohongshu/api/admin 路由已注册 (模块化)');
+
+  // 客户端路由模块化拆分（原 client.js 拆分为6个模块）
+  apiRouter.use('/client', require('./routes/client-tasks'));
+  console.log('✅ /xiaohongshu/api/client 路由已注册 (任务模块)');
+  apiRouter.use('/client', require('./routes/client-devices'));
+  console.log('✅ /xiaohongshu/api/client 路由已注册 (设备模块)');
+  apiRouter.use('/client', require('./routes/client-discovery'));
+  console.log('✅ /xiaohongshu/api/client 路由已注册 (发现模块)');
+  apiRouter.use('/client', require('./routes/client-harvest'));
+  console.log('✅ /xiaohongshu/api/client 路由已注册 (采集模块)');
+  apiRouter.use('/client', require('./routes/client-link-convert'));
+  console.log('✅ /xiaohongshu/api/client 路由已注册 (短链接模块)');
+  apiRouter.use('/client', require('./routes/client-common'));
+  console.log('✅ /xiaohongshu/api/client 路由已注册 (通用模块)');
+
   const uploadRouter = require('./routes/upload');
   apiRouter.use('/upload', uploadRouter);
   console.log('✅ /xiaohongshu/api/upload 路由已注册');
@@ -290,6 +310,11 @@ function startServer() {
     // 启动Cookie监控服务
     const cookieMonitorService = require('./services/cookieMonitorService');
     console.log('🍪 Cookie监控服务已加载');
+
+    // 启动自动化检查服务
+    const autoCheckService = require('./services/autoCheckService');
+    autoCheckService.start();
+    console.log('✅ 自动化检查服务启动成功');
 
     // 启动异步AI审核服务
     const asyncAiReviewService = require('./services/asyncAiReviewService');
