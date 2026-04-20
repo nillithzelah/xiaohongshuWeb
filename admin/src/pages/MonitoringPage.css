@@ -1,0 +1,326 @@
+/* MonitoringPage.css - 系统监控页面样式 */
+
+.monitoring-page {
+  padding: 24px;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  min-height: 100vh;
+  color: #e2e8f0;
+}
+
+/* 全局文字颜色覆盖 - 最高优先级 */
+.monitoring-page,
+.monitoring-page .ant-card,
+.monitoring-page .ant-card *,
+.monitoring-page .ant-row,
+.monitoring-page .ant-row *,
+.monitoring-page .ant-col,
+.monitoring-page .ant-col * {
+  color-scheme: dark !important;
+}
+
+/* 所有文本元素强制浅色 */
+.monitoring-page .ant-card-body,
+.monitoring-page .ant-card-body *,
+.monitoring-page .stat-card div,
+.monitoring-page .stat-card span,
+.monitoring-page .stat-card p {
+  color: #e2e8f0 !important;
+}
+
+/* Tag 组件颜色 */
+.monitoring-page .ant-tag {
+  background: rgba(96, 165, 250, 0.2) !important;
+  color: #60a5fa !important;
+  border: 1px solid rgba(96, 165, 250, 0.3) !important;
+}
+
+/* 页面header中的文字 */
+.page-header .ant-tag {
+  background: rgba(34, 197, 94, 0.2) !important;
+  color: #22c55e !important;
+  border: 1px solid rgba(34, 197, 94, 0.3) !important;
+}
+
+/* Statistic 组件 */
+.monitoring-page .ant-statistic-title,
+.monitoring-page .ant-statistic-content,
+.monitoring-page .ant-statistic-content-value {
+  color: #e2e8f0 !important;
+}
+
+.monitoring-page .ant-statistic-title {
+  color: #94a3b8 !important;
+}
+
+/* 加载状态 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 400px;
+}
+
+.retry-btn {
+  padding: 4px 12px;
+  background: #1890ff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.retry-btn:hover {
+  background: #40a9ff;
+}
+
+/* 页面头部 */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding: 20px 24px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-icon {
+  font-size: 32px;
+  color: #60a5fa;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #f1f5f9 !important;
+  letter-spacing: -0.5px;
+}
+
+.page-subtitle {
+  margin: 4px 0 0 0;
+  font-size: 13px;
+  color: #94a3b8 !important;
+}
+
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.update-time {
+  font-size: 13px;
+  color: #94a3b8 !important;
+}
+
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  background: linear-gradient(135deg, #60a5fa, #34d399);
+  color: white !important;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none !important;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(96, 165, 250, 0.3);
+}
+
+.download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(96, 165, 250, 0.4);
+  color: white !important;
+}
+
+.download-btn:active {
+  transform: translateY(0);
+}
+
+/* Header meta 区域 */
+.header-meta span,
+.header-meta .ant-tag {
+  color: #94a3b8 !important;
+}
+
+/* 统计卡片 */
+.stat-card {
+  margin-bottom: 24px;
+  background: rgba(30, 41, 59, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+  border-color: rgba(96, 165, 250, 0.3);
+  box-shadow: 0 8px 32px rgba(96, 165, 250, 0.1);
+  transform: translateY(-2px);
+}
+
+.stat-card .ant-card-head {
+  background: transparent;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.stat-card .ant-card-head-title {
+  color: #e2e8f0 !important;
+  font-weight: 600;
+}
+
+.stat-card .ant-card-body {
+  padding: 24px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #e2e8f0 !important;
+}
+
+/* 审核卡片特殊样式 */
+.audit-card {
+  position: relative;
+}
+
+.audit-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #60a5fa, #34d399);
+}
+
+/* 客户端摘要 */
+.client-summary {
+  display: flex;
+  gap: 32px;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 12px;
+}
+
+.summary-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.summary-label {
+  color: #94a3b8 !important;
+  font-size: 14px;
+}
+
+.summary-value {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.summary-value.online {
+  color: #22c55e !important;
+}
+
+.summary-unit {
+  color: #64748b !important;
+  font-size: 14px;
+}
+
+/* 客户端ID样式 */
+.client-id {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: rgba(96, 165, 250, 0.1);
+  border-radius: 4px;
+  color: #60a5fa !important;
+}
+
+/* 表格样式 */
+.stat-card .ant-table {
+  background: transparent;
+}
+
+.stat-card .ant-table-thead > tr > th {
+  background: rgba(15, 23, 42, 0.5) !important;
+  color: #94a3b8 !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1) !important;
+}
+
+.stat-card .ant-table-tbody > tr > td {
+  background: transparent !important;
+  color: #e2e8f0 !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.05) !important;
+}
+
+.stat-card .ant-table-tbody > tr:hover > td {
+  background: rgba(96, 165, 250, 0.05) !important;
+}
+
+.stat-card .ant-table-placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Statistic 组件自定义 */
+.stat-card .ant-statistic-title {
+  color: #94a3b8 !important;
+  font-size: 13px;
+}
+
+.stat-card .ant-statistic-content {
+  font-size: 28px;
+  font-weight: 600;
+  color: #e2e8f0 !important;
+}
+
+.stat-card .ant-statistic-content-value {
+  color: inherit !important;
+}
+
+/* 响应式 */
+@media (max-width: 576px) {
+  .monitoring-page {
+    padding: 16px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .page-title {
+    font-size: 20px;
+  }
+
+  .stat-card .ant-card-body {
+    padding: 16px;
+  }
+
+  .stat-card .ant-statistic-content {
+    font-size: 24px;
+  }
+
+  .client-summary {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .summary-value {
+    font-size: 24px;
+  }
+}

@@ -58,6 +58,7 @@ const initialMenus = [
   { key: '/financial', label: '财务管理', icon: 'FundOutlined', parentKey: null, sortOrder: 17, isGroup: true, category: 'financial', description: '财务相关管理' },
   { key: '/financial/summary', label: '财务汇总', path: '/financial', parentKey: '/financial', sortOrder: 1, category: 'financial' },
   { key: '/financial/withdrawals', label: '兼职用户提现', path: '/financial/withdrawals', parentKey: '/financial', sortOrder: 2, category: 'financial' },
+  { key: '/part-time-withdrawals', label: '兼职用户待打款', path: '/part-time-withdrawals', parentKey: '/financial', sortOrder: 3, category: 'financial' },
 
   // 系统设置
   { key: '/task-points', label: '任务积分管理', icon: 'SettingOutlined', path: '/task-points', sortOrder: 18, category: 'system', description: '积分任务配置' },
@@ -81,7 +82,8 @@ const initialRolePermissions = [
       '/monitoring', '/discovery-notes', '/harvest-queue', '/short-link-pool',
       '/comment-leads', '/comment-blacklist', '/search-keywords', '/ai-prompts',
       '/staff', '/clients', '/manager', '/devices', '/device-review',
-      '/task-points', '/financial', '/financial/summary', '/financial/withdrawals'
+      '/task-points', '/financial', '/financial/summary', '/financial/withdrawals',
+      '/part-time-withdrawals'
     ],
     description: '主管 - 高级管理权限'
   },
@@ -105,7 +107,8 @@ const initialRolePermissions = [
     role: 'finance',
     allowedMenus: [
       '/', '/reviews', '/reviews/note', '/reviews/comment', '/reviews/customer',
-      '/financial', '/financial/summary', '/financial/withdrawals'
+      '/financial', '/financial/summary', '/financial/withdrawals',
+      '/part-time-withdrawals'
     ],
     description: '财务 - 财务管理权限'
   },
