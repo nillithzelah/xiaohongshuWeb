@@ -1,21 +1,19 @@
 #!/bin/bash
 # 小红书客户端代码发版脚本
 # 用法: bash release-clients.sh <版本号>
-# 示例: bash release-clients.sh 1.5.0
+# 示例: bash release-clients.sh 1.6.0
 set -e
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
   echo "用法: bash release-clients.sh <版本号>"
-  echo "示例: bash release-clients.sh 1.5.0"
+  echo "示例: bash release-clients.sh 1.6.0"
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLIENTS_DIR="/var/www/xiaohongshu-web/xiaohongshu-audit-clients"
 DOWNLOADS_DIR="/var/www/xiaohongshu-web/downloads"
 
-# 客户端子目录列表
 CLIENT_SUBDIRS=(
   "audit-client"
   "harvest-client"
@@ -29,106 +27,128 @@ CLIENT_SUBDIRS=(
 echo "=== 小红书客户端代码发版 v${VERSION} ==="
 echo ""
 
-# 1. 更新 VERSION.txt
-echo "[1/6] 更新 VERSION.txt ..."
-if [ -f "$CLIENTS_DIR/VERSION.txt" ]; then
-  echo "小红书审核客户端 v${VERSION}" > "$CLIENTS_DIR/VERSION.txt"
-  echo "更新时间: $(date '+%Y-%m-%d %H:%M')" >> "$CLIENTS_DIR/VERSION.txt"
-  echo "  VERSION.txt -> v${VERSION}"
-fi
+# ─── Step 1: VERSION.txt ───
+echo "[1/8] 更新 VERSION.txt ..."
+echo "小红书审核客户端 v${VERSION}" > "$CLIENTS_DIR/VERSION.txt"
+echo "更新时间: $(date '+%Y-%m-%d %H:%M')" >> "$CLIENTS_DIR/VERSION.txt"
 
-# 2. 更新各客户端 config.json 中的版本号 + 生成 .version.json
-echo "[2/6] 更新各客户端版本号..."
+# ─── Step 2: 各客户端版本号 + config.defaults.json ───
+echo "[2/8] 更新各客户端版本号 + 生成 config.defaults.json ..."
 for dir in "${CLIENT_SUBDIRS[@]}"; do
-  CFG_PATH="$CLIENTS_DIR/$dir/config.json"
-  if [ -f "$CFG_PATH" ]; then
-    # 用 python 更新 JSON 中的 version 字段（保留其他字段）
+  CFG="$CLIENTS_DIR/$dir/config.json"
+  if [ -f "$CFG" ]; then
     python3 -c "
-import json, sys
-with open('$CFG_PATH', 'r') as f:
-    cfg = json.load(f)
-old_ver = cfg.get('version', '?.?.?')
+import json
+with open('$CFG', 'r') as f: cfg = json.load(f)
+old = cfg.get('version', '?')
 cfg['version'] = '$VERSION'
-with open('$CFG_PATH', 'w') as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False)
-print(f'  $dir: v{old_ver} -> v$VERSION')
+with open('$CFG', 'w') as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+print(f'  $dir: v{old} -> v$VERSION')
 "
-    # 生成 .version.json 供 launcher 更新时使用
-    echo "{\"version\": \"${VERSION}\"}" > "$CLIENTS_DIR/$dir/.version.json"
+    python3 -c "
+import json
+with open('$CFG', 'r') as f: cfg = json.load(f)
+defaults = json.loads(json.dumps(cfg))
+if 'deepseek' in defaults and 'apiKey' in defaults.get('deepseek', {}):
+    defaults['deepseek']['apiKey'] = ''
+with open('$CLIENTS_DIR/$dir/config.defaults.json', 'w') as f:
+    json.dump(defaults, f, indent=2, ensure_ascii=False)
+"
   else
     echo "  $dir: config.json 不存在，跳过"
   fi
 done
 
-# 3. 更新内部 version.json
-echo "[3/6] 更新 version.json ..."
+# ─── Step 3: version.json ───
+echo "[3/8] 更新 version.json ..."
 cat > "$CLIENTS_DIR/version.json" <<VEOF
 {
   "version": "${VERSION}",
   "updateDate": "$(date -Iseconds)",
   "downloadUrl": "https://www.wubug.cc/downloads/xiaohongshu-audit-clients-update.zip",
+  "manifestUrl": "https://www.wubug.cc/downloads/xiaohongshu-audit-clients/manifest.json",
   "changelog": "发版 v${VERSION}"
 }
 VEOF
-echo "  version.json -> v${VERSION}"
 
-# 4. 打包（两种 zip）
-echo "[4/6] 打包客户端代码..."
+# ─── Step 4: manifest.json ───
+echo "[4/8] 生成 manifest.json ..."
+RELEASE_VERSION="$VERSION" CLIENTS_DIR="$CLIENTS_DIR" python3 << 'PYEOF'
+import hashlib, json, os, datetime
 
-# 4a. 轻量包（不含 node_modules）- 供手动下载
-ZIP_LIGHT="xiaohongshu-audit-clients.zip"
-TMP_LIGHT="/tmp/${ZIP_LIGHT}"
-rm -f "$TMP_LIGHT"
+base = os.environ['CLIENTS_DIR']
+version = os.environ['RELEASE_VERSION']
+manifest = { 'bundleVersion': version, 'generatedAt': datetime.datetime.now().isoformat(), 'files': {}, 'clientVersions': {} }
+
+for root, dirs, files in os.walk(base):
+    dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', '_backup', '_update_tmp', '.hermes')]
+    for f in files:
+        if f.endswith(('.tar.gz', '.zip', '.msi', '.apk')) or f.startswith('.'):
+            continue
+        fp = os.path.join(root, f)
+        rel = os.path.relpath(fp, base)
+        manifest['files'][rel] = hashlib.sha256(open(fp, 'rb').read()).hexdigest()[:16]
+    for f in files:
+        if f == 'config.json':
+            try:
+                cfg = json.load(open(os.path.join(root, f)))
+                ct, v = cfg.get('clientType'), cfg.get('version')
+                if ct and v: manifest['clientVersions'][ct] = v
+            except: pass
+
+with open(os.path.join(base, 'manifest.json'), 'w') as f:
+    json.dump(manifest, f, indent=2, ensure_ascii=False)
+print(f'  {len(manifest["files"])} files, {len(manifest["clientVersions"])} clients')
+PYEOF
+
+# ─── Step 5: 打包 ───
+echo "[5/8] 打包..."
+
+UPDATE_ZIP="xiaohongshu-audit-clients-update.zip"
+TMP_UPDATE="/tmp/${UPDATE_ZIP}"
+rm -f "$TMP_UPDATE"
 cd /var/www/xiaohongshu-web
-zip -rq "$TMP_LIGHT" xiaohongshu-audit-clients/ \
-  -x "*/node_modules/*" \
-  -x "*/.git/*" \
-  -x "xiaohongshu-audit-clients/*.msi" \
-  -x "xiaohongshu-audit-clients/*.apk" \
-  -x "xiaohongshu-audit-clients/*.tar.gz" \
-  -x "xiaohongshu-audit-clients/xiaohongshu-audit-clients.zip"
-LIGHT_SIZE=$(du -h "$TMP_LIGHT" | cut -f1)
-echo "  轻量包: ${LIGHT_SIZE}"
+zip -rq "$TMP_UPDATE" xiaohongshu-audit-clients/ \
+  -x "*/node_modules/*" -x "*/.git/*" \
+  -x "xiaohongshu-audit-clients/*.msi" -x "xiaohongshu-audit-clients/*.apk" \
+  -x "xiaohongshu-audit-clients/*.tar.gz" -x "xiaohongshu-audit-clients/xiaohongshu-audit-clients*.zip"
+UPDATE_SIZE=$(du -h "$TMP_UPDATE" | cut -f1)
+echo "  更新包 (轻量): ${UPDATE_SIZE}"
 
-# 4b. 全量包（含 node_modules）- 供 launcher 自动更新用
-ZIP_FULL="xiaohongshu-audit-clients-update.zip"
-TMP_FULL="/tmp/${ZIP_FULL}"
+FULL_ZIP="xiaohongshu-audit-clients.zip"
+TMP_FULL="/tmp/${FULL_ZIP}"
 rm -f "$TMP_FULL"
-cd /var/www/xiaohongshu-web
 zip -rq "$TMP_FULL" xiaohongshu-audit-clients/ \
   -x "*/.git/*" \
-  -x "xiaohongshu-audit-clients/*.msi" \
-  -x "xiaohongshu-audit-clients/*.apk" \
-  -x "xiaohongshu-audit-clients/*.tar.gz" \
-  -x "xiaohongshu-audit-clients/xiaohongshu-audit-clients.zip"
+  -x "xiaohongshu-audit-clients/*.msi" -x "xiaohongshu-audit-clients/*.apk" \
+  -x "xiaohongshu-audit-clients/*.tar.gz" -x "xiaohongshu-audit-clients/xiaohongshu-audit-clients*.zip"
 FULL_SIZE=$(du -h "$TMP_FULL" | cut -f1)
-echo "  全量包: ${FULL_SIZE}"
+echo "  完整包 (含 node_modules): ${FULL_SIZE}"
 
-# 5. 部署到 downloads
-echo "[5/6] 部署到下载中心..."
-cp "$TMP_LIGHT" "$DOWNLOADS_DIR/${ZIP_LIGHT}"
-cp "$TMP_FULL" "$DOWNLOADS_DIR/${ZIP_FULL}"
-rm -f "$TMP_LIGHT" "$TMP_FULL"
+# ─── Step 6: 部署 ───
+echo "[6/8] 部署..."
+cp "$TMP_UPDATE" "$DOWNLOADS_DIR/${UPDATE_ZIP}"
+cp "$TMP_FULL" "$DOWNLOADS_DIR/${FULL_ZIP}"
+rm -f "$TMP_UPDATE" "$TMP_FULL"
 
-# 更新 downloads 目录下的 version.json
 mkdir -p "$DOWNLOADS_DIR/xiaohongshu-audit-clients"
+cp "$CLIENTS_DIR/manifest.json" "$DOWNLOADS_DIR/xiaohongshu-audit-clients/manifest.json"
+
 cat > "$DOWNLOADS_DIR/xiaohongshu-audit-clients/version.json" <<VEOF
 {
   "version": "${VERSION}",
   "updated": "$(date +%Y-%m-%d)",
-  "files": {
-    "light": "xiaohongshu-audit-clients.zip",
-    "full": "xiaohongshu-audit-clients-update.zip"
-  }
+  "files": { "update": "${UPDATE_ZIP}", "full": "${FULL_ZIP}" },
+  "manifestUrl": "https://www.wubug.cc/downloads/xiaohongshu-audit-clients/manifest.json"
 }
 VEOF
 
-echo "  -> $DOWNLOADS_DIR/${ZIP_LIGHT} (轻量包)"
-echo "  -> $DOWNLOADS_DIR/${ZIP_FULL} (全量包)"
-echo "  -> version.json updated"
+echo "  更新包 → ${UPDATE_ZIP} (${UPDATE_SIZE})"
+echo "  完整包 → ${FULL_ZIP} (${FULL_SIZE})"
+echo "  manifest.json → downloads/"
 
-# 6. 更新服务端 CLIENT_VERSION 环境变量
-echo "[6/6] 更新服务端版本号..."
+# ─── Step 7: 更新 .env ───
+echo "[7/8] 更新服务端 CLIENT_VERSION..."
 ENV_FILE="/opt/xiaohongshuWeb/server/.env"
 if [ -f "$ENV_FILE" ]; then
   if grep -q "^CLIENT_VERSION=" "$ENV_FILE"; then
@@ -139,15 +159,19 @@ if [ -f "$ENV_FILE" ]; then
 else
   echo "CLIENT_VERSION=${VERSION}" > "$ENV_FILE"
 fi
-echo "  CLIENT_VERSION -> ${VERSION}"
+
+# ─── Step 8: 清理 ───
+echo "[8/8] 清理..."
+for dir in "${CLIENT_SUBDIRS[@]}"; do
+  rm -f "$CLIENTS_DIR/$dir/.version.json" 2>/dev/null
+done
 
 echo ""
-echo "=== 发版完成 ==="
-echo "版本: ${VERSION}"
-echo "轻量包: ${LIGHT_SIZE} (手动下载)"
-echo "全量包: ${FULL_SIZE} (Launcher 自动更新)"
-echo "Launcher 将在下次检查时（约5分钟内）发现更新"
+echo "═══════════════════════════════════════"
+echo "  发版完成 v${VERSION}"
+echo "  更新包: ${UPDATE_SIZE} (Launcher 自动更新)"
+echo "  完整包: ${FULL_SIZE} (首次安装)"
 echo ""
-echo "⚠️  别忘了重启服务端使 CLIENT_VERSION 生效："
-echo "   cd /opt/xiaohongshuWeb && pm2 restart xiaohongshu"
+echo "  ⚠️  重启服务端生效: pm2 restart xiaohongshu"
+echo "═══════════════════════════════════════"
 echo ""

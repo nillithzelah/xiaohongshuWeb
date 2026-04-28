@@ -115,8 +115,7 @@ router.get('/settings', async (req, res) => {
       const envPath = require('path').join(__dirname, '../../.env');
       if (fs.existsSync(envPath)) {
         const envContent = fs.readFileSync(envPath, 'utf8');
-        for (const line of envContent.split('
-')) {
+        for (const line of envContent.split('\n')) {
           if (line.trim().startsWith('CLIENT_VERSION=')) {
             clientVersion = line.trim().split('=', 1)[1];
             break;
