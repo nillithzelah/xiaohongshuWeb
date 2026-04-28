@@ -1490,3 +1490,36 @@ docker run -d --name mongo --restart=always -p 27017:27017 \
 - 自动清理7天前的旧备份
 
 详细更新记录请查看 `UPDATE_LOG.md`。
+
+
+---
+
+## Karpathy Coding Guidelines
+
+Behavioral guidelines to reduce common LLM coding mistakes. **Tradeoff:** biases toward caution over speed. For trivial tasks, use judgment.
+
+### 1. Think Before Coding
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - do not pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what is confusing. Ask.
+
+### 2. Simplicity First
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that was not requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+### 3. Surgical Changes
+- Do not "improve" adjacent code, comments, or formatting.
+- Do not refactor things that are not broken.
+- Match existing style, even if you would do it differently.
+- If you notice unrelated dead code, mention it - do not delete it.
+- Every changed line should trace directly to the user request.
+
+### 4. Goal-Driven Execution
+- Transform tasks into verifiable goals: "Fix the bug" -> "Write a test that reproduces it, then make it pass"
+- For multi-step tasks, state a brief plan with verify checks.
+- Strong success criteria let you loop independently.
+
