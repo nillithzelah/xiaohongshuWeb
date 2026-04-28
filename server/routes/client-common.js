@@ -98,32 +98,119 @@ router.get('/announcement/:id', async (req, res) => {
   }
 });
 
+// ==================== 客户端设置（无需JWT，类似抖音的 /api/client/settings） ====================
+
+/**
+ * 获取客户端配置（无需JWT）
+ * GET /xiaohongshu/api/client/settings
+ * Launcher 通过此接口获取最新版本号
+ */
+router.get('/settings', async (req, res) => {
+  try {
+    const fs = require('fs');
+
+    // 从 .env 读取 CLIENT_VERSION
+    let clientVersion = process.env.CLIENT_VERSION || '1.0.0';
+    if (clientVersion === '1.0.0') {
+      const envPath = require('path').join(__dirname, '../../.env');
+      if (fs.existsSync(envPath)) {
+        const envContent = fs.readFileSync(envPath, 'utf8');
+        for (const line of envContent.split('
+')) {
+          if (line.trim().startsWith('CLIENT_VERSION=')) {
+            clientVersion = line.trim().split('=', 1)[1];
+            break;
+          }
+        }
+      }
+    }
+
+    res.json({
+      client_version: clientVersion,
+      download_url: 'https://www.wubug.cc/downloads/xiaohongshu-audit-clients.zip',
+      launcher_version: '1.1.0'
+    });
+  } catch (error) {
+    log.error('获取客户端设置失败:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ==================== 版本检查 ====================
+
+/**
+ * Semver 版本比较
+ * @returns {number} 1 if a > b, -1 if a < b, 0 if equal
+ */
+function compareVersion(a, b) {
+  const pa = (a || '0.0.0').split('.').map(Number);
+  const pb = (b || '0.0.0').split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+/**
+ * 从 version.json 和 .env 读取最新版本号
+ * 优先级: version.json > .env CLIENT_VERSION > '0.0.0'
+ */
+function getLatestVersion() {
+  const fs = require('fs');
+  const path = require('path');
+
+  // 1. 尝试从 version.json 读取（由 release-clients.sh 维护）
+  const vjsonPath = '/var/www/xiaohongshu-web/xiaohongshu-audit-clients/version.json';
+  try {
+    if (fs.existsSync(vjsonPath)) {
+      const vj = JSON.parse(fs.readFileSync(vjsonPath, 'utf8'));
+      if (vj.version) return vj.version;
+    }
+  } catch (e) {}
+
+  // 2. 尝试从 .env 读取
+  let clientVersion = process.env.CLIENT_VERSION || '';
+  if (!clientVersion) {
+    try {
+      const envPath = path.join(__dirname, '../../.env');
+      if (fs.existsSync(envPath)) {
+        const envContent = fs.readFileSync(envPath, 'utf8');
+        for (const line of envContent.split('\n')) {
+          if (line.trim().startsWith('CLIENT_VERSION=')) {
+            clientVersion = line.trim().substring('CLIENT_VERSION='.length);
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (clientVersion) return clientVersion;
+
+  // 3. 兜底
+  return '0.0.0';
+}
 
 /**
  * 版本检查接口
  * GET /xiaohongshu/api/client/version-check
- * Query: version, clientType
+ * Query: version, currentVersion, clientType
  */
 router.get('/version-check', async (req, res) => {
   try {
     // 支持两种参数名：version 或 currentVersion
     const { version, currentVersion: clientCurrentVersion, clientType } = req.query;
-    const currentVersion = version || clientCurrentVersion || '1.0.0';
+    const currentVersion = version || clientCurrentVersion || '0.0.0';
 
-    // 返回最新版本信息（当前硬编码，可改为从数据库读取）
-    const latestVersions = {
-      'audit': '1.0.1',
-      'harvest': '1.0.1',
-      'discovery': '1.0.1',
-      'blacklist-scan': '1.0.1',
-      'short-link': '1.0.1'
-    };
+    // 从 version.json / .env 动态读取最新版本（不再硬编码）
+    const latestVersion = getLatestVersion();
 
-    const latestVersion = latestVersions[clientType] || '1.0.1';
-
-    // 比较版本 - 检查主版本号变化
-    const hasUpdate = latestVersion > currentVersion;
+    // 使用 semver 比较（不再用字符串比较）
+    const cmp = compareVersion(latestVersion, currentVersion);
+    const hasUpdate = cmp > 0;
 
     // 检查是否是大版本更新（主版本号变化）
     let majorUpdate = false;
@@ -140,8 +227,8 @@ router.get('/version-check', async (req, res) => {
         latestVersion,
         hasUpdate,
         majorUpdate,
-        downloadUrl: hasUpdate ? 'https://www.wubug.cc/downloads/xiaohongshu-audit-clients.zip' : null,
-        updateNotes: hasUpdate ? '请下载最新版本' : null
+        downloadUrl: hasUpdate ? 'https://www.wubug.cc/downloads/xiaohongshu-audit-clients-update.zip' : null,
+        updateNotes: hasUpdate ? `有新版本 v${latestVersion} 可用，建议更新` : null
       }
     });
 
